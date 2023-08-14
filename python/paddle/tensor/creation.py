@@ -1061,27 +1061,33 @@ def zeros(shape, dtype=None, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            # shape is a list/tuple
-            data1 = paddle.zeros(shape=[3, 2])
-            # [[0. 0.]
-            #  [0. 0.]
-            #  [0. 0.]]
+            >>> # shape is a list/tuple
+            >>> data1 = paddle.zeros(shape=[3, 2])
+            >>> print(data1)
+            Tensor(shape=[3, 2], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[0., 0.],
+             [0., 0.],
+             [0., 0.]])
 
-            # shape is a Tensor
-            shape = paddle.to_tensor([3, 2])
-            data2 = paddle.zeros(shape=shape)
-            # [[0. 0.]
-            #  [0. 0.]
-            #  [0. 0.]]
+            >>> # shape is a Tensor
+            >>> shape = paddle.to_tensor([3, 2])
+            >>> data2 = paddle.zeros(shape=shape)
+            >>> print(data2)
+            Tensor(shape=[3, 2], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[0., 0.],
+             [0., 0.],
+             [0., 0.]])
 
-            # shape is a Tensor List
-            shape = [paddle.to_tensor(3), paddle.to_tensor(2)]
-            data3 = paddle.zeros(shape=shape)
-            # [[0. 0.]
-            #  [0. 0.]
-            #  [0. 0.]]
+            >>> # shape is a Tensor List
+            >>> shape = [paddle.to_tensor(3), paddle.to_tensor(2)]
+            >>> data3 = paddle.zeros(shape=shape)
+            >>> print(data3)
+            Tensor(shape=[3, 2], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[0., 0.],
+             [0., 0.],
+             [0., 0.]])
     """
     if dtype is None:
         dtype = 'float32'
