@@ -12,6 +12,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include "paddle/fluid/platform/enforce.h"
+
 #include "paddle/phi/kernels/funcs/pooling.h"
 
 #include <algorithm>
@@ -1962,6 +1964,12 @@ class FractionalMaxPool2dWithIndexGradFunctor<CPUContext, T1, T2> {
             const int output_idx = ph * output_width + pw;
             const int input_idx = static_cast<int>(mask_data[output_idx]);
             input_grad_data[input_idx] += output_grad_data[output_idx];
+
+            VLOG(8) << "output_idx : " << output_idx;
+            VLOG(8) << "input_idx : " << input_idx;
+            VLOG(8) << "output_grad_data : " << output_grad_data[output_idx];
+            VLOG(8) << "input_grad_data : " << input_grad_data[input_idx];
+
           }
         }
         // offset
@@ -2034,6 +2042,10 @@ class FractionalMaxPool3dWithIndexFunctor<CPUContext, T1, T2> {
     int dstart = 0, dend = 0;
     int hstart = 0, hend = 0;
     int wstart = 0, wend = 0;
+
+    long temp = 0;
+    long temp_idx = 0;
+
     for (int i = 0; i < batch_size; i++) {
       for (int c = 0; c < output_channels; ++c) {
         for (int pd = 0; pd < output_depth; ++pd) {
@@ -2060,16 +2072,23 @@ class FractionalMaxPool3dWithIndexFunctor<CPUContext, T1, T2> {
               for (int d = dstart; d < dend; ++d) {
                 for (int h = hstart; h < hend; ++h) {
                   for (int w = wstart; w < wend; ++w) {
+                    temp ++;
                     int input_idx = (d * input_height + h) * input_width + w;
                     if (ele < input_data[input_idx]) {
                       index = input_idx;
                       ele = input_data[input_idx];
+                      temp_idx = temp;
                     }
                   }
                 }
               }
               output_data[output_idx] = ele;
               mask_data[output_idx] = index;
+
+              VLOG(8) << "3d forward : " << temp;
+              VLOG(8) << "3d forward idx : " << temp_idx;
+              VLOG(8) << "3d forward output_idx : " << output_idx;
+              VLOG(8) << "3d forward index : " << index;
             }
           }
         }
@@ -2109,6 +2128,7 @@ class FractionalMaxPool3dWithIndexGradFunctor<CPUContext, T1, T2> {
     const T1* output_grad_data = output_grad.data<T1>();
     T1* input_grad_data = context.template Alloc<T1>(input_grad);
 
+    long temp = 0;
     for (int n = 0; n < batch_size; ++n) {
       for (int c = 0; c < output_channels; ++c) {
         for (int pd = 0; pd < output_depth; ++pd) {
@@ -2118,6 +2138,16 @@ class FractionalMaxPool3dWithIndexGradFunctor<CPUContext, T1, T2> {
                   (pd * output_height + ph) * output_width + pw;
               const int input_idx = static_cast<int>(mask_data[output_idx]);
               input_grad_data[input_idx] += output_grad_data[output_idx];
+
+
+              VLOG(8) << "3d begin : " << temp;
+              temp ++;
+              VLOG(8) << "3d output_idx : " << output_idx;
+              VLOG(8) << "3d input_idx : " << input_idx;
+              VLOG(8) << "3d output_grad_data : " << output_grad_data[output_idx];
+              VLOG(8) << "3d input_grad_data : " << input_grad_data[input_idx];
+
+
             }
           }
         }

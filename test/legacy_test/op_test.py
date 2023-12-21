@@ -190,13 +190,24 @@ def get_numeric_gradient(
         op.run(scope, place)
         for output_name in output_names:
             output_numpy = np.array(scope.find_var(output_name).get_tensor())
+
+            # print('o'*20)
+            # print(output_name, np.shape(output_numpy))
+            # print(output_numpy)
+            # print('o-'*10)
+
             # numpy.dtype does not have bfloat16, thus we use numpy.uint16 to
             # store bfloat16 data, and need to be converted to float to check
             # the floating precision.
             if tensor_to_check._dtype() == core.VarDesc.VarType.BF16:
                 output_numpy = convert_uint16_to_float(output_numpy)
             sum.append(output_numpy.astype(tensor_to_check_dtype).mean())
+
+        # print(np.array(sum).sum() / len(output_names))
+        # assert False
+
         return tensor_to_check_dtype(np.array(sum).sum() / len(output_names))
+
 
     gradient_flat = np.zeros(shape=(tensor_size,), dtype=tensor_to_check_dtype)
 
@@ -253,6 +264,9 @@ def get_numeric_gradient(
                 "Unsupported test data type %s." % tensor_to_check_dtype
             )
 
+    # print('inputs.mean()', inputs['X'].mean())
+    # delta = 0.003
+
     # we only compute gradient of one element each time.
     # we use a for loop to compute the gradient of every element.
     for i in range(tensor_size):
@@ -265,6 +279,12 @@ def get_numeric_gradient(
         x_pos = origin + delta
         __set_elem__(tensor_to_check, i, x_pos)
         y_pos = get_output()
+
+        print('!*'*10, i)
+        print('origin', origin)
+        print('delta', delta)
+        print('x_pos', x_pos)
+        print('y_pos', y_pos)
 
         if tensor_to_check_dtype in [np.complex64, np.complex128]:
             if in_place:
@@ -279,6 +299,9 @@ def get_numeric_gradient(
         x_neg = origin - delta
         __set_elem__(tensor_to_check, i, x_neg)
         y_neg = get_output()
+
+        print('x_neg', x_neg)
+        print('y_neg', y_neg)
 
         if tensor_to_check_dtype in [np.complex64, np.complex128]:
             if in_place:
@@ -316,6 +339,9 @@ def get_numeric_gradient(
         else:
             df_over_dr = y_pos - y_neg
             gradient_flat[i] = df_over_dr / delta / 2
+
+            print(df_over_dr)
+            print(df_over_dr / delta / 2, '&&&', gradient_flat[i])
 
         __set_elem__(tensor_to_check, i, origin)
 
@@ -2832,6 +2858,22 @@ class OpTest(unittest.TestCase):
         atol=1e-5,
     ):
         for a, b, name in zip(numeric_grads, analytic_grads, names):
+
+
+
+            print('*'*30)
+            print('numeric_grads calculated', '-'*10, a)
+            print('analytic_grads from code', '-'*10, b)
+            print('#'*20, np.shape(a), np.shape(b))
+            _dddiff = np.abs(np.array(a).reshape(-1) - np.array(b).reshape(-1))
+            _dddargmax = np.argmax(_dddiff)
+            print('@'*20, np.max(_dddiff), _dddargmax)
+            print('$'*20, np.array(a).reshape(-1)[max(0, _dddargmax-10):_dddargmax+10], np.array(b).reshape(-1)[max(0, _dddargmax-10):_dddargmax+10])
+            print('+'*20, np.sum(np.array(a)!=0), np.sum(np.array(b)!=0))
+            print('^'*30)
+            # np.testing.assert_allclose(a, b, rtol=1e-05, atol=1e-05)
+
+
             assert tuple(a.shape) == tuple(
                 b.shape
             ), "Operator ({}) : Output ({}) gradient shape mismatch, expect shape is {}, but actual shape is {}".format(

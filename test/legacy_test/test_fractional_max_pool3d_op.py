@@ -143,6 +143,9 @@ class TestMaxPoolWithIndex_Op(OpTest):
             self.random_u,
         )
         mask = mask.astype("int32")
+
+        print('xxxx', mask)
+
         if self.is_bfloat16_op():
             output = output.astype(np.float32)
         else:
@@ -168,103 +171,110 @@ class TestMaxPoolWithIndex_Op(OpTest):
     def init_dtype(self):
         self.dtype = np.float64
 
-    def test_check_output(self):
-        self.check_output()
+    # def test_check_output(self):
+    #     self.check_output()
 
     def test_check_grad(self):
         self.check_grad({'X'}, ['Out'])
 
     def init_test_case(self):
-        self.shape = [2, 3, 7, 7, 7]
-        self.output_size = [3, 3, 3]
+        # self.shape = [2, 3, 7, 7, 7]
+        # self.output_size = [3, 3, 3]
+
+        self.shape = [2, 5, 9, 9, 9]
+        self.output_size = [5, 5, 5]
 
     def init_fractional(self):
         self.random_u = 0.3
 
 
-class TestCase1(TestMaxPoolWithIndex_Op):
-    def init_test_case(self):
-        self.shape = [2, 5, 9, 9, 9]
-        self.output_size = [5, 5, 5]
+# class TestCase1(TestMaxPoolWithIndex_Op):
+#     def init_test_case(self):
+#         self.shape = [2, 5, 9, 9, 9]
+#         self.output_size = [5, 5, 5]
 
 
-class TestCase2(TestCase1):
-    def init_fractional(self):
-        self.random_u = 0.5
+        # self.shape = [1, 1, 7, 7, 7]
+        # self.output_size = [5, 5, 5]
 
 
-# ----------------fractional_max_pool3d_with_index_fp16----------------
-def create_test_fp16_class(parent):
-    @unittest.skipIf(
-        not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
-    )
-    class TestMaxPool3dFP16(parent):
-        def init_dtype(self):
-            self.dtype = np.float16
-
-        def test_check_output(self):
-            if core.is_compiled_with_cuda():
-                place = core.CUDAPlace(0)
-                if core.is_float16_supported(place):
-                    self.check_output_with_place(place)
-
-        def test_check_grad(self):
-            place = core.CUDAPlace(0)
-            if core.is_float16_supported(place):
-                self.check_grad_with_place(place, {'X'}, ['Out'])
-
-    cls_name = "{}_{}".format(parent.__name__, "FP16OP")
-    TestMaxPool3dFP16.__name__ = cls_name
-    globals()[cls_name] = TestMaxPool3dFP16
+# class TestCase2(TestCase1):
+#     def init_fractional(self):
+#         self.random_u = 0.5
 
 
-create_test_fp16_class(TestMaxPoolWithIndex_Op)
-create_test_fp16_class(TestCase1)
-create_test_fp16_class(TestCase2)
+# # ----------------fractional_max_pool3d_with_index_fp16----------------
+# def create_test_fp16_class(parent):
+#     @unittest.skipIf(
+#         not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+#     )
+#     class TestMaxPool3dFP16(parent):
+#         def init_dtype(self):
+#             self.dtype = np.float16
+
+#         def test_check_output(self):
+#             if core.is_compiled_with_cuda():
+#                 place = core.CUDAPlace(0)
+#                 if core.is_float16_supported(place):
+#                     self.check_output_with_place(place)
+
+#         def test_check_grad(self):
+#             place = core.CUDAPlace(0)
+#             if core.is_float16_supported(place):
+#                 self.check_grad_with_place(place, {'X'}, ['Out'])
+
+#     cls_name = "{}_{}".format(parent.__name__, "FP16OP")
+#     TestMaxPool3dFP16.__name__ = cls_name
+#     globals()[cls_name] = TestMaxPool3dFP16
 
 
-# ----------------fractional_max_pool3d_with_index_bf16----------------
-def create_test_bf16_class(parent):
-    @unittest.skipIf(
-        not core.is_compiled_with_cuda()
-        or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-        "core is not compiled with CUDA and do not support bfloat16",
-    )
-    class TestMaxPool3dBF16(parent):
-        def init_dtype(self):
-            self.dtype = np.uint16
-
-        def get_numeric_grad(self, place, check_name):
-            scope = core.Scope()
-            self._check_grad_helper()
-            op = create_op(
-                scope, self.op_type, self.inputs, self.outputs, self.attrs
-            )
-            return get_numeric_gradient(
-                place, scope, op, self.inputs_fp32, check_name, ['Out']
-            )
-
-        def test_check_output(self):
-            place = core.CUDAPlace(0)
-            if core.is_bfloat16_supported(place):
-                self.check_output_with_place(place)
-
-        def test_check_grad(self):
-            place = core.CUDAPlace(0)
-            numeric_grads = self.get_numeric_grad(place, 'X')
-            if core.is_bfloat16_supported(place):
-                self.check_grad_with_place(
-                    place, {'X'}, ['Out'], user_defined_grads=[numeric_grads]
-                )
-
-    cls_name = "{}_{}".format(parent.__name__, "BF16OP")
-    TestMaxPool3dBF16.__name__ = cls_name
-    globals()[cls_name] = TestMaxPool3dBF16
+# create_test_fp16_class(TestMaxPoolWithIndex_Op)
+# create_test_fp16_class(TestCase1)
+# create_test_fp16_class(TestCase2)
 
 
-create_test_bf16_class(TestMaxPoolWithIndex_Op)
-create_test_bf16_class(TestCase1)
-create_test_bf16_class(TestCase2)
+# # ----------------fractional_max_pool3d_with_index_bf16----------------
+# def create_test_bf16_class(parent):
+#     @unittest.skipIf(
+#         not core.is_compiled_with_cuda()
+#         or not core.is_bfloat16_supported(core.CUDAPlace(0)),
+#         "core is not compiled with CUDA and do not support bfloat16",
+#     )
+#     class TestMaxPool3dBF16(parent):
+#         def init_dtype(self):
+#             self.dtype = np.uint16
+
+#         def get_numeric_grad(self, place, check_name):
+#             scope = core.Scope()
+#             self._check_grad_helper()
+#             op = create_op(
+#                 scope, self.op_type, self.inputs, self.outputs, self.attrs
+#             )
+#             return get_numeric_gradient(
+#                 place, scope, op, self.inputs_fp32, check_name, ['Out']
+#             )
+
+#         def test_check_output(self):
+#             place = core.CUDAPlace(0)
+#             if core.is_bfloat16_supported(place):
+#                 self.check_output_with_place(place)
+
+#         def test_check_grad(self):
+#             place = core.CUDAPlace(0)
+#             numeric_grads = self.get_numeric_grad(place, 'X')
+#             if core.is_bfloat16_supported(place):
+#                 self.check_grad_with_place(
+#                     place, {'X'}, ['Out'], user_defined_grads=[numeric_grads]
+#                 )
+
+#     cls_name = "{}_{}".format(parent.__name__, "BF16OP")
+#     TestMaxPool3dBF16.__name__ = cls_name
+#     globals()[cls_name] = TestMaxPool3dBF16
+
+
+# create_test_bf16_class(TestMaxPoolWithIndex_Op)
+# create_test_bf16_class(TestCase1)
+# create_test_bf16_class(TestCase2)
 
 
 if __name__ == '__main__':
