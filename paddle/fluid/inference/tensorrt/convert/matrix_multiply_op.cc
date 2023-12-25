@@ -10,7 +10,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
-#include "paddle/fluid/inference/tensorrt/plugin/matmul_op_int8_plugin.h"
+#include "paddle/phi/common/data_type.h"
 
 namespace paddle {
 namespace inference {
@@ -41,8 +41,7 @@ class MatrixMultiplyOpConverter : public OpConverter {
     auto* input1 = engine_->GetITensor(op_desc.Input("X")[0]);
     auto* input2 = engine_->GetITensor(op_desc.Input("Y")[0]);
 
-    bool enable_int8 =
-        (engine_->precision() == AnalysisConfig::Precision::kInt8);
+    bool enable_int8 = (engine_->precision() == phi::DataType::INT8);
     float x_scale = 0;
     float y_scale = 0;
     float out_scale = 0;
@@ -238,7 +237,7 @@ class MatrixMultiplyOpConverter : public OpConverter {
                                  matrix_operation_x,
                                  *input2,
                                  matrix_operation_y);
-
+    SupportFP32MixPrecision(output_name, op_desc.Type(), layer);
     if (enable_int8) {
       if (op_desc.HasAttr("out_threshold") || op_desc.HasAttr("Out")) {
         engine_->SetTensorDynamicRange(layer->getOutput(0), out_scale);
@@ -260,6 +259,7 @@ class MatrixMultiplyOpConverter : public OpConverter {
                                    *layer->getOutput(0),
                                    *reshape_alpha->getOutput(0),
                                    nvinfer1::ElementWiseOperation::kPROD);
+      SupportFP32MixPrecision(output_name, op_desc.Type(), layer);
     }
     RreplenishLayerAndOutput(
         layer, "matrix_multiply_op", {output_name}, test_mode);

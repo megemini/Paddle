@@ -42,9 +42,9 @@ class CBroadcastOpCUDAKernel : public framework::OpKernel<T> {
     gpuStream_t stream = ctx.cuda_device_context().stream();
     const auto& comm_context_manager =
         phi::distributed::CommContextManager::GetInstance();
-    if (comm_context_manager.Has(rid)) {
+    if (comm_context_manager.Has(std::to_string(rid))) {
       auto* comm_context = static_cast<phi::distributed::NCCLCommContext*>(
-          comm_context_manager.Get(rid));
+          comm_context_manager.Get(std::to_string(rid)));
 
       comm_context->Broadcast(out, *x, root, stream);
     } else {
@@ -74,7 +74,7 @@ class CBroadcastOpCUDAKernel : public framework::OpKernel<T> {
         PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclBcast(
             out->data<T>(), numel, dtype, root, comm->comm(), stream));
         VLOG(3) << "rank " << comm->rank() << " invoke Bcast. received "
-                << phi::product(out->dims());
+                << common::product(out->dims());
       }
     }
 
@@ -100,7 +100,7 @@ PD_REGISTER_STRUCT_KERNEL(c_broadcast,
                           int64_t,
                           float,
                           double,
-#if NCCL_VERSION_CODE >= 21000
+#if NCCL_VERSION_CODE >= 21000 && CUDA_VERSION >= 11000
                           plat::bfloat16,
 #endif
                           plat::float16) {

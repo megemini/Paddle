@@ -17,6 +17,11 @@ limitations under the License. */
 #include <functional>
 
 #include "paddle/phi/api/include/tensor.h"
+#ifdef PADDLE_WITH_DISTRIBUTE
+#include "paddle/phi/core/distributed/auto_parallel/reshard/reshard_function.h"
+#include "paddle/phi/core/distributed/auto_parallel/reshard/reshard_function_registry.h"
+#include "paddle/phi/core/distributed/auto_parallel/reshard/reshard_utils.h"
+#endif
 
 namespace paddle {
 
@@ -34,8 +39,8 @@ using Deleter = std::function<void(void*)>;
  *              `data`. See PD_FOR_EACH_DATA_TYPE in `phi/common/data_type.h`
  * @param layout The data layout of the tensor.
  * @param place The place where the tensor is located.
- *              If `place` is default value, it will be inferred from `data`，
- *              However，the feature is only supported on CPU or GPU.
+ *              If `place` is default value, it will be inferred from `data`,
+ *              However, the feature is only supported on CPU or GPU.
  *              If `place` is not default value, make sure that `place` is equal
  *              to the place of `data`
  * @param deleter A function or function object that will be called to free the
@@ -50,4 +55,22 @@ PADDLE_API Tensor from_blob(void* data,
                             const phi::Place& place = phi::Place(),
                             const Deleter& deleter = nullptr);
 
+#ifdef PADDLE_WITH_DISTRIBUTE
+/**
+ * @brief Reshard a DistTensor by given DistAttr.
+ *
+ * @note Input of `Reshard` should be a `paddle::Tensor` whose impl is
+ * shared_ptr of DistTensor. According to the given DistAttr, input will be
+ * reshard to wanted distributed state. And it will return shared_ptr of a new
+ * DistTensor as outptut.
+ *
+ * @param input The input tensor to be resharded.
+ * @param dist_attr The dist_attr to be resharded.
+ * @return Shared_ptr of a new DistTensor
+ */
+// TODO(GhostScreaming): All APIs should call this unified function later.
+PADDLE_API std::shared_ptr<phi::distributed::DistTensor> reshard(
+    const paddle::Tensor& input,
+    const phi::distributed::TensorDistAttr& dist_attr);
+#endif
 }  // namespace paddle

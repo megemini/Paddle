@@ -15,7 +15,7 @@
 #pragma once
 #include <cstdint>
 
-#include "paddle/phi/core/macros.h"
+#include "paddle/common/macros.h"
 #include "paddle/phi/kernels/funcs/jit/macro.h"
 
 namespace phi {
@@ -361,7 +361,8 @@ template <typename KernelTuple>
 class ReferKernel : public KernelMore<KernelTuple> {
  public:
   // Refer code can always be used
-  bool CanBeUsed(const typename KernelTuple::attr_type& attr) const override {
+  bool CanBeUsed(
+      const typename KernelTuple::attr_type& attr UNUSED) const override {
     return true;
   }
   const char* ImplType() const override { return "Refer"; }

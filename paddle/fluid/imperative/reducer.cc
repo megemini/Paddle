@@ -29,8 +29,9 @@
 namespace paddle {
 namespace imperative {
 
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
-    defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_GLOO)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) ||     \
+    defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_GLOO) || \
+    defined(PADDLE_WITH_CUSTOM_DEVICE)
 // div the nranks
 void Group::DivNRanks(const platform::DeviceContext &context, int64_t nranks) {
   phi::DenseTensor *tensor =
@@ -42,9 +43,6 @@ void Group::DivNRanks(const platform::DeviceContext &context, int64_t nranks) {
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     DivNRanks(tensor, nranks, context);
 #endif
-  } else if (platform::is_npu_place(tensor->place())) {
-    // TODO(kuizhiqing)
-    VLOG(4) << "divnrank for npu not support yet";
   } else if (platform::is_cpu_place(tensor->place())) {
     VLOG(4) << "before div 2" << *tensor;
     VLOG(4) << "NDiv for cpu devices : rank = " << nranks;
@@ -64,11 +62,10 @@ void Group::DivNRanks(const platform::DeviceContext &context, int64_t nranks) {
     VLOG(4) << "after div 2" << *tensor;
   } else if (platform::is_xpu_place(tensor->place())) {
 #ifdef PADDLE_WITH_XPU_BKCL
-// TODO(liuyuhui) support xpu about div nranks in the future
+    PADDLE_THROW(
+        platform::errors::Unimplemented("DivNRanks is not supported on XPU / "
+                                        "XPU_BKCL, use EagerReducer instead."));
 #endif
-  } else if (platform::is_mlu_place(tensor->place())) {
-    // TODO(zhangna)
-    VLOG(4) << "divnrank for mlu not support yet";
   }
 }
 
@@ -253,10 +250,6 @@ void Group::ConcatTensors(const platform::DeviceContext &context) {
         "Paddle can't concat xpu grads since it's not compiled with BKCL,"
         "Please recompile or reinstall Paddle with BKCL support."));
 #endif
-  } else if (platform::is_npu_place(place)) {
-    PADDLE_THROW(platform::errors::PermissionDenied(
-        "Paddle can't concat npu grads since it's not compiled with HCCL,"
-        "Please recompile or reinstall Paddle with HCCL support."));
   } else if (platform::is_cpu_place(place)) {
     ConcatTensorsWithType(static_cast<const phi::CPUContext &>(context),
                           dense_tensors_,
@@ -293,10 +286,6 @@ void Group::SplitTensors(const platform::DeviceContext &context) {
         "Paddle can't split xpu grad since it's not compiled with BKCL,"
         "Please recompile or reinstall Paddle with BKCL support."));
 #endif
-  } else if (platform::is_npu_place(place)) {
-    PADDLE_THROW(platform::errors::PermissionDenied(
-        "Paddle can't split npu grad since it's not compiled with HCCL,"
-        "Please recompile or reinstall Paddle with HCCL support."));
   } else if (platform::is_cpu_place(place)) {
     SplitTensorsWithType(static_cast<const phi::CPUContext &>(context),
                          &dense_contents_,
@@ -388,7 +377,7 @@ void Reducer::InitializeDenseGroups(
     p_group->length_.push_back(size);
 
     // for concat operator
-    p_group->dense_tensors_.push_back(phi::DenseTensor());
+    p_group->dense_tensors_.emplace_back();
 
     // check the dtype and place, it must be same.
     const auto &dtype = var->DataType();
@@ -462,7 +451,7 @@ void Reducer::InitializeGroups(
           .inside_group_index = inside_group_index++,
       };
     }
-    group.variable_indices_ = std::move(variable_indices_);
+    group.variable_indices_ = variable_indices_;
     groups_.emplace_back(std::move(group));
     // Debug Message For Reducer
     VLOG(3) << "The Group[" << group_index << "]:" << groups_.back();
@@ -478,9 +467,9 @@ void Reducer::PrepareDeps(const std::unordered_set<GradOpNode *> &init_nodes) {
   std::queue<GradOpNode *> q;
   std::unordered_set<GradOpNode *> visited;
 
-  for (auto pos = init_nodes.begin(); pos != init_nodes.end(); pos++) {
-    q.push(*pos);
-    visited.insert(*pos);
+  for (auto init_node : init_nodes) {
+    q.push(init_node);
+    visited.insert(init_node);
   }
 
   while (!q.empty()) {
@@ -830,8 +819,6 @@ void Reducer::MarkVarReady(const size_t var_index, const bool is_used_var) {
   }
 }
 
-// TODO(liuyuhui): If BKCL support non-blocking communication, it should be
-// fixed as same as multi gpus card training.
 void Reducer::MarkGroupReady(size_t group_index) {
   PADDLE_ENFORCE_GE(
       group_index,
@@ -854,7 +841,7 @@ void Reducer::MarkGroupReady(size_t group_index) {
     UNUSED const int run_order = next_group_ % nrings_;
 
     auto *tensor = group.dense_contents_.GetMutable<phi::DenseTensor>();
-    tensor->Resize(phi::make_ddim({group.all_length_}))
+    tensor->Resize(common::make_ddim({group.all_length_}))
         .mutable_data(place_, framework::TransToPhiDataType(group.dtype_));
 
     // For CUDA or XPU, compute_stream --> comm_stream.

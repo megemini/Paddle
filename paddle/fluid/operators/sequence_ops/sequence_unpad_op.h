@@ -27,7 +27,7 @@ namespace operators {
 using LoDTensor = phi::DenseTensor;
 using LoD = framework::LoD;
 
-template <typename DeviceContext, typename T>
+template <typename T, typename DeviceContext>
 class SequenceUnpadOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
@@ -64,7 +64,7 @@ class SequenceUnpadOpKernel : public framework::OpKernel<T> {
         out_dims_vec.push_back(x_t->dims()[i]);
       }
     }
-    out_t->Resize(phi::make_ddim(out_dims_vec));
+    out_t->Resize(common::make_ddim(out_dims_vec));
 
     // after set the lod of output, allocate the memory
     out_t->mutable_data<T>(ctx.GetPlace());
@@ -81,7 +81,7 @@ class SequenceUnpadOpKernel : public framework::OpKernel<T> {
   }
 };
 
-template <typename DeviceContext, typename T>
+template <typename T, typename DeviceContext>
 class SequenceUnpadGradOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {

@@ -25,49 +25,12 @@
 #include "paddle/fluid/prim/utils/utils.h"
 #include "paddle/phi/api/include/operants_manager.h"
 #include "paddle/phi/core/enforce.h"
+#include "paddle/phi/core/flags.h"
 #include "paddle/phi/core/kernel_registry.h"
 
-DECLARE_bool(prim_enabled);
-DECLARE_string(tensor_operants_mode);
+PD_DECLARE_bool(prim_enabled);
+PHI_DECLARE_string(tensor_operants_mode);
 
-PD_DECLARE_KERNEL(full, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh_grad, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(pow, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(scale, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(subtract, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(multiply, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(concat, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_than, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(not_equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_than, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_and, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_or, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_xor, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_not, CPU, ALL_LAYOUT);
-#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-PD_DECLARE_KERNEL(full, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh_grad, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(pow, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(scale, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(subtract, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(multiply, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(concat, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_than, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(not_equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_than, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_and, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_or, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_xor, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_not, KPS, ALL_LAYOUT);
-#endif
 namespace paddle {
 namespace prim {
 
@@ -205,6 +168,11 @@ TEST(StaticPrim, TanhBackwardComposite) {
   auto* forward_opdesc = target_block->AllOps()[0];
   std::unordered_map<std::string, std::string> grad_to_var;
   std::vector<framework::BlockDesc*> grad_sub_block;
+  Tensor out_grad = prim::empty<prim::DescTensor>(
+      shape, phi::DataType::FLOAT32, paddle::Place());
+  framework::VarDesc* out_grad_desc =
+      static_cast<prim::DescTensor*>(out_grad.impl().get())->get_ptr();
+  target_block->RenameVar(out_grad_desc->Name(), "b@GRAD");
   std::vector<std::unique_ptr<framework::OpDesc>> grad_ops =
       std::move(framework::OpInfoMap::Instance()
                     .Get(forward_opdesc->Type())
@@ -287,6 +255,11 @@ TEST(StaticCompositeGradMaker, TestMutiInputMethod) {
   auto* forward_opdesc = target_block->AllOps()[0];
   std::unordered_map<std::string, std::string> grad_to_var;
   std::vector<framework::BlockDesc*> grad_sub_block;
+  Tensor out_grad = prim::empty<prim::DescTensor>(
+      shape, phi::DataType::FLOAT32, paddle::Place());
+  framework::VarDesc* out_grad_desc =
+      static_cast<prim::DescTensor*>(out_grad.impl().get())->get_ptr();
+  target_block->RenameVar(out_grad_desc->Name(), "out@GRAD");
   auto test = TestCompositeGradMaker(*forward_opdesc,
                                      std::unordered_set<std::string>(),
                                      &grad_to_var,
@@ -352,6 +325,19 @@ TEST(StaticCompositeGradMaker, TestMutiOutputMethod) {
   auto* forward_opdesc = target_block->AllOps()[0];
   std::unordered_map<std::string, std::string> grad_to_var;
   std::vector<framework::BlockDesc*> grad_sub_block;
+
+  Tensor out1_grad = prim::empty<prim::DescTensor>(
+      shape, phi::DataType::FLOAT32, paddle::Place());
+  framework::VarDesc* out1_grad_desc =
+      static_cast<prim::DescTensor*>(out1_grad.impl().get())->get_ptr();
+  target_block->RenameVar(out1_grad_desc->Name(), "out1@GRAD");
+
+  Tensor out2_grad = prim::empty<prim::DescTensor>(
+      shape, phi::DataType::FLOAT32, paddle::Place());
+  framework::VarDesc* out2_grad_desc =
+      static_cast<prim::DescTensor*>(out2_grad.impl().get())->get_ptr();
+  target_block->RenameVar(out2_grad_desc->Name(), "out2@GRAD");
+
   auto test = TestCompositeGradMaker(*forward_opdesc,
                                      std::unordered_set<std::string>(),
                                      &grad_to_var,
@@ -543,20 +529,3 @@ TEST(StaticPrim, TestFlags) {
 
 }  // namespace prim
 }  // namespace paddle
-USE_OP_ITSELF(fill_constant);
-USE_OP_ITSELF(tanh);
-USE_OP_ITSELF(tanh_grad);
-USE_OP_ITSELF(elementwise_mul);
-USE_OP_ITSELF(elementwise_sub);
-USE_OP_ITSELF(elementwise_pow);
-USE_OP_ITSELF(scale);
-USE_OP_ITSELF(less_equal);
-USE_OP_ITSELF(less_than);
-USE_OP_ITSELF(equal);
-USE_OP_ITSELF(not_equal);
-USE_OP_ITSELF(greater_equal);
-USE_OP_ITSELF(greater_than);
-USE_OP_ITSELF(bitwise_xor);
-USE_OP_ITSELF(bitwise_and);
-USE_OP_ITSELF(bitwise_not);
-USE_OP_ITSELF(bitwise_or);

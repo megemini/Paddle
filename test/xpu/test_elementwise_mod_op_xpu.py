@@ -11,22 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import sys
+
 import unittest
 
-sys.path.append('../../python/paddle/fluid/tests/unittests')
-
 import numpy as np
-from eager_op_test import OpTest
 from get_test_cover_info import (
     XPUOpTestWrapper,
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import OpTest
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 paddle.enable_static()
 
@@ -45,8 +43,8 @@ class XPUTestElementwiseModOp(XPUOpTestWrapper):
             self.y = np.random.uniform(0, 1000, [10, 10]).astype(self.dtype)
             self.out = np.mod(self.x, self.y)
             self.inputs = {
-                'X': OpTest.np_dtype_to_fluid_dtype(self.x),
-                'Y': OpTest.np_dtype_to_fluid_dtype(self.y),
+                'X': OpTest.np_dtype_to_base_dtype(self.x),
+                'Y': OpTest.np_dtype_to_base_dtype(self.y),
             }
             self.outputs = {'Out': self.out}
             self.attrs = {'axis': self.axis, 'use_mkldnn': self.use_mkldnn}
@@ -74,7 +72,7 @@ class XPUTestElementwiseModOp(XPUOpTestWrapper):
 
     class TestRemainderOp(unittest.TestCase):
         def test_dygraph(self):
-            with fluid.dygraph.guard():
+            with base.dygraph.guard():
                 np_x = np.random.rand(22, 128, 3).astype('int64')
                 np_y = np.random.rand(22, 128, 3).astype('int64')
                 x = paddle.to_tensor(np_x)

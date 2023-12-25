@@ -233,7 +233,7 @@ void WarpctcKernel(const Context& dev_ctx,
                    const paddle::optional<DenseTensor>& logits_length,
                    const paddle::optional<DenseTensor>& labels_length,
                    int blank,
-                   bool norm_by_times,
+                   bool norm_by_times UNUSED,
                    DenseTensor* loss,
                    DenseTensor* warpctcgrad) {
   size_t num_sequences, sequence_width, max_sequence_length;
@@ -336,7 +336,7 @@ void WarpctcKernel(const Context& dev_ctx,
     max_sequence_length = phi::funcs::MaximumSequenceLength(logits_lod);
   }
 
-  auto loss_dims = phi::make_ddim({static_cast<int64_t>(num_sequences), 1});
+  auto loss_dims = common::make_ddim({static_cast<int64_t>(num_sequences), 1});
 
   // warpctc needs sequences data stored in transposed padding format
   DenseTensor warpctc_logits_tmp =

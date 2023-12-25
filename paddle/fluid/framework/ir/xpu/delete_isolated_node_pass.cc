@@ -99,6 +99,7 @@ void DeleteIsolatedNodePass::CollectReservedPersistableNodeNames(
     Graph* graph,
     std::unordered_set<std::string>* reserved_persistable_node_names) const {
   for (auto* node : graph->Nodes()) {
+    if (!node || node->Name() == "fetch" || node->Name() == "feed") continue;
     if (!node->IsVar() || !node->Var()->Persistable()) continue;
     for (auto* out_node : node->outputs) {
       auto op_type = out_node->Op()->Type();
@@ -118,7 +119,9 @@ int DeleteIsolatedNodePass::RemoveIsolatedNodes(
   for (auto* node : graph->Nodes()) {
     if (node->IsOp()) {
       block = node->Op()->Block();
-      break;
+      if (block != nullptr) {
+        break;
+      }
     }
   }
   Scope& scope = graph->Get<framework::Scope>("__param_scope__");
@@ -131,6 +134,7 @@ int DeleteIsolatedNodePass::RemoveIsolatedNodes(
   std::unordered_set<const Node*> delete_nodes;
   const std::unordered_set<ir::Node*> nodes = graph->Nodes();
   for (auto* node : nodes) {
+    if (!node || node->Name() == "fetch" || node->Name() == "feed") continue;
     if (!node->IsVar() || !node->Var()->Persistable()) continue;
     auto name = node->Var()->Name();
     if (reserved_persistable_node_names.count(name) > 0) continue;

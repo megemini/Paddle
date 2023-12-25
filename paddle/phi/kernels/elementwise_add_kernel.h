@@ -19,13 +19,6 @@
 
 namespace phi {
 template <typename T, typename Context>
-void AddRawKernel(const Context& dev_ctx,
-                  const DenseTensor& x,
-                  const DenseTensor& y,
-                  int axis,
-                  DenseTensor* out);
-
-template <typename T, typename Context>
 void AddKernel(const Context& dev_ctx,
                const DenseTensor& x,
                const DenseTensor& y,
@@ -40,6 +33,16 @@ DenseTensor Add(const Context& dev_ctx,
   ElementwiseInferMeta(x, y, &meta_out);
   AddKernel<T, Context>(dev_ctx, x, y, &dense_out);
   return dense_out;
+}
+
+template <typename T, typename Context>
+void Add(const Context& dev_ctx,
+         const DenseTensor& x,
+         const DenseTensor& y,
+         DenseTensor* dense_out) {
+  MetaTensor meta_out(dense_out);
+  ElementwiseInferMeta(x, y, &meta_out);
+  AddKernel<T, Context>(dev_ctx, x, y, dense_out);
 }
 
 }  // namespace phi

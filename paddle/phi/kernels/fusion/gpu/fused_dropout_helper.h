@@ -30,6 +30,8 @@
 #include "paddle/phi/kernels/fusion/gpu/fused_residual_dropout_bias.h"
 #include "paddle/phi/kernels/layer_norm_kernel.h"
 
+PHI_DECLARE_bool(use_fast_math);
+
 namespace phi {
 namespace fusion {
 
@@ -121,10 +123,12 @@ class FusedDropoutHelper {
   FusedDropoutHelper(const phi::GPUContext& ctx,
                      const int rows,
                      const int cols,
-                     const DropoutParam& dropout_param) {
+                     const DropoutParam& dropout_param,
+                     const float residual_alpha = 1.0) {
     rows_ = rows;
     cols_ = cols;
     dropout_param_ = dropout_param;
+    residual_alpha_ = residual_alpha;
   }
 
   // out = residual + dropout( src + bias )
@@ -154,7 +158,8 @@ class FusedDropoutHelper {
         ctx,
         quant_last_in_scale,
         dequant_out_scale_data,
-        quant_next_in_scale);
+        quant_next_in_scale,
+        residual_alpha_);
   }
 
   void ResidualDropoutBiasGrad(const phi::GPUContext& ctx,
@@ -292,21 +297,22 @@ class FusedDropoutHelper {
                           T* d_bias,
                           const std::string& act_method) {
     if (act_method == "gelu") {
-      phi::funcs::GeluGradFunctor<T> gelu_grad;
-      phi::fusion::
-          LaunchDropoutActBiasGrad<T, MaskType, phi::funcs::GeluGradFunctor<T>>(
-              gelu_grad,
-              dout,
-              mask,
-              src,
-              bias,
-              dropout_param_.dropout_prob,
-              dropout_param_.is_upscale_in_train,
-              rows_,
-              cols_,
-              d_src,
-              d_bias,
-              ctx);
+      phi::fusion::GeluGradFunctor<T> gelu_grad;
+      phi::fusion::LaunchDropoutActBiasGrad<T,
+                                            MaskType,
+                                            phi::fusion::GeluGradFunctor<T>>(
+          gelu_grad,
+          dout,
+          mask,
+          src,
+          bias,
+          dropout_param_.dropout_prob,
+          dropout_param_.is_upscale_in_train,
+          rows_,
+          cols_,
+          d_src,
+          d_bias,
+          ctx);
     } else if (act_method == "relu") {
       phi::funcs::ReluGradFunctor<T> relu_grad;
       phi::fusion::
@@ -333,6 +339,7 @@ class FusedDropoutHelper {
   int rows_;
   int cols_;
   DropoutParam dropout_param_;
+  float residual_alpha_;
 };
 
 template <typename T,
@@ -345,20 +352,23 @@ class FusedDropoutLayerNormHelper
   FusedDropoutLayerNormHelper() {}
   FusedDropoutLayerNormHelper(const int rows,
                               const int cols,
-                              const float epsilon) {
+                              const float epsilon,
+                              const float residual_alpha = 1.0) {
     using U = phi::funcs::LayerNormParamType<T>;
     this->rows_ = rows;
     this->cols_ = cols;
     epsilon_ = epsilon;
+    this->residual_alpha_ = residual_alpha;
   }
 
   FusedDropoutLayerNormHelper(const phi::GPUContext& ctx,
                               const int rows,
                               const int cols,
                               const DropoutParam& dropout_param,
-                              const float epsilon)
+                              const float epsilon,
+                              const float residual_alpha = 1.0)
       : FusedDropoutHelper<T, MaskType, InType, OutType>(
-            ctx, rows, cols, dropout_param) {
+            ctx, rows, cols, dropout_param, residual_alpha) {
     using U = phi::funcs::LayerNormParamType<T>;
     epsilon_ = epsilon;
   }
@@ -473,7 +483,8 @@ class FusedDropoutLayerNormHelper
         quant_next_in_scale,
         quant_round_type,
         quant_max_bound,
-        quant_min_bound);
+        quant_min_bound,
+        this->residual_alpha_);
   }
 
   template <typename P = phi::funcs::LayerNormParamType<T>,

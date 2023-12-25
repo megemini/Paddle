@@ -17,13 +17,17 @@
 #include <functional>
 #include <vector>
 
-#include "cinn/hlir/framework/graph_compiler.h"
-#include "cinn/runtime/cinn_runtime.h"
-#include "cinn/runtime/flags.h"
+#include "paddle/cinn/common/target.h"
+#include "paddle/cinn/hlir/framework/graph_compiler.h"
+#include "paddle/cinn/runtime/cinn_runtime.h"
+#include "paddle/cinn/runtime/flags.h"
 #include "paddle/fluid/string/string_helper.h"
+#include "paddle/phi/core/flags.h"
 #include "paddle/phi/core/generator.h"
 
-DECLARE_bool(cudnn_deterministic);
+#if defined(PADDLE_WITH_CUDA)
+PHI_DECLARE_bool(cudnn_deterministic);
+#endif
 
 namespace paddle {
 namespace operators {
@@ -82,15 +86,22 @@ void LaunchCinnExecution(const CinnCompiledObject& compiled_obj,
 }
 
 void SetCinnRuntimeFlags() {
+#if defined(PADDLE_WITH_CUDA)
   VLOG(4) << "Set FLAGS_cinn_cudnn_deterministic to "
           << FLAGS_cudnn_deterministic;
   ::cinn::runtime::SetCinnCudnnDeterministic(FLAGS_cudnn_deterministic);
+#endif
 }
 
 template <>
 void SetCinnRandomSeed<phi::CPUContext>() {
   auto seed = phi::DefaultCPUGenerator()->GetCurrentSeed();
   ::cinn::runtime::RandomSeed::GetOrSet(seed);
+}
+
+void SetCinnTarget(const ::cinn::common::Target& target) {
+  VLOG(4) << "Set CINN compile target to " << target;
+  ::cinn::runtime::CurrentTarget::SetCurrentTarget(target);
 }
 
 }  // namespace details

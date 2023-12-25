@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
+#include "paddle/common/ddim.h"
 #include "paddle/phi/common/memory_utils.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/core/device_context.h"
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
@@ -32,9 +32,9 @@ template <typename T>
 struct StridedMemcpyFunctor<T, 0> {
   void operator()(const phi::DeviceContext& dev_ctx,
                   const T* src,
-                  const int64_t* src_stride,
-                  const int64_t* dst_dim,
-                  const int64_t* dst_stride,
+                  const int64_t* src_stride UNUSED,
+                  const int64_t* dst_dim UNUSED,
+                  const int64_t* dst_stride UNUSED,
                   T* dst) const {
     auto place = dev_ctx.GetPlace();
     if (place.GetType() == phi::AllocationType::CPU) {
@@ -58,9 +58,9 @@ template <typename T>
 struct StridedMemcpyFunctor<T, 1> {
   void operator()(const phi::DeviceContext& dev_ctx,
                   const T* src,
-                  const int64_t* src_stride,
+                  const int64_t* src_stride UNUSED,
                   const int64_t* dst_dim,
-                  const int64_t* dst_stride,
+                  const int64_t* dst_stride UNUSED,
                   T* dst) const {
     auto place = dev_ctx.GetPlace();
     if (place.GetType() == phi::AllocationType::CPU) {

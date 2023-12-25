@@ -24,19 +24,19 @@
 namespace phi {
 
 template <typename T, typename Context>
-void PSendKernel(const Context& dev_ctx,
-                 const DenseTensor& x,
-                 int peer,
-                 bool dynamic_shape) {
+void PSendKernel(const Context& dev_ctx UNUSED,
+                 const DenseTensor& x UNUSED,
+                 int peer UNUSED,
+                 bool dynamic_shape UNUSED) {
   PADDLE_THROW(errors::Unavailable("Do not support send for cpu kernel now."));
 }
 
 template <typename T, typename Context>
-void PSendArrayKernel(const Context& dev_ctx,
-                      const TensorArray& x,
-                      int peer,
-                      bool dynamic_shape,
-                      DenseTensor* out) {
+void PSendArrayKernel(const Context& dev_ctx UNUSED,
+                      const TensorArray& x UNUSED,
+                      int peer UNUSED,
+                      bool dynamic_shape UNUSED,
+                      DenseTensor* out UNUSED) {
   PADDLE_THROW(
       errors::Unavailable("Do not support send array for cpu kernel now."));
 }
@@ -53,6 +53,7 @@ PD_REGISTER_KERNEL(p_send,
                    bool,
                    int8_t,
                    uint8_t,
+                   int16_t,
                    int64_t,
                    phi::dtype::float16) {}
 
@@ -66,5 +67,6 @@ PD_REGISTER_KERNEL(p_send_array,
                    bool,
                    int8_t,
                    uint8_t,
+                   int16_t,
                    int64_t,
                    phi::dtype::float16) {}

@@ -25,10 +25,10 @@ paddle.enable_static()
 def build_resnet50(use_amp=False):
     main_program = paddle.static.Program()
     startup_program = paddle.static.Program()
-
+    dtype = 'float16' if use_amp else 'float32'
     with paddle.static.program_guard(main_program, startup_program):
         image = paddle.static.data(
-            name='image', shape=[32, 3, 224, 224], dtype='float32'
+            name='image', shape=[32, 3, 224, 224], dtype=dtype
         )
         label = paddle.static.data(name='label', shape=[32], dtype='int64')
         model = paddle.vision.models.resnet50()
@@ -99,14 +99,14 @@ def run_resnet50(aot_choose_kernel=False, use_amp=False):
 
 class TestAOTChooseKernel(unittest.TestCase):
     def test_resnet50_aot_choose_kernel(self):
-        if not paddle.fluid.core.is_compiled_with_cuda():
+        if not paddle.base.core.is_compiled_with_cuda():
             return
         loss1 = run_resnet50(aot_choose_kernel=True)
         loss2 = run_resnet50(aot_choose_kernel=False)
         self.assertEqual(loss1, loss2)
 
     def test_resnet50_amp_aot_choose_kernel(self):
-        if not paddle.fluid.core.is_compiled_with_cuda():
+        if not paddle.base.core.is_compiled_with_cuda():
             return
         loss1 = run_resnet50(aot_choose_kernel=True, use_amp=True)
         loss2 = run_resnet50(aot_choose_kernel=False, use_amp=True)

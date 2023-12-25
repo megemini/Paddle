@@ -70,25 +70,25 @@ class SparseCsrTensor : public TensorBase,
   /// \return The name of the class.
   static const char* name() { return "SparseCsrTensor"; }
 
-  /// \brief Returns the compressed row index of non zero elemetns in original
+  /// \brief Returns the compressed row index of non zero elements in original
   /// dense tensor.
-  /// \return The compressed row index of non zero elemetns in original dense
+  /// \return The compressed row index of non zero elements in original dense
   /// tensor.
   const DenseTensor& crows() const { return non_zero_crows_; }
 
   /// Note: This function will removed soon. It is recommended to use crows()
   const DenseTensor& non_zero_crows() const { return non_zero_crows_; }
 
-  /// \brief Returns the column index of non zero elemetns in original dense
+  /// \brief Returns the column index of non zero elements in original dense
   /// tensor.
-  /// \return The column index of non zero elemetns in original dense tensor.
+  /// \return The column index of non zero elements in original dense tensor.
   const DenseTensor& cols() const { return non_zero_cols_; }
 
   /// Note: This function will removed soon. It is recommended to use cols()
   const DenseTensor& non_zero_cols() const { return non_zero_cols_; }
 
-  /// \brief Returns the non zero elemetns in original dense tensor.
-  /// \return The non zero elemetns in original dense tensor.
+  /// \brief Returns the non zero elements in original dense tensor.
+  /// \return The non zero elements in original dense tensor.
   const DenseTensor& values() const { return non_zero_elements_; }
 
   /// Note: This function will removed soon. It is recommended to use indices()
@@ -131,8 +131,13 @@ class SparseCsrTensor : public TensorBase,
   bool valid() const noexcept override { return non_zero_elements_.valid(); }
 
   /// \brief Test whether the non_zero_elements_ storage is allocated.
-  /// return Whether the non_zero_elements_ storage is allocated.
-  bool initialized() const override { return non_zero_elements_.initialized(); }
+  /// In special cases, when nnz=0, non_zero_elements_ will not need to be
+  /// initialized, but it is neccessary to return true here, otherwise the
+  /// gradient will be None. return Whether the non_zero_elements_ storage is
+  /// allocated.
+  bool initialized() const override {
+    return values().initialized() || (nnz() == 0 && numel() > 0);
+  }
 
   /// \brief resize sparse csr tensor.
   /// \param dense_dims The dims of original dense tensor.

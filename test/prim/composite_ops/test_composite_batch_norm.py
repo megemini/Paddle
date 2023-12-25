@@ -15,12 +15,12 @@
 import unittest
 
 import numpy as np
-from utils import SUB_TOLERANCE
+from prim.composite_ops.utils import SUB_TOLERANCE
 
 import paddle
 import paddle.nn.functional as F
 from paddle import nn
-from paddle.fluid import core, framework
+from paddle.base import core, framework
 from paddle.incubate.autograd import primapi
 from paddle.nn import BatchNorm
 from paddle.tensor import ones  # noqa: F401
@@ -45,31 +45,24 @@ class Attr:
 
     def set_dtype(self, dtype) -> None:
         self.dtype = dtype
-        return
 
     def set_shape(self, shape) -> None:
         self.shape = shape
-        return
 
     def set_training(self, training) -> None:
         self.training = training
-        return
 
     def set_momentum(self, momentum) -> None:
         self.momentum = momentum
-        return
 
     def set_epsilon(self, epsilon) -> None:
         self.epsilon = epsilon
-        return
 
     def set_data_format(self, data_format) -> None:
         self.data_format = data_format
-        return
 
     def set_use_global_stats(self, use_global_stats) -> None:
         self.use_global_stats = use_global_stats
-        return
 
     def get_rtol(self, flag):
         rtol = SUB_TOLERANCE[self.dtype][flag].get("rtol")
@@ -386,10 +379,12 @@ def apply_to_static(net, use_cinn):
 
 
 class PrimeNet(paddle.nn.Layer):
-    def __init__(self, data_layout='NCHW'):
+    def __init__(self, data_layout='NCHW', is_test=False):
         super().__init__()
         self.conv = nn.Conv2D(2, 4, (3, 3), bias_attr=False)
-        self.bn = BatchNorm(4, act="relu", data_layout=data_layout)
+        self.bn = BatchNorm(
+            4, act="relu", data_layout=data_layout, is_test=is_test
+        )
 
     def forward(self, x):
         y = self.conv(x)
@@ -408,10 +403,10 @@ class TestPrimForwardAndBackward(unittest.TestCase):
         self.x = paddle.randn([4, 2, 6, 6], dtype="float32")
         self.x.stop_gradient = False
 
-    def train(self, use_prim, data_layout="NCHW"):
+    def train(self, use_prim, data_layout="NCHW", is_test=False):
         core._set_prim_all_enabled(use_prim)
         paddle.seed(2022)
-        net = PrimeNet(data_layout)
+        net = PrimeNet(data_layout=data_layout, is_test=is_test)
         sgd = paddle.optimizer.SGD(
             learning_rate=0.1, parameters=net.parameters()
         )
@@ -429,8 +424,19 @@ class TestPrimForwardAndBackward(unittest.TestCase):
 
     def test_amp_nchw(self):
         if not isinstance(framework._current_expected_place(), core.CPUPlace):
-            expected = self.train(False)
-            actual = self.train(True)
+            expected = self.train(use_prim=False)
+            actual = self.train(use_prim=True)
+            np.testing.assert_allclose(
+                expected,
+                actual,
+                rtol=1e-3,
+                atol=1e-3,
+            )
+
+    def test_amp_nchw_eval(self):
+        if not isinstance(framework._current_expected_place(), core.CPUPlace):
+            expected = self.train(use_prim=False, is_test=True)
+            actual = self.train(use_prim=True, is_test=True)
             np.testing.assert_allclose(
                 expected,
                 actual,
@@ -442,6 +448,19 @@ class TestPrimForwardAndBackward(unittest.TestCase):
         if not isinstance(framework._current_expected_place(), core.CPUPlace):
             expected = self.train(use_prim=False, data_layout="NHWC")
             actual = self.train(use_prim=True, data_layout="NHWC")
+            np.testing.assert_allclose(
+                expected,
+                actual,
+                rtol=1e-3,
+                atol=1e-3,
+            )
+
+    def test_amp_nhwc_eval(self):
+        if not isinstance(framework._current_expected_place(), core.CPUPlace):
+            expected = self.train(
+                use_prim=False, data_layout="NHWC", is_test=True
+            )
+            actual = self.train(use_prim=True, data_layout="NHWC", is_test=True)
             np.testing.assert_allclose(
                 expected,
                 actual,

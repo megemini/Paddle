@@ -16,10 +16,10 @@ import warnings
 
 import paddle
 from paddle import _C_ops
-from paddle.fluid.framework import in_dygraph_mode
-from paddle.fluid.regularizer import L2DecayRegularizer
+from paddle.framework import in_dynamic_or_pir_mode
+from paddle.regularizer import L2Decay
 
-from ..fluid import core, framework
+from ..base import core, framework
 from .optimizer import Optimizer
 
 __all__ = []
@@ -54,20 +54,20 @@ class Momentum(Optimizer):
         parameters (list|tuple, optional): List|Tuple of ``Tensor`` to update to minimize ``loss``. \
             This parameter is required in dygraph mode. And you can specify different options for \
             different parameter groups such as the learning rate, weight decay, etc, \
-            then the parameters are list of dict. Note that the learning_rate in paramter groups \
+            then the parameters are list of dict. Note that the learning_rate in parameter groups \
             represents the scale of base learning_rate. \
             The default value is None in static graph mode, at this time all parameters will be updated.
         weight_decay (float|WeightDecayRegularizer, optional): The strategy of regularization. \
-            It canbe a float value as coeff of L2 regularization or \
-            :ref:`api_fluid_regularizer_L1Decay`, :ref:`api_fluid_regularizer_L2Decay`.
-            If a parameter has set regularizer using :ref:`api_fluid_ParamAttr` already, \
+            It can be a float value as coeff of L2 regularization or \
+            :ref:`api_paddle_regularizer_L1Decay`, :ref:`api_paddle_regularizer_L2Decay`.
+            If a parameter has set regularizer using :ref:`api_paddle_ParamAttr` already, \
             the regularization setting here in optimizer will be ignored for this parameter. \
             Otherwise, the regularization setting here in optimizer will take effect. \
             Default None, meaning there is no regularization.
-        grad_clip (GradientClipBase, optional): Gradient cliping strategy, it's an instance of
-            some derived class of ``GradientClipBase`` . There are three cliping strategies
-            ( :ref:`api_fluid_clip_GradientClipByGlobalNorm` , :ref:`api_fluid_clip_GradientClipByNorm` ,
-            :ref:`api_fluid_clip_GradientClipByValue` ). Default None, meaning there is no gradient clipping.
+        grad_clip (GradientClipBase, optional): Gradient clipping strategy, it's an instance of
+            some derived class of ``GradientClipBase`` . There are three clipping strategies
+            ( :ref:`api_paddle_nn_ClipGradByGlobalNorm` , :ref:`api_paddle_nn_ClipGradByNorm` ,
+            :ref:`api_paddle_nn_ClipGradByValue` ). Default None, meaning there is no gradient clipping.
         multi_precision (bool, optional): Whether to use multi-precision during weight updating. Default is false.
         rescale_grad (float, optional): Multiply the gradient with `rescale_grad` before updating. \
             Often choose to be ``1.0/batch_size``.
@@ -79,41 +79,42 @@ class Momentum(Optimizer):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            inp = paddle.uniform([10, 10], dtype="float32", min=-0.1, max=0.1)
-            linear = paddle.nn.Linear(10, 10)
-            inp = paddle.to_tensor(inp)
-            out = linear(inp)
-            loss = paddle.mean(out)
-            beta1 = paddle.to_tensor([0.9], dtype="float32")
-            beta2 = paddle.to_tensor([0.99], dtype="float32")
-            momentum = paddle.optimizer.Momentum(learning_rate=0.1, parameters=linear.parameters(), weight_decay=0.01)
-            back = out.backward()
-            momentum.step()
-            momentum.clear_grad()
+            >>> inp = paddle.uniform([10, 10], dtype="float32", min=-0.1, max=0.1)
+            >>> linear = paddle.nn.Linear(10, 10)
+            >>> inp = paddle.to_tensor(inp)
+            >>> out = linear(inp)
+            >>> loss = paddle.mean(out)
+            >>> beta1 = paddle.to_tensor([0.9], dtype="float32")
+            >>> beta2 = paddle.to_tensor([0.99], dtype="float32")
+            >>> momentum = paddle.optimizer.Momentum(learning_rate=0.1, parameters=linear.parameters(), weight_decay=0.01)
+            >>> back = out.backward()
+            >>> momentum.step()
+            >>> momentum.clear_grad()
 
-            #Note that the learning_rate of linear_2 is 0.01.
-            linear_1 = paddle.nn.Linear(10, 10)
-            linear_2 = paddle.nn.Linear(10, 10)
-            inp = paddle.uniform(shape=[10, 10], min=-0.1, max=0.1)
-            out = linear_1(inp)
-            out = linear_2(out)
-            loss = paddle.mean(out)
-            momentum = paddle.optimizer.Momentum(
-                learning_rate=0.1,
-                parameters=[{
-                    'params': linear_1.parameters()
-                }, {
-                    'params': linear_2.parameters(),
-                    'weight_decay': 0.001,
-                    'learning_rate': 0.1
-                }],
-                weight_decay=0.01,
-                momentum=0.9)
-            out.backward()
-            momentum.step()
-            momentum.clear_grad()
+            >>> # Note that the learning_rate of linear_2 is 0.01.
+            >>> linear_1 = paddle.nn.Linear(10, 10)
+            >>> linear_2 = paddle.nn.Linear(10, 10)
+            >>> inp = paddle.uniform(shape=[10, 10], min=-0.1, max=0.1)
+            >>> out = linear_1(inp)
+            >>> out = linear_2(out)
+            >>> loss = paddle.mean(out)
+            >>> momentum = paddle.optimizer.Momentum(
+            ...     learning_rate=0.1,
+            ...     parameters=[{
+            ...         'params': linear_1.parameters()
+            ...     }, {
+            ...         'params': linear_2.parameters(),
+            ...         'weight_decay': 0.001,
+            ...         'learning_rate': 0.1
+            ...     }],
+            ...     weight_decay=0.01,
+            ...     momentum=0.9
+            ... )
+            >>> out.backward()
+            >>> momentum.step()
+            >>> momentum.clear_grad()
 
     """
     _velocity_acc_str = "velocity"
@@ -136,9 +137,7 @@ class Momentum(Optimizer):
         if momentum is None:
             raise ValueError("momentum is not set")
 
-        predicate = lambda regular: isinstance(
-            regular, (L2DecayRegularizer, float)
-        )
+        predicate = lambda regular: isinstance(regular, (L2Decay, float))
         if isinstance(parameters, list):
             if isinstance(parameters[0], dict):
                 for param_group in parameters:
@@ -192,9 +191,9 @@ class Momentum(Optimizer):
         reg_method = ""
         reg_coeff = 0.0
 
-        if isinstance(weight_decay, L2DecayRegularizer):
+        if isinstance(weight_decay, L2Decay):
             reg_method = "l2_decay"
-            reg_coeff = weight_decay._regularization_coeff
+            reg_coeff = weight_decay._coeff
         if isinstance(weight_decay, float):
             reg_method = "l2_decay"
             reg_coeff = weight_decay
@@ -202,10 +201,10 @@ class Momentum(Optimizer):
 
     def _create_accumulators(self, block, parameters):
         '''
-        if framework._non_static_mode():
+        if framework.in_dynamic_mode():
             return
         '''
-        assert isinstance(block, framework.Block)
+        assert isinstance(block, (framework.Block, paddle.pir.Block))
 
         if isinstance(parameters, dict):
             parameters = self._update_param_group(parameters)
@@ -237,7 +236,7 @@ class Momentum(Optimizer):
         # If ParamAttr is set to L2Decay, we skip doing regularization here. And then we fused
         # L2Decay with momentum which can refer to _append_optimize_op below.
         if hasattr(param, 'regularizer') and isinstance(
-            param.regularizer, L2DecayRegularizer
+            param.regularizer, L2Decay
         ):
             return grad
         return super()._create_regularization_of_grad(
@@ -260,9 +259,9 @@ class Momentum(Optimizer):
         regularization_coeff = self._regularization_coeff
         if hasattr(param, 'regularizer'):
             # we skip param's l2decay before, so fuse it with momentum here.
-            if isinstance(param.regularizer, L2DecayRegularizer):
+            if isinstance(param.regularizer, L2Decay):
                 regularization_method = "l2_decay"
-                regularization_coeff = param.regularizer._regularization_coeff
+                regularization_coeff = param.regularizer._coeff
             # the param's regularization has been done before, we avoid do l2decay in momentum.
             elif param.regularizer is not None:
                 regularization_method = ""
@@ -277,7 +276,7 @@ class Momentum(Optimizer):
             else None
         )
 
-        if in_dygraph_mode():
+        if in_dynamic_or_pir_mode():
             if isinstance(param_and_grad, dict):
                 self._update_regularization(param_and_grad['weight_decay'])
             return _C_ops.momentum_(
@@ -348,11 +347,9 @@ class Momentum(Optimizer):
             regularization_coeff = self._regularization_coeff
             if hasattr(param, 'regularizer'):
                 # we skip param's l2decay before, so fuse it with momentum here.
-                if isinstance(param.regularizer, L2DecayRegularizer):
+                if isinstance(param.regularizer, L2Decay):
                     regularization_method = "l2_decay"
-                    regularization_coeff = (
-                        param.regularizer._regularization_coeff
-                    )
+                    regularization_coeff = param.regularizer._coeff
                 elif param.regularizer is not None:
                     regularization_method = ""
                     regularization_coeff = 0.0
@@ -475,13 +472,17 @@ class Momentum(Optimizer):
                     else None
                 )
 
-                if in_dygraph_mode():
+                if in_dynamic_or_pir_mode():
                     found_inf = self._get_auxiliary_var('found_inf')
                     if found_inf:
-                        if isinstance(found_inf, core.eager.Tensor):
+                        if isinstance(
+                            found_inf, (core.eager.Tensor, paddle.pir.OpResult)
+                        ):
                             self._set_auxiliary_var('found_inf', True)
                     else:
-                        if isinstance(found_inf, core.eager.Tensor):
+                        if isinstance(
+                            found_inf, (core.eager.Tensor, paddle.pir.OpResult)
+                        ):
                             self._set_auxiliary_var('found_inf', False)
                         _, _, _ = _C_ops.merged_momentum_(
                             self._param_dict[key][param_group_idx],
@@ -540,7 +541,6 @@ class Momentum(Optimizer):
                         attrs=attrs,
                         stop_gradient=True,
                     )
-        return None
 
     def _update_param_group(self, parameters):
         self._momentum = parameters.get(

@@ -18,6 +18,7 @@
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable.h"
 // Phi deps
+#include "paddle/common/macros.h"
 #include "paddle/phi/api/include/tensor.h"
 #include "paddle/phi/core/compat/convert_utils.h"
 
@@ -133,10 +134,10 @@ class VariableCompatTensor
 
   bool initialized() const override { return IsInitialized(); }
 
-  void* AllocateFrom(phi::Allocator* allocator,
-                     phi::DataType dtype,
-                     size_t requested_size = 0,
-                     bool fake_alloc = false) override {
+  void* AllocateFrom(phi::Allocator* allocator UNUSED,
+                     phi::DataType dtype UNUSED,
+                     size_t requested_size UNUSED = 0,
+                     bool fake_alloc UNUSED = false) override {
     PADDLE_THROW(paddle::platform::errors::Unavailable(
         "VariableCompatTensor does not support `AllocateFrom` method."));
   }
@@ -286,6 +287,7 @@ class EagerVariable final {
     auto* framework_tensor = var_.GetMutable<VarType>();
     // Contruct phi::DenseTensor from egr::EagerVariable
     auto tensor_dense = std::dynamic_pointer_cast<VarType>(tensor.impl());
+
     PADDLE_ENFORCE_EQ(
         (tensor_dense.get() && tensor_dense),
         true,
@@ -295,6 +297,12 @@ class EagerVariable final {
             "treat all kinds of tensor as what they are.",
             tensor.name()));
     *framework_tensor = *tensor_dense;
+    if (tensor.is_dense_tensor()) {
+      dynamic_cast<phi::DenseTensor*>(framework_tensor)
+          ->set_strides(
+              std::dynamic_pointer_cast<phi::DenseTensor>(tensor_dense)
+                  ->strides());
+    }
   }
 
   template <typename VarType>

@@ -20,7 +20,7 @@
 import functools
 import operator
 
-from paddle.fluid import core
+from paddle.base import core
 
 from .primitives import *  # noqa: F403
 from .primreg import REGISTER_COMPOSITE, lookup_composite
@@ -35,10 +35,11 @@ def _composite(op, *args):
 def softmax_composite(x, axis):
     """define composite rule of op softmax"""
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     # Softmax need fp32 compute since it has sum op in
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
     if not x.shape:
@@ -53,7 +54,7 @@ def softmax_composite(x, axis):
     denominator = sum(molecular, axis=axis, keepdim=True)
     res = divide(molecular, denominator)
     if is_amp:
-        res = cast(res, "float16")
+        res = cast(res, dtype)
     return res
 
 
@@ -77,11 +78,14 @@ def composite_batchnorm(
     """
 
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
+        scale = cast(scale, "float32") if scale else scale
+        bias = cast(bias, "float32") if bias else bias
 
     feature_axis = (
         1 if data_layout in ('NC', 'NCL', 'NCHW', 'NCHWD') else len(x.shape) - 1
@@ -124,7 +128,7 @@ def composite_batchnorm(
     else:
         y = reshape(scale, stats_shape) * x_hat + reshape(bias, stats_shape)
     if is_amp:
-        y = cast(y, "float16")
+        y = cast(y, dtype)
 
     # add op assign to detach tensor in void unsafe change outside the rule.
     batch_mean_ = assign(batch_mean)
@@ -148,11 +152,14 @@ def layernorm_composite(x, scale, bias, epsilon, begin_norm_axis):
     var = mean((x-mean(x))^2)
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
+        scale = cast(scale, "float32") if scale else scale
+        bias = cast(bias, "float32") if bias else bias
 
     axis = tuple(range(begin_norm_axis, len(x.shape)))
     mean_ = mean(x, axis=axis, keepdim=True)
@@ -164,17 +171,19 @@ def layernorm_composite(x, scale, bias, epsilon, begin_norm_axis):
     out = difference * rsqrt_var
 
     if scale is not None:
-        scale = reshape(scale, x.shape[begin_norm_axis:])
+        if x.shape[begin_norm_axis:] != scale.shape:
+            scale = reshape(scale, x.shape[begin_norm_axis:])
         out = out * scale
     if bias is not None:
-        bias = reshape(bias, x.shape[begin_norm_axis:])
+        if x.shape[begin_norm_axis:] != bias.shape:
+            bias = reshape(bias, x.shape[begin_norm_axis:])
         out = out + bias
 
-    mean_ = reshape(mean_, [-1])
-    variance = reshape(variance, [-1])
+    # keep the mean and variance shape as input x before begin_norm_axis
+    mean_ = reshape(mean_, x.shape[:begin_norm_axis])
+    variance = reshape(variance, x.shape[:begin_norm_axis])
     if is_amp:
-        out = cast(out, "float16")
-
+        out = cast(out, dtype)
     return out, mean_, variance
 
 
@@ -185,6 +194,16 @@ def instancenorm_composite(x, scale, bias, epsilon):
     out = (x - mean(x)) / sqrt(var + epsilon))
     var = mean((x-mean(x))^2)
     """
+    is_amp = False
+    from paddle.base.data_feeder import convert_dtype
+
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
+        is_amp = True
+        x = cast(x, "float32")
+        scale = cast(scale, "float32") if scale else scale
+        bias = cast(bias, "float32") if bias else bias
+
     n, c, h, w = x.shape
     axis = tuple(range(2, len(x.shape)))
     mean_ = mean(x, axis=axis, keepdim=True)
@@ -192,7 +211,7 @@ def instancenorm_composite(x, scale, bias, epsilon):
     var_tmp1 = difference * difference
     variance = mean(var_tmp1, axis=axis, keepdim=True)
     var_tmp3 = variance + epsilon
-    sqrt_var = pow(var_tmp3, full([], 0.5, dtype=var_tmp3.dtype))
+    sqrt_var = pow(var_tmp3, full([1], 0.5, dtype=var_tmp3.dtype))
     out = difference / sqrt_var
 
     if scale is not None:
@@ -205,6 +224,10 @@ def instancenorm_composite(x, scale, bias, epsilon):
     mean_ = reshape(mean_, [-1])
     saved_variance = 1 / sqrt_var
     saved_variance = reshape(saved_variance, [-1])
+
+    if is_amp:
+        out = cast(out, dtype)
+
     return out, mean_, saved_variance
 
 
@@ -237,26 +260,30 @@ def gelu_composite(x, approximate):
 def mean_composite(x, axis, keepdim):
     """define composite rule of op mean"""
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
 
-    axes = axis or list(range(0, len(x.shape)))
-    axes = [axes] if isinstance(axes, int) else axes
+    if axis in (None, []):
+        axis = tuple(range(0, len(x.shape)))
+    axes = (axis,) if isinstance(axis, int) else axis
     sum_x = sum(x, axis=axes, keepdim=keepdim)
-    value_to_fill = functools.reduce(
-        operator.mul, [x.shape[axis] for axis in axes]
-    )
+    ele_nums_list = [x.shape[axis] for axis in axes]
+    if ele_nums_list == []:
+        value_to_fill = 1
+    else:
+        value_to_fill = functools.reduce(operator.mul, ele_nums_list)
     norm = fill_constant(
-        shape=x.shape if len(x.shape) == 0 else [1],
+        shape=[],
         value=value_to_fill,
         dtype=sum_x.dtype,
     )
     res = divide(sum_x, norm)
     if is_amp:
-        res = cast(res, "float16")
+        res = cast(res, dtype)
     return res
 
 
@@ -410,10 +437,12 @@ def dropout_composite(x, seed_tensor, p, is_test, mode, seed, fix_seed):
 
 
 def bernoulli(shape, dtype, p, seed=0):
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     # TODO(jiabin) Fix uniform doesn't support float16 error in CINN
-    new_dtype = "float32" if convert_dtype(dtype) == "float16" else dtype
+    new_dtype = (
+        "float32" if convert_dtype(dtype) in ["float16", "uint16"] else dtype
+    )
     return cast(
         greater_equal(
             uniform(shape, new_dtype, min=0.0, max=1.0, seed=seed),
@@ -431,9 +460,9 @@ def hard_swish_composite(x):
         maxmum(x + offset, 0), threshold
     ) * x / scale
     """
-    offset = 3.0
     threshold = 6.0
     scale = 6.0
+    offset = 3.0
     full_shape = x.shape if len(x.shape) == 0 else [1]
     res = (
         minimum(
@@ -465,15 +494,16 @@ def sigmoid_composite(x):
     res = 1 / (1 + exp(-x))
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
 
     sum_temp = 1 + exp(-x)
     res = 1 / sum_temp
-    return res if not is_amp else cast(res, "float16")
+    return res if not is_amp else cast(res, dtype)
 
 
 @REGISTER_COMPOSITE('silu')
@@ -483,15 +513,16 @@ def silu_composite(x):
     res = x / (1 + exp(-x))
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
 
     sum_temp = 1 + exp(-x)
     res = x / sum_temp
-    return res if not is_amp else cast(res, "float16")
+    return res if not is_amp else cast(res, dtype)
 
 
 @REGISTER_COMPOSITE('meshgrid')
@@ -541,6 +572,8 @@ def squeeze2_composite(x, axis):
     axis can only be list, not int
     """
     rank = len(x.shape)
+    if rank == 0:
+        return [assign(x), None]
     if len(axis) == 0:
         dims = set(range(rank))
     else:
@@ -560,15 +593,16 @@ def sqrt_composite(x):
     res = pow(x, 0.5)
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
 
     y = full(x.shape if len(x.shape) == 0 else [1], 0.5, x.dtype)
     res = pow(x, y)
-    return res if not is_amp else cast(res, "float16")
+    return res if not is_amp else cast(res, dtype)
 
 
 @REGISTER_COMPOSITE('pow')
@@ -578,9 +612,10 @@ def pow_composite(x, y):
     res = x^y
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
 
@@ -588,7 +623,7 @@ def pow_composite(x, y):
         y = full(x.shape if len(x.shape) == 0 else [1], y, x.dtype)
     res = pow(x, y)
     if is_amp:
-        res = cast(res, "float16")
+        res = cast(res, dtype)
     return res
 
 
@@ -627,14 +662,15 @@ def rsqrt_composite(x):
     """define composite rule of op rsqrt."""
     # rsqrt(x) = x^(-0.5)
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
     y = full(x.shape if len(x.shape) == 0 else [1], -0.5, x.dtype)
     res = pow(x, y)
-    return res if not is_amp else cast(res, "float16")
+    return res if not is_amp else cast(res, dtype)
 
 
 @REGISTER_COMPOSITE('group_norm')
@@ -649,10 +685,11 @@ def group_norm_composite(x, scale, bias, epsilon, groups, data_layout):
     N, C, H, W = x.shape
 
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
-    # when inputs are float16, convert to float32 in computing
-    if convert_dtype(x.dtype) == "float16":
+    dtype = convert_dtype(x.dtype)
+    # when inputs are float16 or bfloat16, convert to float32 in computing
+    if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
         scale = cast(scale, "float32")
@@ -671,7 +708,24 @@ def group_norm_composite(x, scale, bias, epsilon, groups, data_layout):
         out = out + reshape(bias, (-1, 1, 1))
     ret_mean_ = reshape(mean_, (N, groups))
     ret_var_ = reshape(var_, (N, groups))
-    # return output in float16, mean and var in float32
+    # return output in float16 or bfloat16, mean and var in float32
     if is_amp:
-        out = cast(out, "float16")
+        out = cast(out, dtype)
     return out, ret_mean_, ret_var_
+
+
+@REGISTER_COMPOSITE('sum')
+def sum_composite(x):
+    ans = 0
+    for xi in x:
+        ans += xi
+    return ans
+
+
+@REGISTER_COMPOSITE('leaky_relu')
+def leaky_relu_composite(x, negative_slope):
+    """define composite rule of op leaky_relu."""
+    if negative_slope < 1.0:
+        return maximum(x, negative_slope * x)
+    else:
+        return minimum(x, negative_slope * x)

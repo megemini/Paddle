@@ -13,10 +13,10 @@
 # limitations under the License.
 
 from paddle import _C_ops
-from paddle.fluid import core
-from paddle.fluid.data_feeder import check_type, check_variable_and_dtype
-from paddle.fluid.framework import Variable, in_dygraph_mode
-from paddle.fluid.layer_helper import LayerHelper
+from paddle.base import core
+from paddle.base.data_feeder import check_type, check_variable_and_dtype
+from paddle.base.framework import Variable, in_dygraph_mode
+from paddle.base.layer_helper import LayerHelper
 
 
 def check_finite_and_unscale(x, scale, name=None, float_status=None):
@@ -41,7 +41,7 @@ def check_finite_and_unscale(x, scale, name=None, float_status=None):
     found_inf = helper.create_variable_for_type_inference(dtype='bool')
 
     if in_dygraph_mode():
-        _C_ops.check_finite_and_unscale_(x, scale, found_inf)
+        x, found_inf = _C_ops.check_finite_and_unscale_(x, scale)
         return x, found_inf
 
     check_type(x, 'x', (tuple, list), 'check_finite_and_unscale')

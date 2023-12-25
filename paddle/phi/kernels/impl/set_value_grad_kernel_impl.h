@@ -54,7 +54,7 @@ void SetValueGradImpl(const Context& dev_ctx,
                       const IntArray& steps,
                       const std::vector<int64_t>& axes,
                       const std::vector<int64_t>& decrease_axes,
-                      const std::vector<int64_t>& none_axes,
+                      const std::vector<int64_t>& none_axes UNUSED,
                       DenseTensor* x_grad,
                       DenseTensor* value_grad) {
   PADDLE_ENFORCE_EQ(
@@ -84,7 +84,7 @@ void SetValueGradImpl(const Context& dev_ctx,
                              axes.size(),
                              false);
 
-  DDim out_dims(phi::make_ddim(out_dims_vector));
+  DDim out_dims(common::make_ddim(out_dims_vector));
 
   std::vector<int> reverse_vector(starts_local.size(), 0);
   funcs::StridedSliceFunctor(starts_local.data(),

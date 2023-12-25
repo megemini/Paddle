@@ -23,7 +23,7 @@ from get_test_cover_info import (
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle.fluid import Program, program_guard
+from paddle.base import Program, program_guard
 
 
 class XPUTestScaleOp(XPUOpTestWrapper):
@@ -134,6 +134,17 @@ class TestScaleApiDygraph(unittest.TestCase):
 class TestScaleInplaceApiDygraph(TestScaleApiDygraph):
     def _executed_api(self, x, scale=1.0, bias=0.0):
         return x.scale_(scale, bias)
+
+
+class TestScaleOpZeroNumelVariable(unittest.TestCase):
+    def test_check_zero_numel_xpu(self):
+        if paddle.is_compiled_with_xpu():
+            paddle.disable_static()
+            paddle.set_device('xpu')
+            data = paddle.ones([0, 1])
+            out = paddle.scale(data, 2)
+            self.assertEqual(out.shape, data.shape)
+            paddle.enable_static()
 
 
 support_types = get_xpu_op_support_types('scale')

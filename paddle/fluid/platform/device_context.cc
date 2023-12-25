@@ -45,10 +45,6 @@ DeviceType Place2DeviceType(const platform::Place& place) {
     return platform::DeviceType::XPU;
   } else if (platform::is_ipu_place(place)) {
     return platform::DeviceType::IPU;
-  } else if (platform::is_npu_place(place)) {
-    return platform::DeviceType::NPU;
-  } else if (platform::is_mlu_place(place)) {
-    return platform::DeviceType::MLU;
   } else if (platform::is_custom_place(place)) {
     return platform::DeviceType::CUSTOM_DEVICE;
   } else {
@@ -61,7 +57,8 @@ DeviceType Place2DeviceType(const platform::Place& place) {
 template <typename DevCtx>
 typename std::enable_if<!std::is_same<DevCtx, phi::GPUContext>::value,
                         DevCtx*>::type
-ConstructDevCtx(const phi::Place& p, /*unused*/ int stream_priority = 0) {
+ConstructDevCtx(const phi::Place& p,
+                /*unused*/ int stream_priority UNUSED = 0) {
   return new DevCtx(p);
 }
 
@@ -111,6 +108,21 @@ inline std::unique_ptr<DeviceContext> CreateDeviceContext(
     dev_ctx->SetAllocator(instance.GetAllocator(p).get());
     dev_ctx->SetGenerator(phi::DefaultXPUGenerator(p.GetDeviceId()).get());
 #endif
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+  } else if (p.GetType() == phi::AllocationType::CUSTOM) {
+    auto* custom_ctx = dynamic_cast<phi::CustomContext*>(dev_ctx);
+    PADDLE_ENFORCE_NOT_NULL(
+        custom_ctx,
+        phi::errors::InvalidArgument(
+            "Failed to dynamic_cast dev_ctx into phi::CustomContext."));
+
+    if (!disable_setting_default_stream_for_allocator) {
+      instance.SetDefaultStream(CustomPlace(p.GetDeviceType(), p.GetDeviceId()),
+                                custom_ctx->stream());
+    }
+    dev_ctx->SetAllocator(instance.GetAllocator(p, custom_ctx->stream()).get());
+    dev_ctx->SetGenerator(phi::DefaultCustomDeviceGenerator(p).get());
+#endif
   } else {
     dev_ctx->SetAllocator(instance.GetAllocator(p).get());
     dev_ctx->SetGenerator(phi::DefaultCPUGenerator().get());
@@ -158,7 +170,7 @@ void EmplaceDeviceContexts(
   }
   for (auto& place : set) {
     if (place.GetType() == phi::AllocationType::CPU) {
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
       EmplaceDeviceContext<phi::OneDNNContext>(
           place_to_device_context,
           place,

@@ -34,17 +34,19 @@ void ScatterNdAddKernel(const Context &ctx,
   if (updates.numel() == 0) return;
 
   if (index.numel() == 0) {
-    int loop_time =
-        static_cast<int>(index.dims().size() == 0 ? 1 : index.dims()[0]);
+    int64_t index_dims_size = index.dims().size();
+    int loop_time = static_cast<int>(
+        index_dims_size == 0 ? 1
+                             : common::product(common::slice_ddim(
+                                   index.dims(), 0, index_dims_size - 1)));
 
     for (int i = 0; i < loop_time; i++) {
-      // xpu::add only support float or float16 template typename
-      // now, register this op only with float type
-      r = xpu::add<T>(ctx.x_context(),
-                      updates_ptr + out->numel() * i,
-                      out_ptr,
-                      out_ptr,
-                      out->numel());
+      r = xpu::broadcast_add<T>(ctx.x_context(),
+                                updates_ptr + out->numel() * i,
+                                out_ptr,
+                                out_ptr,
+                                {out->numel()},
+                                {out->numel()});
       PADDLE_ENFORCE_XDNN_SUCCESS(r, "copy");
     }
     return;
@@ -62,8 +64,8 @@ void ScatterNdAddKernel(const Context &ctx,
                         phi::DataType::INT32,
                         phi::DataType::INT64));
 
-  auto x_shape = phi::vectorize<int64_t>(x.dims());
-  auto index_shape = phi::vectorize<int64_t>(index.dims());
+  auto x_shape = common::vectorize<int64_t>(x.dims());
+  auto index_shape = common::vectorize<int64_t>(index.dims());
   if (index_shape.size() == 1) {
     index_shape.insert(index_shape.begin(), 1);
   }
@@ -100,5 +102,10 @@ void ScatterNdAddKernel(const Context &ctx,
 }
 }  // namespace phi
 
-PD_REGISTER_KERNEL(
-    scatter_nd_add, XPU, ALL_LAYOUT, phi::ScatterNdAddKernel, float) {}
+PD_REGISTER_KERNEL(scatter_nd_add,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::ScatterNdAddKernel,
+                   float,
+                   int64_t,
+                   int) {}

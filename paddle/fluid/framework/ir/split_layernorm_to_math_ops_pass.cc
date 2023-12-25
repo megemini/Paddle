@@ -268,7 +268,7 @@ void SplitLayerNormPass::ApplyImpl(Graph* graph) const {
     pow_y->SetPersistable(true);
     auto* pow_y_node = graph->CreateVarNode(pow_y);
     auto* pow_y_tensor = scope->Var(pow_y_name)->GetMutable<phi::DenseTensor>();
-    pow_y_tensor->Resize(phi::make_ddim({1}));
+    pow_y_tensor->Resize(common::make_ddim({1}));
     dev_ctx->Alloc<float>(pow_y_tensor);
     (pow_y_tensor->data<float>())[0] = 2.0f;
 
@@ -312,7 +312,7 @@ void SplitLayerNormPass::ApplyImpl(Graph* graph) const {
     add_y->SetPersistable(true);
     auto* add_y_node = graph->CreateVarNode(add_y);
     auto* add_y_tensor = scope->Var(add_y_name)->GetMutable<phi::DenseTensor>();
-    add_y_tensor->Resize(phi::make_ddim({1}));
+    add_y_tensor->Resize(common::make_ddim({1}));
     dev_ctx->Alloc<float>(add_y_tensor);
     (add_y_tensor->data<float>())[0] = eps;
 
@@ -364,7 +364,7 @@ void SplitLayerNormPass::ApplyImpl(Graph* graph) const {
         scope->Var(new_scale_name)->GetMutable<phi::DenseTensor>();
     auto* scale_tensor =
         scope->Var(layer_norm_scale->Name())->GetMutable<phi::DenseTensor>();
-    new_scale_tensor->Resize(phi::make_ddim(shape_int64));
+    new_scale_tensor->Resize(common::make_ddim(shape_int64));
     dev_ctx->Alloc<float>(new_scale_tensor);
     memcpy(new_scale_tensor->data<float>(),
            scale_tensor->data<float>(),
@@ -393,7 +393,7 @@ void SplitLayerNormPass::ApplyImpl(Graph* graph) const {
         scope->Var(new_bias_name)->GetMutable<phi::DenseTensor>();
     auto* bias_tensor =
         scope->Var(layer_norm_bias->Name())->GetMutable<phi::DenseTensor>();
-    new_bias_tensor->Resize(phi::make_ddim(shape_int64));
+    new_bias_tensor->Resize(common::make_ddim(shape_int64));
     dev_ctx->Alloc<float>(new_bias_tensor);
     memcpy(new_bias_tensor->data<float>(),
            bias_tensor->data<float>(),
@@ -425,7 +425,14 @@ void SplitLayerNormPass::ApplyImpl(Graph* graph) const {
     IR_NODE_LINK_TO(new_bias_node, elementwise_add1_node);
     IR_NODE_LINK_TO(elementwise_add1_node, layer_norm_out);
 
-    GraphSafeRemoveNodes(g, {layer_norm_op, layer_norm_bias, layer_norm_scale});
+    std::unordered_set<const Node*> nodes2rm = {};
+    nodes2rm.insert(layer_norm_op);
+    if (layer_norm_bias->outputs.size() <= 1UL)
+      nodes2rm.insert(layer_norm_bias);
+    if (layer_norm_scale->outputs.size() <= 1UL)
+      nodes2rm.insert(layer_norm_scale);
+
+    GraphSafeRemoveNodes(g, nodes2rm);
     found_layer_norm_count++;
   };
 

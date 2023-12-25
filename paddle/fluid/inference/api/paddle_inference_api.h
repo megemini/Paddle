@@ -47,6 +47,7 @@ namespace paddle_infer {
 using PrecisionType = paddle::AnalysisConfig::Precision;
 using Config = paddle::AnalysisConfig;
 using DistConfig = paddle::DistConfig;
+using XpuConfig = paddle::XpuConfig;
 
 ///
 /// \class Predictor
@@ -197,7 +198,10 @@ class PD_INFER_DECL Predictor {
   /// type, the second param is output var name of the op, and the third
   /// parameter is output tensor with the var name.
   ///
-  void RegisterOutputHook(const Exp_OutputHookFunc& hookfunc);
+  void RegisterOutputHook(const OutputTensorHookFunc& hookfunc);
+
+  /// The same as RegisterOutputHook.
+  void RegisterInputHook(const InputTensorHookFunc& hookfunc);
 
   ///
   /// \brief Get the execution stream on devices with a concept of stream,
@@ -231,7 +235,7 @@ PD_INFER_DECL int GetNumBytesOfDataType(DataType dtype);
 PD_INFER_DECL std::string GetVersion();
 PD_INFER_DECL std::tuple<int, int, int> GetTrtCompileVersion();
 PD_INFER_DECL std::tuple<int, int, int> GetTrtRuntimeVersion();
-PD_INFER_DECL std::string UpdateDllFlag(const char* name, const char* value);
+PD_INFER_DECL void UpdateDllFlag(const char* name, const char* value);
 
 PD_INFER_DECL void ConvertToMixedPrecision(
     const std::string& model_file,
@@ -241,7 +245,8 @@ PD_INFER_DECL void ConvertToMixedPrecision(
     PrecisionType mixed_precision,
     PlaceType backend,
     bool keep_io_types = true,
-    std::unordered_set<std::string> black_list = {});
+    std::unordered_set<std::string> black_list = {},
+    std::unordered_set<std::string> white_list = {});
 
 namespace services {
 ///

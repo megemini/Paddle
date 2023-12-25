@@ -12,9 +12,9 @@ limitations under the License. */
 #pragma once
 #include <vector>
 
-#include "paddle/phi/kernels/funcs/detail/strided_memcpy.h"
-
+#include "paddle/common/macros.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/kernels/funcs/detail/strided_memcpy.h"
 
 namespace phi {
 class CPUContext;
@@ -56,7 +56,8 @@ inline void CopyWithContext(const Context& ctx,
                             const Place& src_place,
                             const void* src,
                             size_t num) {
-#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
+    defined(PADDLE_WITH_CUSTOM_DEVICE)
   memory_utils::Copy(dst_place, dst, src_place, src, num, ctx.stream());
 #else
   PADDLE_THROW(
@@ -65,7 +66,7 @@ inline void CopyWithContext(const Context& ctx,
 }
 
 template <>
-inline void CopyWithContext<phi::CPUContext>(const phi::CPUContext& ctx,
+inline void CopyWithContext<phi::CPUContext>(const phi::CPUContext& ctx UNUSED,
                                              const Place& dst_place,
                                              void* dst,
                                              const Place& src_place,
@@ -145,12 +146,12 @@ inline void StridedMemcpyWithAxis0(
     const phi::DenseTensor& input,
     const std::vector<const phi::DenseTensor*>& shape_refer,
     std::vector<phi::DenseTensor*>* outputs) {
-  const phi::DDim in_stride = stride_numel(input.dims());
+  const phi::DDim in_stride = common::stride_numel(input.dims());
   const int axis = 0;
   size_t input_offset = 0;
 
   for (size_t i = 0; i < outputs->size(); ++i) {
-    auto out_stride = stride_numel(shape_refer[i]->dims());
+    auto out_stride = common::stride_numel(shape_refer[i]->dims());
     auto out = outputs->at(i);
     if (out != nullptr && out->initialized() && out->numel() > 0) {
       StridedNumelCopyWithAxis<T, Context>(dev_ctx,

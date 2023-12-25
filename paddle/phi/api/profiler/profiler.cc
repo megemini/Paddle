@@ -33,13 +33,13 @@ limitations under the License. */
 #include "paddle/phi/backends/dynload/nvtx.h"
 #endif
 
-DEFINE_bool(enable_host_event_recorder_hook,
-            false,
-            "enable HostEventRecorder, hook Profiler");
+PHI_DEFINE_bool(enable_host_event_recorder_hook,
+                false,
+                "enable HostEventRecorder, hook Profiler");
 
-DEFINE_bool(enable_record_op_info,
-            false,
-            "enable operator supplement info recorder");
+PHI_DEFINE_bool(enable_record_op_info,
+                false,
+                "enable operator supplement info recorder");
 
 namespace phi {
 
@@ -72,7 +72,7 @@ Event::Event(EventType type,
 const EventType &Event::type() const { return type_; }
 
 double Event::CpuElapsedMs(const Event &e) const {
-  return (e.cpu_ns_ - cpu_ns_) / (1000000.0);
+  return (static_cast<double>(e.cpu_ns_ - cpu_ns_)) / (1000000.0);
 }
 
 double Event::CudaElapsedMs(const Event &e) const {

@@ -28,6 +28,7 @@
 #include "paddle/phi/kernels/funcs/reduce_function.h"
 #include "paddle/phi/kernels/primitive/functor_primitives.h"
 #include "paddle/phi/kernels/primitive/kernel_primitives.h"
+#include "paddle/phi/kernels/reduce_sum_kernel.h"
 
 namespace phi {
 namespace fusion {
@@ -73,18 +74,20 @@ class AttnMatMul {
           phi::errors::InvalidArgument(
               "The output (= input * weight) is expected to be nullptr or the "
               "same as bias_out when fused is true."));
-      phi::funcs::ComputeFusedGemmEpilogueForward<T>(dev_ctx_,
-                                                     input,
-                                                     weight,
-                                                     bias,
-                                                     bsz_seq_,      // M
-                                                     output_size_,  // N
-                                                     input_size_,   // K
-                                                     transA_,
-                                                     transB_,
-                                                     "none",
-                                                     bias_out,
-                                                     nullptr);
+
+      phi::funcs::LinearWithCublasLt<T>::Run(
+          dev_ctx_,
+          input,                                      // x
+          weight,                                     // y
+          bias_out,                                   // out
+          static_cast<const void*>(bias->data<T>()),  // bias
+          nullptr,
+          bsz_seq_,      // M
+          output_size_,  // N
+          input_size_,   // K
+          transA_,
+          transB_,
+          phi::funcs::MatmulFusedType::kMatmulBias);
       return;
     }
 #endif
@@ -112,8 +115,8 @@ class AttnMatMul {
       // bias_out = output + bias
       std::vector<const phi::DenseTensor*> ins = {output, bias};
       std::vector<phi::DenseTensor*> outs = {bias_out};
-      phi::funcs::BroadcastKernel<phi::ElementwiseType::kBinary, T, T>(
-          dev_ctx_, ins, &outs, -1, phi::funcs::AddFunctor<T>());
+      phi::funcs::BroadcastKernel<T>(
+          dev_ctx_, ins, &outs, phi::funcs::AddFunctor<T>());
     }
   }
 
@@ -257,23 +260,12 @@ class AttnMatMul {
 
       gpuStream_t stream = dev_ctx_.stream();
       if (support_case_1 || support_case_2) {
-        phi::funcs::
-            TensorReduceImpl<T, T, kps::AddFunctor, kps::IdentityFunctor<T>>(
-                dev_ctx_,
-                *d_output,
-                d_bias,
-                kps::IdentityFunctor<T>(),
-                {0, 1},
-                stream);
+        phi::SumKernel<T, phi::GPUContext>(
+            dev_ctx_, *d_output, {0, 1}, d_output->dtype(), false, d_bias);
+
       } else if (support_case_3 || support_case_4) {
-        phi::funcs::
-            TensorReduceImpl<T, T, kps::AddFunctor, kps::IdentityFunctor<T>>(
-                dev_ctx_,
-                *d_output,
-                d_bias,
-                kps::IdentityFunctor<T>(),
-                {0, 1, 2},
-                stream);
+        phi::SumKernel<T, phi::GPUContext>(
+            dev_ctx_, *d_output, {0, 1, 2}, d_output->dtype(), false, d_bias);
       } else {
         PADDLE_THROW(phi::errors::InvalidArgument(
             "Only support reduce when the input dims are [0,1,2,3,4] and "

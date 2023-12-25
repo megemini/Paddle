@@ -20,15 +20,15 @@ import numpy as np
 from inference_pass_test import InferencePassTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.core import AnalysisConfig, PassVersionChecker
+from paddle import base
+from paddle.base import core
+from paddle.base.core import AnalysisConfig, PassVersionChecker
 from paddle.static import nn
 
 
 class TensorRTSubgraphPassElementwiseBroadcastTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -53,8 +53,9 @@ class TensorRTSubgraphPassElementwiseBroadcastTest(InferencePassTest):
         return paddle.tensor.math.add(x=data1, y=data2)
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu)

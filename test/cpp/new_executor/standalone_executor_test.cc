@@ -18,8 +18,10 @@
 
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <string>
 
+#include "paddle/fluid/framework/new_executor/interpreter/plan.h"
 #include "paddle/phi/core/kernel_registry.h"
 
 USE_OP_ITSELF(fill_constant);
@@ -106,6 +108,9 @@ PD_DECLARE_KERNEL(add_n, GPU, ALL_LAYOUT);
 namespace paddle {
 namespace framework {
 
+using Job = interpreter::Job;
+using Plan = interpreter::Plan;
+
 ProgramDesc load_from_file(const std::string& file_name) {
   std::ifstream fin(file_name, std::ios::in | std::ios::binary);
   fin.seekg(0, std::ios::end);
@@ -142,14 +147,29 @@ ProgramDesc GetLmMainProgram() {
 
 TEST(StandaloneExecutor, run) {
   auto place = platform::CUDAPlace(0);
-  ProgramDesc startup_prog = load_from_file("lm_startup_program");
-  ProgramDesc main_prog = GetLmMainProgram();
+  std::shared_ptr<ProgramDesc> p_startup_prog =
+      std::make_shared<ProgramDesc>(load_from_file("lm_startup_program"));
+  std::shared_ptr<ProgramDesc> p_main_prog =
+      std::make_shared<ProgramDesc>(GetLmMainProgram());
 
   Scope scope;
-  StandaloneExecutor startup_exec(place, startup_prog);
-  startup_exec.Run(&scope, {}, {});
-  StandaloneExecutor exec(place, main_prog);
-  exec.Run(&scope, {}, {});
+  std::shared_ptr<Job> startup_job = std::make_shared<Job>(Job("startup"));
+  StandaloneExecutor startup_exec(
+      place,
+      Plan(std::vector<std::shared_ptr<Job>>({startup_job}),
+           std::unordered_map<std::string, std::shared_ptr<ProgramDesc>>(
+               {{startup_job->Type(), p_startup_prog}})),
+      &scope);
+  startup_exec.Run({});
+
+  std::shared_ptr<Job> main_job = std::make_shared<Job>(Job("main"));
+  StandaloneExecutor exec(
+      place,
+      Plan(std::vector<std::shared_ptr<Job>>({main_job}),
+           std::unordered_map<std::string, std::shared_ptr<ProgramDesc>>(
+               {{main_job->Type(), p_main_prog}})),
+      &scope);
+  exec.Run({});
   auto start = std::chrono::steady_clock::now();
 
   for (size_t i = 0; i < 10; ++i) {
@@ -157,7 +177,7 @@ TEST(StandaloneExecutor, run) {
       std::cout << i << std::endl;
     }
 
-    exec.Run(&scope, {}, {});
+    exec.Run({});
   }
 
   auto end = std::chrono::steady_clock::now();
@@ -174,7 +194,9 @@ TEST(InterpreterCore, skip_gc_vars) {
   Scope scope;
 
   std::shared_ptr<InterpreterCore> startup_core =
-      CreateInterpreterCore(place, startup_prog, &scope);
+      std::make_shared<InterpreterCore>(
+          place, startup_prog.Block(0), &scope, interpreter::ExecutionConfig());
+
   startup_core->Run({}, {});
 
   std::set<std::string> skip_gc_vars = {"uniform_0.tmp_0",
@@ -191,8 +213,9 @@ TEST(InterpreterCore, skip_gc_vars) {
   interpreter::ExecutionConfig execution_config;
   execution_config.skip_gc_vars = skip_gc_vars;
 
-  std::shared_ptr<InterpreterCore> main_core = CreateInterpreterCore(
-      place, main_prog, &scope, /*fetch_names=*/{}, execution_config);
+  std::shared_ptr<InterpreterCore> main_core =
+      std::make_shared<InterpreterCore>(
+          place, main_prog.Block(0), &scope, execution_config);
 
   auto check_gc_result =
       [](Scope& scope, std::set<std::string>& vars, bool is_skip_gc) {
@@ -225,10 +248,10 @@ void TestShareWorkQueue(const ProgramDesc& prog,
   const platform::CPUPlace place = platform::CPUPlace();
 
   Scope scope;
-  std::shared_ptr<InterpreterCore> core1 =
-      CreateInterpreterCore(place, prog, &scope, fetch_names);
-  std::shared_ptr<InterpreterCore> core2 =
-      CreateInterpreterCore(place, prog, &scope, fetch_names);
+  std::shared_ptr<InterpreterCore> core1 = std::make_shared<InterpreterCore>(
+      place, prog.Block(0), &scope, interpreter::ExecutionConfig());
+  std::shared_ptr<InterpreterCore> core2 = std::make_shared<InterpreterCore>(
+      place, prog.Block(0), &scope, interpreter::ExecutionConfig());
   core2->ShareWorkQueueFrom(core1);
 
   auto run_and_check = [&feed_names, &feed_tensors, &fetch_results](
@@ -266,7 +289,7 @@ TEST(InterpreterCore, workqueue_multiplexing) {
   float data_a[] = {0, 1, 2, 3};
   float data_b[] = {0.0, 0.1, 0.2, 0.3};
 
-  phi::DDim dims = phi::make_ddim({2, 2});
+  phi::DDim dims = common::make_ddim({2, 2});
   const platform::CPUPlace place = platform::CPUPlace();
 
   phi::DenseTensor tensor_a = phi::DenseTensor();

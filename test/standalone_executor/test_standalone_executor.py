@@ -17,62 +17,16 @@ import os
 os.environ['FLAGS_use_stream_safe_cuda_allocator'] = "true"
 import json
 import shutil
-import sys
 import unittest
 
 import numpy as np
+from utils import static_guard
 
 import paddle
-from paddle.fluid import core
-from paddle.fluid.core import StandaloneExecutor
+from paddle.base import core
 from paddle.profiler import profiler
 
 paddle.enable_static()
-
-
-class TestDryRun(unittest.TestCase):
-    def setUp(self):
-        place = (
-            paddle.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
-        self.place = core.Place()
-        self.place.set_place(place)
-
-    def build_program(self):
-        startup_program = paddle.static.Program()
-        main_program = paddle.static.Program()
-        with paddle.static.program_guard(main_program, startup_program):
-            a = paddle.static.data(name="a", shape=[2, 2], dtype='float32')
-            b = paddle.ones([2, 2]) * 2
-            t = paddle.static.nn.fc(a, 2)
-            c = t + b
-
-        return startup_program, main_program, c
-
-    def test_dry_run(self):
-        scope = core.Scope()
-        startup_program, main_program, c = self.build_program()
-        exe = paddle.static.Executor(self.place)
-        exe.run(startup_program, scope=scope)
-
-        standaloneexecutor = StandaloneExecutor(self.place, main_program.desc)
-        # test for cost_info
-        cost_info = standaloneexecutor.dry_run(
-            scope, {"a": np.ones([2, 2], dtype="float32")}
-        )
-        self.check_cost_info(cost_info)
-
-    def check_cost_info(self, cost_info):
-        IS_WINDOWS = sys.platform.startswith('win')
-
-        if core.is_compiled_with_cuda():
-            # # w,bias,b, out, memory block is at least 256 bytes on Linux
-            gt = 16 * 4 if IS_WINDOWS else 256 * 4
-            self.assertGreater(cost_info.device_memory_bytes(), gt)
-        else:
-            self.assertEqual(cost_info.device_memory_bytes(), 0)
 
 
 def build_program():
@@ -136,7 +90,7 @@ class ExecutorStatisticsTestCase(unittest.TestCase):
 
         enable = True
         if executor == 'ParallelExecutor':
-            main_program = paddle.fluid.compiler.CompiledProgram(main_program)
+            main_program = paddle.base.compiler.CompiledProgram(main_program)
             enable = False
         elif executor == 'Executor':
             enable = False
@@ -283,9 +237,9 @@ class SwitchExecutorInterfaceWithFeed(unittest.TestCase):
         data = np.ones([2, 2], dtype="float32")
         feed = {"a": data, 'fake_input': data}
 
-        with paddle.fluid.framework._static_guard():
+        with static_guard():
             res = self.run_new_executor(feed)
-        with paddle.fluid.dygraph.guard():
+        with paddle.base.dygraph.guard():
             gt = self.run_dygraph(feed)
         for x, y in zip(gt, res):
             np.testing.assert_array_equal(x, y)
@@ -358,7 +312,7 @@ class TestException(unittest.TestCase):
 
     def test_nan(self):
         flags = {'FLAGS_check_nan_inf': True, 'FLAGS_benchmark': True}
-        paddle.fluid.set_flags(flags)
+        paddle.base.set_flags(flags)
         feed = [
             {
                 'id': np.array([1, 2, 3, 4, 5]).astype(np.int64),
@@ -392,7 +346,7 @@ class TestException(unittest.TestCase):
 class TestFetchEmptyTensor(unittest.TestCase):
     def test_fetch(self):
         places = [paddle.CPUPlace()]
-        if paddle.fluid.core.is_compiled_with_cuda():
+        if paddle.base.core.is_compiled_with_cuda():
             places.append(paddle.CUDAPlace(0))
         for place in places:
             with paddle.static.program_guard(paddle.static.Program()):
@@ -404,10 +358,10 @@ class TestFetchEmptyTensor(unittest.TestCase):
 
 class TestInplaceApiWithDataTransform(unittest.TestCase):
     def test_increment(self):
-        if paddle.fluid.core.is_compiled_with_cuda():
-            with paddle.fluid.device_guard("gpu:0"):
+        if paddle.base.core.is_compiled_with_cuda():
+            with paddle.base.device_guard("gpu:0"):
                 x = paddle.tensor.fill_constant([1], "float32", 0)
-            with paddle.fluid.device_guard("cpu"):
+            with paddle.base.device_guard("cpu"):
                 x = paddle.increment(x)
             exe = paddle.static.Executor(paddle.CUDAPlace(0))
             for i in range(10):

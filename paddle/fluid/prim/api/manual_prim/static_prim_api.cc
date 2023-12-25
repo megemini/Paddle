@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <string.h>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -50,8 +50,6 @@ Tensor full<DescTensor>(const IntArray& shape,
   op->SetAttr("shape", shape.GetData());
   switch (dtype) {
     case phi::DataType::FLOAT16:
-      op->SetAttr("str_value", std::to_string(value.to<float>()));
-      break;
     case phi::DataType::BFLOAT16:
       op->SetAttr("str_value", std::to_string(value.to<float>()));
       break;
@@ -121,6 +119,33 @@ Tensor cast<DescTensor>(const Tensor& x, DataType dtype) {
       "Out", {std::static_pointer_cast<prim::DescTensor>(out.impl())->Name()});
   op->SetAttr("in_dtype", paddle::framework::TransToProtoVarType(x.dtype()));
   op->SetAttr("out_dtype", paddle::framework::TransToProtoVarType(dtype));
+  op->CheckAttrs();
+  op->InferVarType(block);
+  op->InferShape(*block);
+  return out;
+}
+
+template <>
+Tensor slice<DescTensor>(const Tensor& input,
+                         const std::vector<int64_t>& axes,
+                         const IntArray& starts,
+                         const IntArray& ends,
+                         const std::vector<int64_t>& infer_flags,
+                         const std::vector<int64_t>& decrease_axis) {
+  framework::BlockDesc* block = StaticCompositeContext::Instance().GetBlock();
+  framework::OpDesc* op = block->AppendOp();
+  op->SetType("slice");
+  op->SetInput(
+      "Input",
+      {std::static_pointer_cast<prim::DescTensor>(input.impl())->Name()});
+  auto out = empty<DescTensor>({}, phi::DataType::FLOAT32, paddle::Place());
+  op->SetOutput(
+      "Out", {std::static_pointer_cast<prim::DescTensor>(out.impl())->Name()});
+  op->SetAttr("axes", unsafe_vector_cast<int64_t, int>(axes));
+  op->SetAttr("starts", unsafe_vector_cast<int64_t, int>(starts.GetData()));
+  op->SetAttr("ends", unsafe_vector_cast<int64_t, int>(ends.GetData()));
+  op->SetAttr("infer_flags", unsafe_vector_cast<int64_t, int>(infer_flags));
+  op->SetAttr("decrease_axis", unsafe_vector_cast<int64_t, int>(decrease_axis));
   op->CheckAttrs();
   op->InferVarType(block);
   op->InferShape(*block);

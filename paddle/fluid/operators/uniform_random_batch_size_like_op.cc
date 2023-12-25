@@ -56,7 +56,7 @@ inline void UniformRealDistribution(paddle::platform::bfloat16 *data,
 // It seems that Eigen::Tensor::random in GPU will SEGFAULT.
 // Use std::random and thrust::random(thrust is a std library in CUDA) to
 // implement uniform random.
-template <typename T>
+template <typename T, typename DeviceContext>
 class CPUUniformRandomKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
@@ -65,11 +65,11 @@ class CPUUniformRandomKernel : public framework::OpKernel<T> {
     std::vector<int64_t> new_shape;
     auto list_new_shape_tensor =
         ctx.MultiInput<phi::DenseTensor>("ShapeTensorList");
-    if (list_new_shape_tensor.size() > 0 || ctx.HasInput("ShapeTensor")) {
+    if (!list_new_shape_tensor.empty() || ctx.HasInput("ShapeTensor")) {
       if (ctx.HasInput("ShapeTensor")) {
         auto *shape_tensor = ctx.Input<phi::DenseTensor>("ShapeTensor");
         new_shape = GetNewDataFromShapeTensor(shape_tensor);
-      } else if (list_new_shape_tensor.size() > 0) {
+      } else if (!list_new_shape_tensor.empty()) {
         new_shape = GetNewDataFromShapeTensorList(list_new_shape_tensor);
       }
     }
@@ -79,11 +79,11 @@ class CPUUniformRandomKernel : public framework::OpKernel<T> {
       tensor = selected_rows->mutable_value();
       auto shape = ctx.Attr<std::vector<int64_t>>("shape");
       if (!new_shape.empty()) shape = new_shape;
-      tensor->Resize(phi::make_ddim(shape));
+      tensor->Resize(common::make_ddim(shape));
       selected_rows->mutable_rows()->reserve(shape[0]);
     } else if (out_var->IsType<phi::DenseTensor>()) {
       tensor = out_var->GetMutable<phi::DenseTensor>();
-      if (!new_shape.empty()) tensor->Resize(phi::make_ddim(new_shape));
+      if (!new_shape.empty()) tensor->Resize(common::make_ddim(new_shape));
     } else {
       PADDLE_THROW(platform::errors::InvalidArgument(
           "Expected type of Output(out) in uniform_random_op must be Tensor, "
@@ -178,16 +178,20 @@ with random values sampled from a uniform distribution.
 }  // namespace operators
 }  // namespace paddle
 
+namespace ops = paddle::operators;
+namespace plat = paddle::platform;
 REGISTER_OPERATOR(
     uniform_random_batch_size_like,
-    paddle::operators::UniformRandomBatchSizeLikeOp,
-    paddle::operators::UniformRandomBatchSizeLikeOpMaker,
+    ops::UniformRandomBatchSizeLikeOp,
+    ops::UniformRandomBatchSizeLikeOpMaker,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,
-    paddle::operators::BatchSizeLikeNoNeedBufferVarsInferer);
+    ops::BatchSizeLikeNoNeedBufferVarsInferer);
 
-REGISTER_OP_CPU_KERNEL(
-    uniform_random_batch_size_like,
-    paddle::operators::CPUUniformRandomKernel<float>,
-    paddle::operators::CPUUniformRandomKernel<double>,
-    paddle::operators::CPUUniformRandomKernel<paddle::platform::bfloat16>);
+PD_REGISTER_STRUCT_KERNEL(uniform_random_batch_size_like,
+                          CPU,
+                          ALL_LAYOUT,
+                          ops::CPUUniformRandomKernel,
+                          float,
+                          double,
+                          plat::bfloat16) {}

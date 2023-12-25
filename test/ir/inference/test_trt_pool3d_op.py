@@ -21,9 +21,9 @@ import numpy as np
 from inference_pass_test import InferencePassTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.core import AnalysisConfig, PassVersionChecker
+from paddle import base
+from paddle.base import core
+from paddle.base.core import AnalysisConfig, PassVersionChecker
 
 
 class TensorRTPool3dTest(InferencePassTest):
@@ -57,7 +57,7 @@ class TensorRTPool3dTest(InferencePassTest):
             1 << 30, self.bs, 0, self.precision, self.serialize, False
         )
 
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name='data',
                 shape=[-1, self.channel, self.depth, self.height, self.width],
@@ -84,8 +84,9 @@ class TensorRTPool3dTest(InferencePassTest):
             self.fetch_list = [pool_out]
 
     def check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             if self.precision == AnalysisConfig.Precision.Float32:
@@ -146,9 +147,7 @@ class TensorRTPool3dTest(InferencePassTest):
         ):
             is_dynamic = True if dynamic_shape_options is not None else False
             with self.subTest(
-                'Precision: {}, Serialize: {}, Dynamic: {}'.format(
-                    precision, serialize, is_dynamic
-                )
+                f'Precision: {precision}, Serialize: {serialize}, Dynamic: {is_dynamic}'
             ):
                 self.precision = precision
                 self.serialize = serialize
@@ -187,7 +186,7 @@ class TensorRTAdaptiveAvgPool3DTest(InferencePassTest):
             1 << 30, self.bs, 0, self.precision, self.serialize, False
         )
 
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name='data',
                 shape=[-1, self.channel, self.depth, self.height, self.width],
@@ -200,8 +199,9 @@ class TensorRTAdaptiveAvgPool3DTest(InferencePassTest):
             self.fetch_list = [pool_out]
 
     def check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu)
@@ -256,9 +256,7 @@ class TensorRTAdaptiveAvgPool3DTest(InferencePassTest):
         ):
             is_dynamic = True if dynamic_shape_options is not None else False
             with self.subTest(
-                'Precision: {}, Serialize: {}, Dynamic: {}'.format(
-                    precision, serialize, is_dynamic
-                )
+                f'Precision: {precision}, Serialize: {serialize}, Dynamic: {is_dynamic}'
             ):
                 self.precision = precision
                 self.serialize = serialize
@@ -287,7 +285,7 @@ class TensorRTAdaptiveMaxPool3DTest(InferencePassTest):
             1 << 30, self.bs, 0, self.precision, self.serialize, False
         )
 
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name='data',
                 shape=[-1, self.channel, self.depth, self.height, self.width],
@@ -300,8 +298,9 @@ class TensorRTAdaptiveMaxPool3DTest(InferencePassTest):
             self.fetch_list = [pool_out]
 
     def check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu)
@@ -356,9 +355,7 @@ class TensorRTAdaptiveMaxPool3DTest(InferencePassTest):
         ):
             is_dynamic = True if dynamic_shape_options is not None else False
             with self.subTest(
-                'Precision: {}, Serialize: {}, Dynamic: {}'.format(
-                    precision, serialize, is_dynamic
-                )
+                f'Precision: {precision}, Serialize: {serialize}, Dynamic: {is_dynamic}'
             ):
                 self.precision = precision
                 self.serialize = serialize

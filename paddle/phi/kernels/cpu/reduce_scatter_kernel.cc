@@ -20,10 +20,10 @@
 namespace phi {
 
 template <typename T, typename Context>
-void ReduceScatterKernel(const Context& dev_ctx,
-                         const DenseTensor& x,
-                         int nranks,
-                         DenseTensor* out) {
+void ReduceScatterKernel(const Context& dev_ctx UNUSED,
+                         const DenseTensor& x UNUSED,
+                         int nranks UNUSED,
+                         DenseTensor* out UNUSED) {
   PADDLE_THROW(
       errors::Unimplemented("Unimplemented cpu kernel for CReduceScatterOp."));
 }
@@ -40,5 +40,6 @@ PD_REGISTER_KERNEL(reduce_scatter,
                    bool,
                    int8_t,
                    uint8_t,
+                   int16_t,
                    int64_t,
                    phi::dtype::float16) {}

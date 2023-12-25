@@ -20,14 +20,14 @@ import numpy as np
 from inference_pass_test import InferencePassTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid.core import AnalysisConfig, PassVersionChecker
+from paddle import base
+from paddle.base.core import AnalysisConfig, PassVersionChecker
 from paddle.static import nn
 
 
 class TensorRTSubgraphPassFcTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 6, 64, 64], dtype="float32"
             )
@@ -54,7 +54,7 @@ class TensorRTSubgraphPassFcTest(InferencePassTest):
 
 class TensorRTSubgraphPassConcatTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -84,7 +84,7 @@ class TensorRTSubgraphPassConcatTest(InferencePassTest):
 
 class TensorRTSubgraphPassSplitTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -110,7 +110,7 @@ class TensorRTSubgraphPassSplitTest(InferencePassTest):
 
 class TensorRTSubgraphPassSplitSerializeTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -128,8 +128,9 @@ class TensorRTSubgraphPassSplitSerializeTest(InferencePassTest):
     def test_check_output(self):
         if paddle.is_compiled_with_cuda():
             use_gpu = True
-            if os.path.exists(self.path + "_opt_cache"):
-                shutil.rmtree(self.path + "_opt_cache")
+            opt_path = os.path.join(self.path, '_opt_cache')
+            if os.path.exists(opt_path):
+                shutil.rmtree(opt_path)
             self.check_output_with_option(use_gpu)
             self.assertTrue(
                 PassVersionChecker.IsCompatible('tensorrt_subgraph_pass')
@@ -138,7 +139,7 @@ class TensorRTSubgraphPassSplitSerializeTest(InferencePassTest):
 
 class TensorRTSubgraphPassDynamicSplitFp16SerializeTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -164,8 +165,9 @@ class TensorRTSubgraphPassDynamicSplitFp16SerializeTest(InferencePassTest):
     def test_check_output(self):
         if paddle.is_compiled_with_cuda():
             use_gpu = True
-            if os.path.exists(self.path + "_opt_cache"):
-                shutil.rmtree(self.path + "_opt_cache")
+            opt_path = os.path.join(self.path, '_opt_cache')
+            if os.path.exists(opt_path):
+                shutil.rmtree(opt_path)
             self.check_output_with_option(use_gpu, 1e-3)
             self.assertTrue(
                 PassVersionChecker.IsCompatible('tensorrt_subgraph_pass')
@@ -174,15 +176,15 @@ class TensorRTSubgraphPassDynamicSplitFp16SerializeTest(InferencePassTest):
 
 class TensorRTSubgraphPassInstanceNormTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 3, 64, 64], dtype="float32"
             )
-            param_attr = fluid.ParamAttr(
+            param_attr = base.ParamAttr(
                 name='instance_norm_w',
                 initializer=paddle.nn.initializer.Constant(value=1.0),
             )
-            bias_attr = fluid.ParamAttr(
+            bias_attr = base.ParamAttr(
                 name='instance_norm_b',
                 initializer=paddle.nn.initializer.Constant(value=0.0),
             )
@@ -211,7 +213,7 @@ class TensorRTSubgraphPassInstanceNormTest(InferencePassTest):
 
 class TensorRTSubgraphPassTransposeTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 6, 64, 64], dtype="float32"
             )
@@ -241,7 +243,7 @@ class TensorRTSubgraphPassTransposeTest(InferencePassTest):
 class TensorRTSubgraphPassLayerNormTest(InferencePassTest):
     def setUp(self):
         self.set_params()
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -272,7 +274,7 @@ class TensorRTSubgraphPassLayerNormTest(InferencePassTest):
 class TensorRTSubgraphPassLayerNormDynamicTest(InferencePassTest):
     def setUp(self):
         self.set_params()
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data = paddle.static.data(
                 name="data", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -313,8 +315,9 @@ class TensorRTSubgraphPassLayerNormDynamicTest(InferencePassTest):
         self.serialize = True
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if paddle.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu)
@@ -332,8 +335,9 @@ class TensorRTSubgraphPassLayerNormDynamicFP16Test(
         self.serialize = True
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if paddle.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu, atol=0.01, rtol=0.01)
@@ -358,7 +362,7 @@ class TensorRTSubgraphPassLayerNormBeginNormAxis3Test(
 
 class TensorRTSubgraphPassElementwiseTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -406,14 +410,15 @@ class TensorRTSubgraphPassElementwiseSerializeTest(
         )
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         super().test_check_output()
 
 
 class TensorRTSubgraphPassElementwiseBroadcastDynamicTest(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 3, 64, 64], dtype="float32"
             )
@@ -444,8 +449,9 @@ class TensorRTSubgraphPassElementwiseBroadcastDynamicTest(InferencePassTest):
         return paddle.add(x=data1, y=data2)
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if paddle.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu)

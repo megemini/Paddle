@@ -14,7 +14,7 @@
 import unittest
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestCustomVJP(unittest.TestCase):
@@ -42,6 +42,7 @@ class TestCustomVJP(unittest.TestCase):
             'uniform_random',
             'dropout',
             'fill_any_like',
+            'fill_any_like',
             'cast',
             'elementwise_mul',
             'scale',
@@ -56,6 +57,7 @@ class TestCustomVJP(unittest.TestCase):
             'scale',
             'cast',
             'fill_constant',
+            'fill_constant',
             'cast',
             'elementwise_mul',
             'scale',
@@ -68,7 +70,7 @@ class TestCustomVJP(unittest.TestCase):
             self.ops_fwd_enable_bwd_disable,
             tuple(
                 op.type
-                for op in paddle.jit.to_static(self.f)
+                for op in paddle.jit.to_static(full_graph=True)(self.f)
                 .get_concrete_program()[1]
                 ._train_program.block(0)
                 .ops
@@ -84,7 +86,7 @@ class TestCustomVJP(unittest.TestCase):
             self.ops_fwd_disable_bwd_enable,
             tuple(
                 op.type
-                for op in paddle.jit.to_static(self.f)
+                for op in paddle.jit.to_static(full_graph=True)(self.f)
                 .get_concrete_program()[1]
                 ._train_program.block(0)
                 .ops
@@ -99,7 +101,7 @@ class TestCustomVJP(unittest.TestCase):
             self.ops_all_enable,
             tuple(
                 op.type
-                for op in paddle.jit.to_static(self.f)
+                for op in paddle.jit.to_static(full_graph=True)(self.f)
                 .get_concrete_program()[1]
                 ._train_program.block(0)
                 .ops

@@ -14,10 +14,11 @@
 
 import os
 
+import paddle
+from paddle.base import unique_name
 from paddle.distributed.fleet.base.private_helper_function import (
     wait_server_ready,
 )
-from paddle.fluid import unique_name
 from paddle.framework import core
 from paddle.static import default_main_program, default_startup_program
 
@@ -124,6 +125,7 @@ class Collective:
         wait_port,
         has_multitrainer=False,
     ):
+        endpoints_str = ",".join(endpoints)
         nranks = len(endpoints)
         other_endpoints = endpoints[:]
         other_endpoints.remove(current_endpoint)
@@ -160,6 +162,7 @@ class Collective:
                     'nranks': nranks,
                     'rank': rank,
                     'ring_id': ring_id,
+                    'endpoints': endpoints_str,
                     self.op_role_key: OpRole.Forward,
                 },
             )
@@ -189,6 +192,7 @@ class Collective:
                         'nranks': nranks,
                         'rank': rank,
                         'ring_id': ring_id,
+                        'endpoints': endpoints_str,
                         self.op_role_key: OpRole.Forward,
                     },
                 )
@@ -204,6 +208,39 @@ class Collective:
                         self.op_role_key: OpRole.Forward,
                     },
                 )
+        elif (
+            paddle.distributed.ParallelEnv().device_type
+            in paddle.device.get_all_custom_device_type()
+        ):
+            xccl_id_var = block.create_var(
+                name=unique_name.generate('xccl_id'),
+                persistable=True,
+                type=core.VarDesc.VarType.RAW,
+            )
+            endpoint_to_index_map = {e: idx for idx, e in enumerate(endpoints)}
+            block.append_op(
+                type='c_gen_xccl_id',
+                inputs={},
+                outputs={'Out': xccl_id_var},
+                attrs={
+                    'rank': rank,
+                    'endpoint': current_endpoint,
+                    'other_endpoints': other_endpoints,
+                    self.op_role_key: OpRole.Forward,
+                },
+            )
+            block.append_op(
+                type='c_comm_init',
+                inputs={'X': xccl_id_var},
+                outputs={},
+                attrs={
+                    'nranks': nranks,
+                    'rank': rank,
+                    'ring_id': ring_id,
+                    'endpoints': endpoints_str,
+                    self.op_role_key: OpRole.Forward,
+                },
+            )
 
     def _broadcast_params(self):
         block = self.startup_program.global_block()

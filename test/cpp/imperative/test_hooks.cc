@@ -24,6 +24,7 @@
 #include "paddle/fluid/imperative/hooks.h"
 #include "paddle/fluid/imperative/tracer.h"
 #include "paddle/fluid/memory/memcpy.h"
+#include "paddle/phi/core/flags.h"
 #include "paddle/phi/core/kernel_registry.h"
 
 PD_DECLARE_KERNEL(add, CPU, ALL_LAYOUT);
@@ -35,7 +36,7 @@ namespace platform = paddle::platform;
 namespace framework = paddle::framework;
 namespace memory = paddle::memory;
 
-DECLARE_bool(sort_sum_gradient);
+PHI_DECLARE_bool(sort_sum_gradient);
 
 namespace paddle {
 namespace imperative {
@@ -61,7 +62,7 @@ std::shared_ptr<imperative::VariableWrapper> DoubleHook(
   auto* data = tensor.data<float>();
   auto* out_data = out_tensor->mutable_data<float>(platform::CPUPlace());
   for (int64_t i = 0; i < out_tensor->numel(); ++i) {
-    out_data[i] = data[i] * 2.0;
+    out_data[i] = data[i] * 2.0;  // NOLINT
   }
 
   return out_var;
@@ -84,7 +85,7 @@ TEST(TestHooks, TestGradVarLeafBackwardHook) {
   auto* x_tensor = x->MutableVar()->GetMutable<phi::DenseTensor>();
   auto* y_tensor = y->MutableVar()->GetMutable<phi::DenseTensor>();
 
-  x_tensor->Resize(phi::make_ddim(x_dims));
+  x_tensor->Resize(common::make_ddim(x_dims));
   auto* mutable_x = x_tensor->mutable_data<float>(place);
   memory::Copy(place,
                mutable_x,
@@ -92,7 +93,7 @@ TEST(TestHooks, TestGradVarLeafBackwardHook) {
                src_data.data(),
                sizeof(float) * src_data.size());
 
-  y_tensor->Resize(phi::make_ddim(y_dims));
+  y_tensor->Resize(common::make_ddim(y_dims));
   auto* mutable_y = y_tensor->mutable_data<float>(place);
   memory::Copy(place,
                mutable_y,
@@ -174,7 +175,7 @@ void GradVarLeafBackwardHookWithGradAccmulatedTest() {
   auto* y_tensor = y->MutableVar()->GetMutable<phi::DenseTensor>();
   auto* z_tensor = z->MutableVar()->GetMutable<phi::DenseTensor>();
 
-  x_tensor->Resize(phi::make_ddim(x_dims));
+  x_tensor->Resize(common::make_ddim(x_dims));
   auto* mutable_x = x_tensor->mutable_data<float>(place);
   memory::Copy(place,
                mutable_x,
@@ -182,7 +183,7 @@ void GradVarLeafBackwardHookWithGradAccmulatedTest() {
                src_data.data(),
                sizeof(float) * src_data.size());
 
-  y_tensor->Resize(phi::make_ddim(y_dims));
+  y_tensor->Resize(common::make_ddim(y_dims));
   auto* mutable_y = y_tensor->mutable_data<float>(place);
   memory::Copy(place,
                mutable_y,
@@ -190,7 +191,7 @@ void GradVarLeafBackwardHookWithGradAccmulatedTest() {
                src_data.data(),
                sizeof(float) * src_data.size());
 
-  z_tensor->Resize(phi::make_ddim(z_dims));
+  z_tensor->Resize(common::make_ddim(z_dims));
   auto* mutable_z = z_tensor->mutable_data<float>(place);
   memory::Copy(place,
                mutable_z,

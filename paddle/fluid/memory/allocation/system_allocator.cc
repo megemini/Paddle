@@ -26,11 +26,12 @@ limitations under the License. */
 #else
 #include <sys/mman.h>  // for mlock and munlock
 #endif
-#include "gflags/gflags.h"
+
 #include "paddle/fluid/memory/allocation/allocator.h"
 #include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/phi/backends/cpu/cpu_info.h"
+#include "paddle/phi/core/flags.h"
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #include "paddle/fluid/platform/cuda_device_guard.h"
@@ -39,10 +40,10 @@ limitations under the License. */
 #include "paddle/fluid/platform/device/device_wrapper.h"
 #include "paddle/fluid/platform/profiler/mem_tracing.h"
 
-DECLARE_bool(use_pinned_memory);
-DECLARE_double(fraction_of_gpu_memory_to_use);
-DECLARE_uint64(initial_gpu_memory_in_mb);
-DECLARE_uint64(reallocate_gpu_memory_in_mb);
+PHI_DECLARE_bool(use_pinned_memory);
+PHI_DECLARE_double(fraction_of_gpu_memory_to_use);
+PHI_DECLARE_uint64(initial_gpu_memory_in_mb);
+PHI_DECLARE_uint64(reallocate_gpu_memory_in_mb);
 
 namespace paddle {
 namespace memory {
@@ -51,7 +52,7 @@ namespace detail {
 void* AlignedMalloc(size_t size) {
   void* p = nullptr;
   size_t alignment = 32ul;
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
   // refer to https://github.com/01org/mkl-dnn/blob/master/include/dnnl.hpp
   // memory alignment
   alignment = 4096ul;
@@ -113,7 +114,7 @@ void CPUAllocator::Free(void* p, size_t size, size_t index) {
 #ifdef _WIN32
   _aligned_free(p);
 #else
-  free(p);
+  free(p);  // NOLINT
 #endif
 }
 

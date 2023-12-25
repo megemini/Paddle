@@ -16,15 +16,16 @@ import logging
 
 import paddle
 from paddle import _legacy_C_ops, in_dynamic_mode
-from paddle.fluid.data_feeder import check_variable_and_dtype
-from paddle.fluid.framework import _varbase_creator
-from paddle.fluid.log_helper import get_logger
+from paddle.base.data_feeder import check_variable_and_dtype
+from paddle.base.framework import _create_tensor
+from paddle.base.log_helper import get_logger
 from paddle.framework import ParamAttr, core
-from paddle.nn import Layer
 from paddle.nn import functional as F
 from paddle.nn.initializer import Constant
 from paddle.nn.quant.lsq import FakeQuantActLSQPlus, FakeQuantWeightLSQPlus
 from paddle.utils import unique_name
+
+from ..layer.layers import Layer
 
 __all__ = [
     'FakeQuantAbsMax',
@@ -87,7 +88,7 @@ class FakeQuantAbsMax(Layer):
     def forward(self, input):
         if in_dynamic_mode():
             attrs = ('bit_length', self._quant_bits)
-            quant_out = _varbase_creator(
+            quant_out = _create_tensor(
                 type=input.type,
                 name=f"{input.name}.quantized.dequantized",
                 shape=input.shape,
@@ -101,7 +102,7 @@ class FakeQuantAbsMax(Layer):
                 )
 
             if not out_scale:
-                out_scale = _varbase_creator(
+                out_scale = _create_tensor(
                     type=core.VarDesc.VarType.LOD_TENSOR,
                     name=self._scale_name,
                     shape=[1],
@@ -109,7 +110,10 @@ class FakeQuantAbsMax(Layer):
                     persistable=False,
                 )
                 out_scale.stop_gradient = True
-            out, _, = _legacy_C_ops.fake_quantize_dequantize_abs_max(
+            (
+                out,
+                _,
+            ) = _legacy_C_ops.fake_quantize_dequantize_abs_max(
                 input, quant_out, out_scale, *attrs
             )
             return out
@@ -210,7 +214,7 @@ class FakeQuantMovingAverageAbsMax(Layer):
                 'is_test',
                 not self.training,
             )
-            quant_out = _varbase_creator(
+            quant_out = _create_tensor(
                 type=input.type,
                 name=f"{input.name}.quantized.dequantized",
                 shape=input.shape,
@@ -322,7 +326,7 @@ class FakeQuantChannelWiseAbsMax(Layer):
                 'quant_axis',
                 self._quant_axis,
             )
-            quant_out = _varbase_creator(
+            quant_out = _create_tensor(
                 type=input.type,
                 name=f"{input.name}.quantized.dequantized",
                 shape=input.shape,
@@ -336,7 +340,7 @@ class FakeQuantChannelWiseAbsMax(Layer):
                     out_scale, op=paddle.distributed.ReduceOp.MAX
                 )
             if out_scale is None:
-                out_scale = _varbase_creator(
+                out_scale = _create_tensor(
                     type=core.VarDesc.VarType.LOD_TENSOR,
                     name=self._scale_name,
                     shape=[self._channel_num],
@@ -441,7 +445,7 @@ class MovingAverageAbsMaxScale(Layer):
                 not self.training,
             )
 
-            quant_out = _varbase_creator(
+            quant_out = _create_tensor(
                 type=input.type,
                 name=f"{input.name}.tmp",
                 shape=input.shape,
@@ -608,19 +612,21 @@ class QuantizedConv2DTranspose(Layer):
     The only difference is that its inputs are all fake quantized.
 
     Examples:
-       .. code-block:: python
+        .. code-block:: python
 
-          import paddle
-          import paddle.nn as nn
-          from paddle.nn.quant.quant_layers import QuantizedConv2DTranspose
+            >>> import paddle
+            >>> import paddle.nn as nn
+            >>> from paddle.nn.quant.quant_layers import QuantizedConv2DTranspose
 
-          x_var = paddle.uniform((2, 4, 8, 8), dtype='float32', min=-1., max=1.)
-          conv = nn.Conv2DTranspose(4, 6, (3, 3))
-          conv_quantized = QuantizedConv2DTranspose(conv)
-          y_quantized = conv_quantized(x_var)
-          y_var = conv(x_var)
-          print(y_var.shape, y_quantized.shape)
-          # [2, 6, 10, 10], [2, 6, 10, 10]
+            >>> x_var = paddle.uniform((2, 4, 8, 8), dtype='float32', min=-1., max=1.)
+            >>> conv = nn.Conv2DTranspose(4, 6, (3, 3))
+            >>> conv_quantized = QuantizedConv2DTranspose(conv)
+            >>> y_quantized = conv_quantized(x_var)
+            >>> y_var = conv(x_var)
+            >>> print(y_var.shape)
+            [2, 6, 10, 10]
+            >>> print(y_quantized.shape)
+            [2, 6, 10, 10]
 
     """
 
@@ -1099,7 +1105,6 @@ class FakeQuantMAOutputScaleLayer(Layer):
         *args,
         **kwargs,
     ):
-
         super().__init__()
         self._layer = layer
         self._fake_quant_output = _get_fake_quant_type(

@@ -75,6 +75,12 @@ namespace phi {
                         DenseTensor* dx);
 
 template <typename T, typename Context>
+void SiluGradKernel(const Context& dev_ctx,
+                    const DenseTensor& x,
+                    const DenseTensor& out,
+                    const DenseTensor& dout,
+                    DenseTensor* dx);
+template <typename T, typename Context>
 void ReluDoubleGradKernel(const Context& dev_ctx,
                           const DenseTensor& out,
                           const DenseTensor& ddx,
@@ -249,7 +255,7 @@ void PowTripleGradKernel(const Context& dev_ctx,
                          const DenseTensor& dout,
                          const DenseTensor& ddx,
                          const DenseTensor& d_dx,
-                         const DenseTensor& d_ddout,
+                         const paddle::optional<DenseTensor>& d_ddout,
                          const Scalar& factor,
                          DenseTensor* out_d_x,
                          DenseTensor* out_d_dout,
@@ -277,7 +283,6 @@ DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(Asinh);
 DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(Acosh);
 DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(Atanh);
 DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(TanhShrink);
-DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(Silu);
 DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(Square);
 DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(Softsign);
 DECLARE_ACTIVATION_GRAD_KERNEL_DEPX(LogSigmoid);

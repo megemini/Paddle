@@ -23,9 +23,9 @@ elif [ "$VERSION" == "10.2" ] || [ "$VERSION" == "10.1" ] || [ "$VERSION" == "11
     wget --no-check-certificate -q https://nccl2-deb.cdn.bcebos.com/libnccl-2.10.3-1+cuda11.4.x86_64.rpm
     wget --no-check-certificate -q https://nccl2-deb.cdn.bcebos.com/libnccl-devel-2.10.3-1+cuda11.4.x86_64.rpm
     wget --no-check-certificate -q https://nccl2-deb.cdn.bcebos.com/libnccl-static-2.10.3-1+cuda11.4.x86_64.rpm
-    rpm -Fivh libnccl-2.10.3-1+cuda11.4.x86_64.rpm
-    rpm -Fivh libnccl-devel-2.10.3-1+cuda11.4.x86_64.rpm
-    rpm -Fivh libnccl-static-2.10.3-1+cuda11.4.x86_64.rpm && rm -f libnccl-*
+    rpm -ivh libnccl-2.10.3-1+cuda11.4.x86_64.rpm
+    rpm -ivh libnccl-devel-2.10.3-1+cuda11.4.x86_64.rpm
+    rpm -ivh libnccl-static-2.10.3-1+cuda11.4.x86_64.rpm && rm -f libnccl-*
     exit 0
   fi
   DEB="nccl-repo-ubuntu1804-2.10.3-cuda11.4_1.0-1_amd64.deb"
@@ -41,6 +41,7 @@ elif [ "$VERSION" == "12.0" ]; then
 libnccl-*
     exit 0
   fi
+  DEB="nccl-local-repo-ubuntu2004-2.16.5-cuda12.0_1.0-1_amd64.deb"
 elif [ "$VERSION" == "9.0" ]; then
   DEB="nccl-repo-ubuntu1604-2.3.7-ga-cuda9.0_1-1_amd64.deb"
 else

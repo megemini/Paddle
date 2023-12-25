@@ -55,23 +55,23 @@ class SparseCooTensor : public TensorBase,
   SparseCooTensor(const SparseCooTensor& other);
 
   /// \brief move constructor
-  SparseCooTensor(SparseCooTensor&& other);
+  SparseCooTensor(SparseCooTensor&& other) noexcept;
 
   /// \brief SparseCooTensor shallow copy assignment.
-  SparseCooTensor operator=(const SparseCooTensor& other);
+  SparseCooTensor& operator=(const SparseCooTensor& other);
 
   /// \brief Destroy the tensor object and release exclusive resources.
   virtual ~SparseCooTensor() = default;
 
-  /// \brief Returns the indices of non zero elemetns in original dense tensor.
-  /// \return The indices of non zero elemetns in original dense tensor.
+  /// \brief Returns the indices of non zero elements in original dense tensor.
+  /// \return The indices of non zero elements in original dense tensor.
   const DenseTensor& indices() const { return non_zero_indices_; }
 
   /// Note: This function will removed soon. It is recommended to use indices()
   const DenseTensor& non_zero_indices() const { return non_zero_indices_; }
 
-  /// \brief Returns the non zero elemetns in original dense tensor.
-  /// \return The non zero elemetns in original dense tensor.
+  /// \brief Returns the non zero elements in original dense tensor.
+  /// \return The non zero elements in original dense tensor.
   const DenseTensor& values() const { return non_zero_elements_; }
 
   /// Note: This function will removed soon. It is recommended to use values()
@@ -126,8 +126,13 @@ class SparseCooTensor : public TensorBase,
   bool valid() const noexcept override { return non_zero_elements_.valid(); }
 
   /// \brief Test whether the non_zero_elements_ storage is allocated.
-  /// return Whether the non_zero_elements_ storage is allocated.
-  bool initialized() const override { return non_zero_elements_.initialized(); }
+  /// In special cases, when nnz=0, non_zero_elements_ will not need to be
+  /// initialized, but it is neccessary to return true here, otherwise the
+  /// gradient will be None. return Whether the non_zero_elements_ storage is
+  /// allocated.
+  bool initialized() const override {
+    return values().initialized() || (nnz() == 0 && numel() > 0);
+  }
 
   /// \brief resize sparse coo tensor.
   /// \param dense_dims The dims of original dense tensor.

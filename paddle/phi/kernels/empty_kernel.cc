@@ -12,7 +12,7 @@
  See the License for the specific language governing permissions and
  limitations under the License. */
 #include "paddle/phi/kernels/empty_kernel.h"
-
+#include "paddle/common/macros.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/common/complex.h"
 #include "paddle/phi/core/kernel_registry.h"
@@ -22,16 +22,16 @@ namespace phi {
 template <typename T, typename Context>
 void EmptyKernel(const Context& dev_ctx,
                  const IntArray& shape,
-                 DataType dtype,
+                 DataType dtype UNUSED,
                  DenseTensor* out) {
-  out->Resize(phi::make_ddim(shape.GetData()));
+  out->Resize(common::make_ddim(shape.GetData()));
   dev_ctx.template Alloc<T>(out);
 }
 
 template <typename T, typename Context>
 void EmptyLikeKernel(const Context& dev_ctx,
-                     const DenseTensor& x,
-                     DataType dtype,
+                     const DenseTensor& x UNUSED,
+                     DataType dtype UNUSED,
                      DenseTensor* out) {
   dev_ctx.template Alloc<T>(out);
 }
@@ -125,7 +125,8 @@ PD_REGISTER_KERNEL(empty,
                    int,
                    int64_t,
                    bool,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
 PD_REGISTER_KERNEL(empty_like,
                    XPU,
                    ALL_LAYOUT,
@@ -138,7 +139,8 @@ PD_REGISTER_KERNEL(empty_like,
                    int,
                    int64_t,
                    bool,
-                   phi::dtype::float16) {
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {
   kernel->InputAt(0).SetBackend(phi::Backend::ALL_BACKEND);
 }
 #endif

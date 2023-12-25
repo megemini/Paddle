@@ -31,8 +31,11 @@ void DotKernel(const Context& dev_ctx,
                const DenseTensor& x,
                const DenseTensor& y,
                DenseTensor* out) {
+  if (out->numel() <= 0) {
+    return;
+  }
   dev_ctx.template Alloc<T>(out);
-  if (1 == out->dims().size()) {
+  if (out->dims().size() == 0) {
     auto eigen_out = phi::EigenScalar<T>::From(*out);
     auto eigen_x = phi::EigenVector<T>::Flatten(x);
     auto eigen_y = phi::EigenVector<T>::Flatten(y);
@@ -40,7 +43,7 @@ void DotKernel(const Context& dev_ctx,
     auto& dev = *dev_ctx.eigen_device();
     eigen_out.device(dev) = (eigen_x * eigen_y).sum();
   } else {
-    auto eigen_out = phi::EigenMatrix<T>::From(*out);
+    auto eigen_out = phi::EigenVector<T>::From(*out);
     auto eigen_x = phi::EigenMatrix<T>::From(x);
     auto eigen_y = phi::EigenMatrix<T>::From(y);
 

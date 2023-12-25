@@ -16,8 +16,7 @@ import os
 import unittest
 
 import numpy as np
-
-from paddle.fluid.tests.unittests.eager_op_test import OpTest
+from op_test import OpTest
 
 
 class TestDnnlMatMulOp(OpTest):

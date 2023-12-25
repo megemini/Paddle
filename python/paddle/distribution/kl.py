@@ -17,16 +17,21 @@ import warnings
 import paddle
 from paddle.distribution.bernoulli import Bernoulli
 from paddle.distribution.beta import Beta
+from paddle.distribution.binomial import Binomial
 from paddle.distribution.categorical import Categorical
 from paddle.distribution.cauchy import Cauchy
+from paddle.distribution.continuous_bernoulli import ContinuousBernoulli
 from paddle.distribution.dirichlet import Dirichlet
 from paddle.distribution.distribution import Distribution
 from paddle.distribution.exponential_family import ExponentialFamily
+from paddle.distribution.geometric import Geometric
 from paddle.distribution.laplace import Laplace
 from paddle.distribution.lognormal import LogNormal
+from paddle.distribution.multivariate_normal import MultivariateNormal
 from paddle.distribution.normal import Normal
+from paddle.distribution.poisson import Poisson
 from paddle.distribution.uniform import Uniform
-from paddle.fluid.framework import _non_static_mode
+from paddle.framework import in_dynamic_mode
 
 __all__ = ["register_kl", "kl_divergence"]
 
@@ -52,14 +57,14 @@ def kl_divergence(p, q):
 
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            p = paddle.distribution.Beta(alpha=0.5, beta=0.5)
-            q = paddle.distribution.Beta(alpha=0.3, beta=0.7)
+            >>> p = paddle.distribution.Beta(alpha=0.5, beta=0.5)
+            >>> q = paddle.distribution.Beta(alpha=0.3, beta=0.7)
 
-            print(paddle.distribution.kl_divergence(p, q))
-            # Tensor(shape=[], dtype=float32, place=CUDAPlace(0), stop_gradient=True,
-            #        [0.21193528])
+            >>> print(paddle.distribution.kl_divergence(p, q))
+            Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=True,
+                0.21193528)
 
     """
     return _dispatch(type(p), type(q))(p, q)
@@ -72,7 +77,7 @@ def register_kl(cls_p, cls_q):
     functions registered by ``register_kl``, according to multi-dispatch pattern.
     If an implemention function is found, it will return the result, otherwise,
     it will raise ``NotImplementError`` exception. Users can register
-    implemention funciton by the decorator.
+    implemention function by the decorator.
 
     Args:
         cls_p (Distribution): The Distribution type of Instance p. Subclass derived from ``Distribution``.
@@ -81,11 +86,11 @@ def register_kl(cls_p, cls_q):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            @paddle.distribution.register_kl(paddle.distribution.Beta, paddle.distribution.Beta)
-            def kl_beta_beta():
-                pass # insert implementation here
+            >>> @paddle.distribution.register_kl(paddle.distribution.Beta, paddle.distribution.Beta)
+            >>> def kl_beta_beta():
+            ...     pass # insert implementation here
     """
     if not issubclass(cls_p, Distribution) or not issubclass(
         cls_q, Distribution
@@ -164,6 +169,11 @@ def _kl_beta_beta(p, q):
     )
 
 
+@register_kl(Binomial, Binomial)
+def _kl_binomial_binomial(p, q):
+    return p.kl_divergence(q)
+
+
 @register_kl(Dirichlet, Dirichlet)
 def _kl_dirichlet_dirichlet(p, q):
     return (
@@ -191,8 +201,18 @@ def _kl_cauchy_cauchy(p, q):
     return p.kl_divergence(q)
 
 
+@register_kl(ContinuousBernoulli, ContinuousBernoulli)
+def _kl_continuousbernoulli_continuousbernoulli(p, q):
+    return p.kl_divergence(q)
+
+
 @register_kl(Normal, Normal)
 def _kl_normal_normal(p, q):
+    return p.kl_divergence(q)
+
+
+@register_kl(MultivariateNormal, MultivariateNormal)
+def _kl_mvn_mvn(p, q):
     return p.kl_divergence(q)
 
 
@@ -203,6 +223,11 @@ def _kl_uniform_uniform(p, q):
 
 @register_kl(Laplace, Laplace)
 def _kl_laplace_laplace(p, q):
+    return p.kl_divergence(q)
+
+
+@register_kl(Geometric, Geometric)
+def _kl_geometric_geometric(p, q):
     return p.kl_divergence(q)
 
 
@@ -223,7 +248,7 @@ def _kl_expfamily_expfamily(p, q):
     p_log_norm = p._log_normalizer(*p_natural_params)
 
     try:
-        if _non_static_mode():
+        if in_dynamic_mode():
             p_grads = paddle.grad(
                 p_log_norm, p_natural_params, create_graph=True
             )
@@ -249,6 +274,11 @@ def _kl_expfamily_expfamily(p, q):
 @register_kl(LogNormal, LogNormal)
 def _kl_lognormal_lognormal(p, q):
     return p._base.kl_divergence(q._base)
+
+
+@register_kl(Poisson, Poisson)
+def _kl_poisson_poisson(p, q):
+    return p.kl_divergence(q)
 
 
 def _sum_rightmost(value, n):

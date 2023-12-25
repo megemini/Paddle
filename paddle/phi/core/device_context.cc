@@ -176,8 +176,10 @@ struct DeviceContext::Impl {
       allocator = cuda_graph_allocator_;
     }
 #endif
-    return tensor->AllocateFrom(
-        const_cast<Allocator*>(allocator), dtype, requested_size, fake_alloc);
+    return tensor->AllocateFrom(const_cast<Allocator*>(allocator),
+                                dtype,
+                                requested_size,
+                                fake_alloc);  // NOLINT
   }
 
   template <typename T>
@@ -218,8 +220,10 @@ struct DeviceContext::Impl {
         (fake_alloc || tensor->numel() == 0) && requested_size == 0
             ? host_zero_allocator_
             : host_allocator_;
-    return tensor->AllocateFrom(
-        const_cast<Allocator*>(allocator), dtype, requested_size, fake_alloc);
+    return tensor->AllocateFrom(const_cast<Allocator*>(allocator),
+                                dtype,
+                                requested_size,
+                                fake_alloc);  // NOLINT
   }
 
   template <typename T>
@@ -297,6 +301,7 @@ struct DeviceContext::Impl {
 DeviceContext::DeviceContext() { impl_ = std::make_unique<Impl>(); }
 
 DeviceContext::DeviceContext(const DeviceContext& other) {
+  impl_ = std::make_unique<Impl>();
   impl_->SetHostAllocator(&other.GetHostAllocator());
   impl_->SetAllocator(&other.GetAllocator());
   impl_->SetZeroAllocator(&other.GetZeroAllocator());
@@ -311,12 +316,12 @@ DeviceContext::DeviceContext(const DeviceContext& other) {
 #endif
 }
 
-DeviceContext::DeviceContext(DeviceContext&& other) {
+DeviceContext::DeviceContext(DeviceContext&& other) noexcept {
   impl_ = std::move(other.impl_);
 }
 
-DeviceContext& DeviceContext::operator=(DeviceContext&& other) = default;
-
+DeviceContext& DeviceContext::operator=(DeviceContext&& other) noexcept =
+    default;
 DeviceContext::~DeviceContext() = default;
 
 void DeviceContext::SetAllocator(const Allocator* allocator) {
@@ -393,11 +398,8 @@ template <typename T>
 T* DeviceContext::Alloc(TensorBase* tensor,
                         size_t requested_size,
                         bool pinned) const {
-  if (pinned) {
-    return impl_->Alloc<T>(
-        tensor, GetPinnedPlace(GetPlace()), requested_size, pinned);
-  }
-  return impl_->Alloc<T>(tensor, GetPlace(), requested_size, pinned);
+  DataType dtype = phi::CppTypeToDataType<T>::Type();
+  return static_cast<T*>(this->Alloc(tensor, dtype, requested_size, pinned));
 }
 
 void* DeviceContext::HostAlloc(TensorBase* tensor,

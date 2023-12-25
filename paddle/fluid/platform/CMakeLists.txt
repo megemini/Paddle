@@ -6,9 +6,9 @@ cc_library(
 cc_test(
   errors_test
   SRCS errors_test.cc
-  DEPS errors enforce)
+  DEPS phi common enforce)
 
-set(enforce_deps flags errors flags phi_enforce)
+set(enforce_deps phi common)
 if(WITH_GPU)
   set(enforce_deps ${enforce_deps} external_error_proto)
 endif()
@@ -16,30 +16,30 @@ endif()
 cc_library(
   enforce INTERFACE
   SRCS enforce.cc
-  DEPS ${enforce_deps})
+  DEPS ${enforce_deps} common)
 cc_library(monitor SRCS monitor.cc)
 cc_test(
   enforce_test
   SRCS enforce_test.cc
-  DEPS enforce)
+  DEPS enforce common)
 
 cc_test(
   cpu_info_test
   SRCS cpu_info_test.cc
-  DEPS phi_backends)
+  DEPS phi common)
 cc_test(
   os_info_test
   SRCS os_info_test.cc
-  DEPS phi_os_info)
+  DEPS phi common)
 
 cc_library(
   place
   SRCS place.cc
-  DEPS enforce phi_place)
+  DEPS enforce phi common)
 cc_test(
   place_test
   SRCS place_test.cc
-  DEPS place glog gflags)
+  DEPS place glog phi common)
 
 if(WITH_MKLDNN)
   set(MKLDNN_CTX_DEPS mkldnn)
@@ -53,7 +53,7 @@ add_subdirectory(dynload)
 cc_library(
   cpu_helper
   SRCS cpu_helper.cc
-  DEPS cblas enforce)
+  DEPS cblas enforce common)
 cc_test(
   cpu_helper_test
   SRCS cpu_helper_test.cc
@@ -68,6 +68,10 @@ if(WITH_GPU OR WITH_ROCM)
   set(GPU_CTX_DEPS dynload_cuda dynamic_loader)
 endif()
 
+if(WITH_XPU)
+  set(XPU_CTX_DEPS dynload_xpti dynamic_loader)
+endif()
+
 if(WITH_IPU)
   set(IPU_CTX_DEPS ipu_info)
 else()
@@ -78,13 +82,13 @@ if(WITH_GPU)
   nv_library(
     stream_callback_manager
     SRCS stream_callback_manager.cc
-    DEPS simple_threadpool enforce)
+    DEPS simple_threadpool enforce common)
 endif()
 if(WITH_ROCM)
   hip_library(
     stream_callback_manager
     SRCS stream_callback_manager.cc
-    DEPS simple_threadpool enforce)
+    DEPS simple_threadpool enforce common)
 endif()
 
 if(WITH_GPU OR WITH_ROCM)
@@ -97,48 +101,42 @@ if(WITH_GLOO)
   cc_library(
     gloo_context
     SRCS gloo_context.cc
-    DEPS framework_proto gloo_wrapper enforce)
+    DEPS framework_proto gloo_wrapper enforce common)
 endif()
 
 # separate init from device_context to avoid cycle dependencies
 cc_library(
   init
   SRCS init.cc
-  DEPS device_context custom_kernel context_pool memcpy)
+  DEPS device_context phi common fluid_memory)
 
-# memcpy depends on device_context, here add deps individually for
+#fluid_memory depends on device_context, here add deps individually for
 # avoiding cycle dependencies
 
 cc_library(
   device_context
   SRCS device_context.cc
   DEPS simple_threadpool
-       malloc
+       allocator
        xxhash
        ${STREAM_CALLBACK_DEPS}
        place
-       phi_place
        eigen3
        cpu_helper
        framework_proto
        ${IPU_CTX_DEPS}
        ${GPU_CTX_DEPS}
-       ${NPU_CTX_DEPS}
        ${MKLDNN_CTX_DEPS}
        ${dgc_deps}
        dlpack
-       cudnn_workspace_helper
-       ${XPU_CTX_DEPS}
-       ${MLU_CTX_DEPS}
-       phi_backends
-       phi_device_context
-       generator
-       phi_enforce)
+       phi
+       common
+       ${XPU_CTX_DEPS})
 
 cc_library(
   collective_helper
   SRCS collective_helper.cc gen_comm_id_helper.cc
-  DEPS framework_proto device_context enforce)
+  DEPS framework_proto device_context enforce common)
 
 if(WITH_GPU OR WITH_ROCM)
   target_link_libraries(device_context gpu_resource_pool)
@@ -162,7 +160,7 @@ set(DEVICE_EVENT_LIBS)
 cc_library(
   device_event_base
   SRCS device_event_base.cc
-  DEPS place enforce device_context op_registry)
+  DEPS place enforce device_context op_registry common)
 set(DEVICE_EVENT_LIBS
     device_event_base
     CACHE INTERNAL "device event libs")
@@ -191,12 +189,12 @@ if(WITH_GPU)
       cuda_graph_with_memory_pool
       SRCS cuda_graph_with_memory_pool.cc
       DEPS ${DEVICE_EVENT_LIBS} device_event_custom_device device_context
-           allocator phi_backends)
+           allocator phi common)
   else()
     nv_library(
       cuda_graph_with_memory_pool
       SRCS cuda_graph_with_memory_pool.cc
-      DEPS ${DEVICE_EVENT_LIBS} device_context allocator phi_backends)
+      DEPS ${DEVICE_EVENT_LIBS} device_context allocator phi common)
   endif()
   nv_test(
     device_context_test
@@ -247,7 +245,8 @@ cc_test(
 cc_library(
   lodtensor_printer
   SRCS lodtensor_printer.cc
-  DEPS ddim
+  DEPS phi
+       common
        place
        tensor
        scope
@@ -265,41 +264,28 @@ if(WITH_GPU)
   nv_library(
     profiler
     SRCS profiler.cc profiler.cu
-    DEPS phi_os_info
-         phi_device_tracer
+    DEPS phi
+         common
          gpu_info
          enforce
          dynload_cuda
-         new_profiler
-         stats
          op_proto_maker
-         shape_inference
-         phi_profiler)
+         shape_inference)
 elseif(WITH_ROCM)
   hip_library(
     profiler
     SRCS profiler.cc profiler.cu
-    DEPS phi_os_info
-         phi_device_tracer
-         gpu_info
-         enforce
-         new_profiler
-         stats
-         op_proto_maker
-         shape_inference
-         phi_profiler)
+    DEPS phi common gpu_info enforce op_proto_maker shape_inference)
+elseif(WITH_XPU)
+  cc_library(
+    profiler
+    SRCS profiler.cc
+    DEPS phi common enforce dynload_xpti op_proto_maker shape_inference)
 else()
   cc_library(
     profiler
     SRCS profiler.cc
-    DEPS phi_os_info
-         phi_device_tracer
-         enforce
-         new_profiler
-         stats
-         op_proto_maker
-         shape_inference
-         phi_profiler)
+    DEPS phi common enforce op_proto_maker shape_inference)
 endif()
 
 cc_test(
@@ -335,7 +321,7 @@ if(WITH_GPU)
   nv_test(
     test_limit_gpu_memory
     SRCS test_limit_gpu_memory.cu
-    DEPS gpu_info flags)
+    DEPS gpu_info phi common)
   nv_library(
     cuda_device_guard
     SRCS cuda_device_guard.cc
@@ -350,7 +336,7 @@ if(WITH_ROCM)
   hip_test(
     test_limit_gpu_memory
     SRCS test_limit_gpu_memory.cu
-    DEPS gpu_info flags)
+    DEPS gpu_info phi common)
   hip_library(
     cuda_device_guard
     SRCS cuda_device_guard.cc
@@ -358,15 +344,11 @@ if(WITH_ROCM)
 endif()
 
 if(NOT APPLE AND NOT WIN32)
-  cc_library(
-    device_code
-    SRCS device_code.cc
-    DEPS device_context)
   if(WITH_GPU OR WITH_ROCM)
     cc_test(
       device_code_test
       SRCS device_code_test.cc
-      DEPS device_code lod_tensor)
+      DEPS phi common lod_tensor)
   endif()
 endif()
 
@@ -388,4 +370,4 @@ cc_library(
 cc_test(
   init_phi_test
   SRCS init_phi_test.cc
-  DEPS phi_tensor init_phi)
+  DEPS phi common init_phi)

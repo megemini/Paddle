@@ -25,8 +25,9 @@
 #include "paddle/phi/api/backward/sparse_bw_api.h"
 #include "paddle/phi/api/include/sparse_api.h"
 #include "paddle/phi/api/lib/api_custom_impl.h"
+#include "paddle/phi/core/flags.h"
 
-DECLARE_bool(check_nan_inf);
+PHI_DECLARE_bool(check_nan_inf);
 
 paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
 SyncBatchNormGradNode::operator()(
@@ -69,8 +70,8 @@ SyncBatchNormGradNode::operator()(
   paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
       returns(5);
   for (int i = 0; i < 5; ++i) {
-    out_metas[i].size() == 0 ? returns[i].resize(1)
-                             : returns[i].resize(out_metas[i].size());
+    out_metas[i].empty() ? returns[i].resize(1)
+                         : returns[i].resize(out_metas[i].size());
   }
 
   auto* api_output_0 =
@@ -288,8 +289,8 @@ SyncBatchNormGradNode::operator()(
   paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
       returns(5);
   for (int i = 0; i < 5; ++i) {
-    out_metas[i].size() == 0 ? returns[i].resize(1)
-                             : returns[i].resize(out_metas[i].size());
+    out_metas[i].empty() ? returns[i].resize(1)
+                         : returns[i].resize(out_metas[i].size());
   }
 
   auto* api_output_0 =
@@ -456,6 +457,7 @@ SyncBatchNormGradNode::operator()(
     std::string output_bias_grad_str = paddle::string::Sprintf(
         TENSOR_BIAS_GRAD_TEMPLATE, egr::EagerUtils::TensorStr(bias_grad));
     output_str += output_bias_grad_str;
+    VLOG(6) << "gradnode_ptr = " << this;
     VLOG(4) << paddle::string::Sprintf(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }

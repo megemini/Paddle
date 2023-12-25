@@ -26,11 +26,11 @@ namespace cub = hipcub;
 
 #include "glog/logging.h"
 
+#include "paddle/common/ddim.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_device_function.h"
 #include "paddle/phi/backends/gpu/gpu_dnn.h"
 #include "paddle/phi/common/memory_utils.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/kernels/funcs/aligned_vector.h"
 
 namespace phi {
@@ -42,11 +42,10 @@ template <typename T>
 using LayerNormParamType = typename CudnnDataType<T>::BatchNormParamType;
 
 inline static int GetDesiredBlockDim(int64_t block_dim) {
+  const int kMaxBlockDim = 512;
 #ifdef __HIPCC__
-  const int kMaxBlockDim = 256;
   const int lwarpSize = 64;
 #else
-  const int kMaxBlockDim = 512;
   const int lwarpSize = 32;
 #endif
   return block_dim >= kMaxBlockDim ? kMaxBlockDim : lwarpSize;
@@ -217,8 +216,13 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
   Vec_scale beta[LDGS];
 #pragma unroll
   for (int it = 0, col = c; it < LDGS; it++) {
-    phi::Load<ScaleT, VecSize>(gamma_ptr + col * VecSize, &gamma[it]);
-    phi::Load<ScaleT, VecSize>(beta_ptr + col * VecSize, &beta[it]);
+    if (col < cols) {
+      phi::Load<ScaleT, VecSize>(gamma_ptr + col * VecSize, &gamma[it]);
+      phi::Load<ScaleT, VecSize>(beta_ptr + col * VecSize, &beta[it]);
+    } else {
+      gamma[it] = Vec_scale{};
+      beta[it] = Vec_scale{};
+    }
     col += THREADS_PER_ROW;
   }
 
@@ -227,7 +231,12 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
     Vec x[LDGS];
 #pragma unroll
     for (int it = 0, col = c; it < LDGS; it++) {
-      phi::Load<T, VecSize>(x_ptr + row * ELTS_PER_ROW + col * VecSize, &x[it]);
+      if (col < cols) {
+        phi::Load<T, VecSize>(x_ptr + row * ELTS_PER_ROW + col * VecSize,
+                              &x[it]);
+      } else {
+        x[it] = Vec{};
+      }
       col += THREADS_PER_ROW;
     }
     U xf[LDGS * VecSize];
@@ -258,10 +267,10 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
         for (int it = 0; it < WARPS_N; ++it) {
           mu_local += smem[warp_m * WARPS_N + it];
         }
-        smem[warp_m] = mu_local;
+        smem[warp_m * WARPS_N] = mu_local;
       }
       __syncthreads();
-      mu_local = smem[warp_m];
+      mu_local = smem[warp_m * WARPS_N];
     }
 
     mu_local *= rn;
@@ -285,6 +294,7 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
     }
 
     if (WARPS_N > 1) {
+      __syncthreads();
       if (lane == 0) {
         smem[warp_m * WARPS_N + warp_n] = var_local;
       }
@@ -295,10 +305,10 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
         for (int it = 0; it < WARPS_N; ++it) {
           var_local += smem[warp_m * WARPS_N + it];
         }
-        smem[warp_m] = var_local;
+        smem[warp_m * WARPS_N] = var_local;
       }
       __syncthreads();
-      var_local = smem[warp_m];
+      var_local = smem[warp_m * WARPS_N];
     }
 
     // Note: to assure if it is right for double
@@ -324,7 +334,10 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
 
 #pragma unroll
     for (int it = 0, col = c; it < LDGS; it++) {
-      phi::Store<T, VecSize>(x[it], y_ptr + row * ELTS_PER_ROW + col * VecSize);
+      if (col < cols) {
+        phi::Store<T, VecSize>(x[it],
+                               y_ptr + row * ELTS_PER_ROW + col * VecSize);
+      }
       col += THREADS_PER_ROW;
     }
   }
@@ -1099,7 +1112,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
         WARPS_M_2 * THREADS_PER_ROW_2;     // 16 * 32 = 512
     const int ROWS_PER_CTA_2 = WARPS_M_2;  // 16
 
-    // #blocks: 32，#threads_per_block: 512
+    // #blocks: 32, #threads_per_block: 512
     // Note: it is not supported for double type.
     if (sizeof(U) > 4) {
       PADDLE_THROW(
@@ -1603,13 +1616,13 @@ __global__ void LayerNormBackwardGradientAll(
 
   for (int64_t i = beg_idx; i < end_idx; i += stride) {
     int row_idx = i / feature_size;
-    auto var_val = real_sqrt(static_cast<U>(var[row_idx]) + epsilon);
+    auto var_val = rsqrt_(static_cast<U>(var[row_idx]) + epsilon);
     d_scale_partial += static_cast<U>(d_y[i]) *
-                       (static_cast<U>(x[i]) - mean[row_idx]) / var_val;
+                       (static_cast<U>(x[i]) - mean[row_idx]) * var_val;
     d_bias_partial += static_cast<U>(d_y[i]);
     if (HasDx) {
       d_x[i] = static_cast<T>(static_cast<U>(d_y[i]) *
-                              static_cast<U>(scale[blockIdx.x + col_offset]) /
+                              static_cast<U>(scale[blockIdx.x + col_offset]) *
                               var_val);
     }
   }
@@ -1659,10 +1672,10 @@ __global__ void LayerNormBackwardGradientScaleOrBias(
   for (int64_t i = beg_idx; i < end_idx; i += stride) {
     int row_idx = i / feature_size;
     auto var_val =
-        static_cast<U>(real_sqrt(static_cast<float>(var[row_idx]) + epsilon));
+        static_cast<U>(rsqrt_(static_cast<float>(var[row_idx]) + epsilon));
     if (HasDScale) {
       d_scale_or_d_bias_partial += static_cast<U>(d_y[i]) *
-                                   (static_cast<U>(x[i]) - mean[row_idx]) /
+                                   (static_cast<U>(x[i]) - mean[row_idx]) *
                                    var_val;
     } else {  // d_bias != nullptr
       d_scale_or_d_bias_partial += static_cast<U>(d_y[i]);
@@ -1671,10 +1684,10 @@ __global__ void LayerNormBackwardGradientScaleOrBias(
     if (HasDx) {
       if (scale != nullptr) {
         d_x[i] = static_cast<T>(static_cast<U>(d_y[i]) *
-                                static_cast<U>(scale[blockIdx.x + col_offset]) /
+                                static_cast<U>(scale[blockIdx.x + col_offset]) *
                                 var_val);
       } else {
-        d_x[i] = static_cast<T>(static_cast<U>(d_y[i]) / var_val);
+        d_x[i] = static_cast<T>(static_cast<U>(d_y[i]) * var_val);
       }
     }
   }
@@ -1762,13 +1775,13 @@ __global__ void LayerNormBackwardGradientOnlyDX(
   U d_x_mean_partial = static_cast<U>(0), d_x_var_partial = static_cast<U>(0);
   for (int64_t i = beg_idx; i < end_idx; i += BlockDim) {
     auto var_val =
-        static_cast<U>(real_sqrt(static_cast<float>(block_var) + epsilon));
+        static_cast<U>(rsqrt_(static_cast<float>(block_var) + epsilon));
     if (scale != nullptr) {
       int col_idx = i % feature_size;
       d_x[i] = static_cast<T>(static_cast<U>(d_y[i]) *
-                              static_cast<U>(scale[col_idx]) / var_val);
+                              static_cast<U>(scale[col_idx]) * var_val);
     } else {
-      d_x[i] = static_cast<T>(static_cast<U>(d_y[i]) / var_val);
+      d_x[i] = static_cast<T>(static_cast<U>(d_y[i]) * var_val);
     }
     d_x_mean_partial += static_cast<U>(d_x[i]);
     d_x_var_partial +=
@@ -1812,21 +1825,20 @@ __global__ void LayerNormBackwardWhenBatchSizeIsOne(
   int64_t idx = threadIdx.x + blockIdx.x * blockDim.x;
   using ScaleBiasT = LayerNormScaleBiasT<T, U, ScaleBiasWithSameTypeX>;
   if (idx < feature_size) {
-    auto var_val =
-        static_cast<U>(real_sqrt(static_cast<float>(var[0]) + epsilon));
+    auto var_val = static_cast<U>(rsqrt_(static_cast<float>(var[0]) + epsilon));
     if (d_x != nullptr) {
       if (d_scale == nullptr) {
-        d_x[idx] = static_cast<T>(static_cast<U>(d_y[idx]) / var_val);
+        d_x[idx] = static_cast<T>(static_cast<U>(d_y[idx]) * var_val);
       } else {
         d_x[idx] = static_cast<T>(static_cast<U>(d_y[idx]) *
-                                  static_cast<U>(scale[idx]) / var_val);
+                                  static_cast<U>(scale[idx]) * var_val);
       }
     }
 
     if (d_scale != nullptr) {
       d_scale[idx] =
           static_cast<ScaleBiasT>(static_cast<U>(d_y[idx]) *
-                                  (static_cast<U>(x[idx]) - mean[0]) / var_val);
+                                  (static_cast<U>(x[idx]) - mean[0]) * var_val);
     }
 
     if (d_bias != nullptr) {
@@ -1862,11 +1874,7 @@ static void LayerNormBackward(
     int64_t feature_size,
     const phi::GPUContext &dev_ctx) {
   auto stream = dev_ctx.stream();
-#ifdef __HIPCC__
-  const int kMaxBlockDim = 256;
-#else
   const int kMaxBlockDim = 512;
-#endif
   const int kMaxBlockNum = 128;
   int gradient_flag = ((d_x != nullptr ? 1 : 0) << 2) |
                       ((d_scale != nullptr ? 1 : 0) << 1) |

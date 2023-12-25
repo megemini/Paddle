@@ -17,14 +17,14 @@
 #include "paddle/fluid/framework/details/nan_inf_utils_detail.h"
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
+#include "paddle/phi/core/compat/convert_utils.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/distributed/auto_parallel/dist_tensor.h"
+#include "paddle/phi/core/flags.h"
 #include "paddle/phi/core/selected_rows.h"
 
-#include "paddle/phi/core/compat/convert_utils.h"
-DECLARE_int32(check_nan_inf_level);
+PHI_DECLARE_int32(check_nan_inf_level);
 namespace egr {
-
-static std::once_flag dump_list_init_flag;
 
 static std::unordered_set<std::string>& nan_inf_check_op_list() {
   static std::unordered_set<std::string> _check_op_list = {};
@@ -36,38 +36,31 @@ static std::unordered_set<std::string>& nan_inf_skip_op_list() {
   return _skip_op_list;
 }
 
-static void InitDumpListFormEnv() {
+void SetCheckOpList(const std::string& check_op_list = "") {
   nan_inf_check_op_list();
-  nan_inf_skip_op_list();
-  const char* check_op_list = std::getenv("Paddle_check_nan_inf_op_list");
-  const char* skip_op_list = std::getenv("Paddle_skip_nan_inf_op_list");
-
-  if (check_op_list) {
+  if (!check_op_list.empty()) {
     std::stringstream ss(check_op_list);
     std::string op_type;
     LOG(INFO) << "Please set op's name according to the "
                  "paddle.amp.low_precision_op_list()";
     while (std::getline(ss, op_type, ',')) {
       nan_inf_check_op_list().emplace(op_type);
+      VLOG(4) << "Check nan inf op list: " << op_type;
     }
   }
+}
 
-  if (skip_op_list) {
+void SetSkipOpList(const std::string& skip_op_list = "") {
+  nan_inf_skip_op_list();
+  if (!skip_op_list.empty()) {
     std::stringstream ss(skip_op_list);
     std::string op_type;
     LOG(INFO) << "Please set op's name according to the "
                  "paddle.amp.low_precision_op_list()";
     while (std::getline(ss, op_type, ',')) {
       nan_inf_skip_op_list().emplace(op_type);
+      VLOG(4) << "Skip nan inf op list: " << op_type;
     }
-  }
-
-  for (auto const& key : nan_inf_check_op_list()) {
-    LOG(INFO) << "Check nan inf op list: " << key;
-  }
-
-  for (auto const& key : nan_inf_skip_op_list()) {
-    LOG(INFO) << "Skip nan inf op list: " << key;
   }
 }
 
@@ -78,7 +71,7 @@ bool CheckOp(const std::string& api_name) {
     return false;
   }
 
-  if (nan_inf_check_op_list().size() != 0 &&
+  if (!nan_inf_check_op_list().empty() &&
       (!nan_inf_check_op_list().count(api_name))) {
     VLOG(4) << "Current op isn't in checked_op_list : " << api_name;
     return false;
@@ -89,7 +82,6 @@ bool CheckOp(const std::string& api_name) {
 }
 
 void CheckTensorHasNanOrInf(const std::string& api_name, const Tensor& tensor) {
-  std::call_once(dump_list_init_flag, InitDumpListFormEnv);
   auto op_name = phi::TransToFluidOpName(api_name);
   if (tensor.initialized() && CheckOp(op_name)) {
     auto& tensor_name = tensor.name();
@@ -99,8 +91,12 @@ void CheckTensorHasNanOrInf(const std::string& api_name, const Tensor& tensor) {
     } else if (tensor.is_selected_rows()) {
       dense_tensor = &(
           static_cast<const phi::SelectedRows*>(tensor.impl().get())->value());
+    } else if (tensor.is_dist_tensor()) {
+      dense_tensor = &(
+          static_cast<const phi::distributed::DistTensor*>(tensor.impl().get())
+              ->value());
     } else {
-      VLOG(10) << "Only DenseTensor or SelectedRows need to check, "
+      VLOG(10) << "Only DenseTensor,SelectedRows,DistTensor need to check, "
                << tensor_name << " is no need.";
       return;
     }
@@ -124,7 +120,9 @@ void CheckTensorHasNanOrInf(const std::string& api_name, const Tensor& tensor) {
 
 void CheckTensorHasNanOrInf(const std::string& api_name,
                             const paddle::optional<Tensor>& tensor) {
-  CheckTensorHasNanOrInf(api_name, tensor.get());
+  if (tensor) {
+    CheckTensorHasNanOrInf(api_name, *tensor);
+  }
 }
 
 void CheckTensorHasNanOrInf(const std::string& api_name,
@@ -178,7 +176,7 @@ void CheckTensorHasNanOrInf(
     const std::string& api_name,
     const paddle::optional<std::vector<Tensor>>& tensors) {
   if (tensors) {
-    CheckTensorHasNanOrInf(api_name, tensors.get());
+    CheckTensorHasNanOrInf(api_name, *tensors);
   }
 }
 

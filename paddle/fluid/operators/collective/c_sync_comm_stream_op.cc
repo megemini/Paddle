@@ -31,7 +31,7 @@ class CSyncCommStreamOp : public framework::OperatorWithKernel {
 
 class CSyncCommStreamOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
-  void Make() {
+  void Make() override {
     AddInput("X", "(Tensor) Dependency of the variable need to sync")
         .AsDuplicable();
     AddOutput("Out", "(Tensor) Dependency of the variable need to sync")
@@ -53,6 +53,3 @@ namespace plat = paddle::platform;
 REGISTER_OP_WITHOUT_GRADIENT(c_sync_comm_stream,
                              ops::CSyncCommStreamOp,
                              ops::CSyncCommStreamOpMaker);
-
-REGISTER_OP_NPU_KERNEL(c_sync_comm_stream,
-                       ops::CSyncCommStreamKernel<float, plat::NPUPlace>);

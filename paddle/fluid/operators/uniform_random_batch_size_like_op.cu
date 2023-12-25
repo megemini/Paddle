@@ -16,7 +16,7 @@ limitations under the License. */
 namespace paddle {
 namespace operators {
 
-template <typename T>
+template <typename T, typename DeviceContext>
 class GPUUniformRandomKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& context) const override {
@@ -39,11 +39,11 @@ class GPUUniformRandomKernel : public framework::OpKernel<T> {
       tensor = selected_rows->mutable_value();
       auto shape = context.Attr<std::vector<int64_t>>("shape");
       if (!new_shape.empty()) shape = new_shape;
-      tensor->Resize(phi::make_ddim(shape));
+      tensor->Resize(common::make_ddim(shape));
       selected_rows->mutable_rows()->reserve(shape[0]);
     } else if (out_var->IsType<phi::DenseTensor>()) {
       tensor = out_var->GetMutable<phi::DenseTensor>();
-      if (!new_shape.empty()) tensor->Resize(phi::make_ddim(new_shape));
+      if (!new_shape.empty()) tensor->Resize(common::make_ddim(new_shape));
     } else {
       PADDLE_THROW(platform::errors::InvalidArgument(
           "Expected type of Output(out) in uniform_random_op must be "
@@ -59,6 +59,10 @@ class GPUUniformRandomKernel : public framework::OpKernel<T> {
 }  // namespace operators
 }  // namespace paddle
 
-REGISTER_OP_CUDA_KERNEL(uniform_random_batch_size_like,
-                        paddle::operators::GPUUniformRandomKernel<float>,
-                        paddle::operators::GPUUniformRandomKernel<double>);
+namespace ops = paddle::operators;
+PD_REGISTER_STRUCT_KERNEL(uniform_random_batch_size_like,
+                          GPU,
+                          ALL_LAYOUT,
+                          ops::GPUUniformRandomKernel,
+                          float,
+                          double) {}

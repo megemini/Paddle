@@ -14,8 +14,8 @@
 
 import paddle
 from paddle import _legacy_C_ops
-from paddle.fluid.data_feeder import check_variable_and_dtype
-from paddle.fluid.framework import _varbase_creator
+from paddle.base.data_feeder import check_variable_and_dtype
+from paddle.base.framework import _create_tensor
 from paddle.framework import ParamAttr, core
 from paddle.nn.initializer import Constant
 from paddle.utils import unique_name
@@ -67,12 +67,12 @@ class FakeQuanterWithAbsMaxObserver(QuanterFactory):
             For details, please refer to :ref:`api_guide_Name`. Default is None.
 
     Examples:
-       .. code-block:: python
+        .. code-block:: python
 
-            from paddle.quantization import QuantConfig
-            from paddle.quantization.quanters import FakeQuanterWithAbsMaxObserver
-            quanter = FakeQuanterWithAbsMaxObserver(moving_rate=0.99)
-            q_config = QuantConfig(activation=quanter, weight=quanter)
+            >>> from paddle.quantization import QuantConfig
+            >>> from paddle.quantization.quanters import FakeQuanterWithAbsMaxObserver
+            >>> quanter = FakeQuanterWithAbsMaxObserver(moving_rate=0.99)
+            >>> q_config = QuantConfig(activation=quanter, weight=quanter)
     """
 
     def __init__(
@@ -147,7 +147,7 @@ class FakeQuanterWithAbsMaxObserverLayer(BaseQuanter):
             'is_test',
             not self.training,
         )
-        quant_out = _varbase_creator(
+        quant_out = _create_tensor(
             type=input.type,
             name=f"{input.name}.quantized.dequantized",
             shape=input.shape,
@@ -212,7 +212,7 @@ class FakeQuanterWithAbsMaxObserverLayer(BaseQuanter):
         return quant_out
 
     def forward(self, input):
-        if paddle.framework.in_dynamic_mode():
+        if paddle.in_dynamic_mode():
             return self.dynamic_forward(input)
         else:
             return self.static_forward(input)

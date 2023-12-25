@@ -182,7 +182,7 @@ class TrtConvertGatherTest(TrtLayerAutoScanTest):
             if self.input_num == 3:
                 return 0, 5
             else:
-                if dynamic_shape and self.index_type_int32:
+                if dynamic_shape:
                     return 1, 3
                 else:
                     return 0, 4
@@ -194,10 +194,12 @@ class TrtConvertGatherTest(TrtLayerAutoScanTest):
         # for static_shape
         clear_dynamic_shape()
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             False
         ), 1e-5
         self.trt_param.precision = paddle_infer.PrecisionType.Half
+        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(
             False
         ), 1e-3
@@ -205,8 +207,10 @@ class TrtConvertGatherTest(TrtLayerAutoScanTest):
         # for dynamic_shape
         generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(True), 1e-5
         self.trt_param.precision = paddle_infer.PrecisionType.Half
+        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(True), 1e-3
 
     def add_skip_trt_case(self):

@@ -65,7 +65,7 @@ class VarStruct:
         self.lod_level = lod_level
         self.persistable = persistable
         self.m_size = 1
-        self.m_size = reduce(lambda x, y: x * y, shape)
+        self.m_size = reduce(lambda x, y: x * y, shape, 1)
         self.m_size *= dtype_to_size[dtype]
 
     def __str__(self):
@@ -157,7 +157,7 @@ class VarDistributed:
 
     def __str__(self):
         origin_var_str = (
-            "{name} : fluid.{type}.shape{shape}.astype({dtype})".format(
+            "{name} : base.{type}.shape{shape}.astype({dtype})".format(
                 name=self.origin.name,
                 type=self.origin.type,
                 shape=self.origin.shape,
@@ -166,7 +166,7 @@ class VarDistributed:
         )
 
         slice_var_str = (
-            "{name} : fluid.{type}.shape{shape}.astype({dtype})"
+            "{name} : base.{type}.shape{shape}.astype({dtype})"
             ".slice({is_slice}).block({block_id}).offset({offset})".format(
                 name=self.slice.name,
                 type=self.slice.type,

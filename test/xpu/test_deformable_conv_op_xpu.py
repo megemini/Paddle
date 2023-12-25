@@ -23,7 +23,7 @@ from get_test_cover_info import (
 from op_test_xpu import OpTest, XPUOpTest
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 def dmc_bilinear(data_im, height, width, h, w):
@@ -138,6 +138,8 @@ class XPUTestModulatedDeformableConvOp(XPUOpTestWrapper):
     class TestModulatedDeformableConvOp(XPUOpTest):
         def setUp(self):
             self.op_type = "deformable_conv"
+            # set to e-6 because of atomic add in XPU
+            self.epsilon_xpu2xpu = 0.000001
             self.dtype = self.in_type
             self.place = paddle.XPUPlace(0)
             self.init_group()
@@ -160,10 +162,10 @@ class XPUTestModulatedDeformableConvOp(XPUOpTestWrapper):
             output = output.astype(self.dtype)
 
             self.inputs = {
-                'Input': OpTest.np_dtype_to_fluid_dtype(input),
-                'Offset': OpTest.np_dtype_to_fluid_dtype(offset),
-                'Mask': OpTest.np_dtype_to_fluid_dtype(mask),
-                'Filter': OpTest.np_dtype_to_fluid_dtype(filter),
+                'Input': OpTest.np_dtype_to_base_dtype(input),
+                'Offset': OpTest.np_dtype_to_base_dtype(offset),
+                'Mask': OpTest.np_dtype_to_base_dtype(mask),
+                'Filter': OpTest.np_dtype_to_base_dtype(filter),
             }
             self.attrs = {
                 'strides': self.stride,

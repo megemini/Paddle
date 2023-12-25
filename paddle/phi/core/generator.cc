@@ -99,6 +99,17 @@ const std::shared_ptr<Generator>& DefaultCPUGenerator() {
   return default_cpu_generator;
 }
 
+const std::shared_ptr<Generator>& DefaultCustomDeviceGenerator(
+    const phi::CustomPlace& place) {
+  static std::
+      unordered_map<phi::Place, std::shared_ptr<Generator>, phi::Place::Hash>
+          generators;
+  if (generators.find(place) == generators.end()) {
+    generators.insert({place, std::make_shared<Generator>(GetRandomSeed())});
+  }
+  return generators[place];
+}
+
 using RNGMap = std::unordered_map<std::string, std::shared_ptr<Generator>>;
 
 static RNGMap& GetRandomSeedGeneratorMap() {
@@ -194,7 +205,7 @@ Generator::Generator(uint64_t seed, uint64_t device_id) {
   std::seed_seq seq({seed});
   auto engine = std::make_shared<std::mt19937_64>(seq);
   this->state_.cpu_engine = *engine;
-  this->state_.device = device_id;
+  this->state_.device = static_cast<int64_t>(device_id);
   this->state_.current_seed = seed;
   this->state_.thread_offset = 0;
   this->engine_ = engine;
@@ -231,7 +242,7 @@ uint64_t Generator::GetCurrentSeed() {
 
 uint64_t Generator::Seed() {
   std::lock_guard<std::mutex> lock(this->mu_);
-  uint64_t seed;
+  uint64_t seed = 0;
   std::random_device de;
   seed = ((((uint64_t)de()) << 32) + de()) & 0x1FFFFFFFFFFFFF;
   this->state_.current_seed = seed;
@@ -266,11 +277,13 @@ uint64_t Generator::Random64() {
 }
 
 std::pair<uint64_t, uint64_t> Generator::IncrementOffset(
-    uint64_t increament_offset) {
+    uint64_t increment_offset) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   std::lock_guard<std::mutex> lock(this->mu_);
   uint64_t cur_offset = this->state_.thread_offset;
-  this->state_.thread_offset += increament_offset;
+  VLOG(10) << "cur_offset = " << cur_offset
+           << " increment_offset = " << increment_offset;
+  this->state_.thread_offset += increment_offset;
   return std::make_pair(this->state_.current_seed, cur_offset);
 #else
   PADDLE_THROW(phi::errors::PermissionDenied(

@@ -12,19 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# from paddle.fluid.tests.unittests.test_layer_norm_op import *
+# from test_layer_norm_op import *
 import unittest
 from functools import reduce
 from operator import mul
 
 import numpy as np
+from op_test import OpTestTool, _set_use_system_allocator
 
-from paddle import enable_static, fluid
-from paddle.fluid import core
-from paddle.fluid.tests.unittests.eager_op_test import (
-    OpTestTool,
-    _set_use_system_allocator,
-)
+from paddle import base, enable_static
+from paddle.base import core
 
 np.random.random(123)
 
@@ -52,6 +49,9 @@ def _reference_layer_norm_naive(x, scale, beta, epsilon, begin_norm_axis=1):
     )
 
     x.shape, output.shape = x_shape, x_shape
+    mean.shape = x_shape[0:begin_norm_axis]
+    var.shape = x_shape[0:begin_norm_axis]
+
     return output, mean, var
 
 
@@ -95,8 +95,8 @@ class TestLayerNormMKLDNNOp(unittest.TestCase):
             var_names.append('bias')
         ground_truth = {name: var_dict[name] for name in var_names}
 
-        program = fluid.Program()
-        with fluid.program_guard(program):
+        program = base.Program()
+        with base.program_guard(program):
             block = program.global_block()
 
             for name in ground_truth:
@@ -125,7 +125,7 @@ class TestLayerNormMKLDNNOp(unittest.TestCase):
                 },
             )
 
-            exe = fluid.Executor(core.CPUPlace())
+            exe = base.Executor(core.CPUPlace())
 
             input_list = ['x']
             if with_scale_bias:

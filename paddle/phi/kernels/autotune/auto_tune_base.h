@@ -29,7 +29,7 @@ class KernelCallback {
   using FuncType = ReturnType (*)(Args...);
 
   KernelCallback() {}
-  explicit KernelCallback(FuncType func_) : func(func_) {}
+  explicit KernelCallback(FuncType f) : func(f) {}
   virtual ~KernelCallback() {}
 
   ReturnType Run(Args... args) { return func(args...); }
@@ -50,8 +50,8 @@ class AutoTuneBase {
   AutoTuneBase() {}
   virtual ~AutoTuneBase() {}
 
-  explicit AutoTuneBase(KernelType kernel) {
-    kernels_.push_back(/*default=*/kernel);
+  explicit AutoTuneBase(KernelType default_kernel) {
+    kernels_.push_back(default_kernel);
   }
 
   template <typename ReturnType, typename... Args>
@@ -106,7 +106,7 @@ class AutoTuneBase {
     float min_time = std::numeric_limits<float>::max();
 
     // Time cost test estabulished in default stream.
-    for (int i = 0; i < kernels_.size(); ++i) {
+    for (size_t i = 0; i < kernels_.size(); ++i) {
       auto time = RunAndMeasureKernel<Context>(ctx, i, args...);
       if (time < min_time) {
         min_time = time;
@@ -121,7 +121,7 @@ class AutoTuneBase {
   float RunAndMeasureKernel(const Context& ctx, const int idx, Args&&... args) {
     // Regard 1st run as warmup, judge the compare result by the time cost
     // of rest cycles.
-    constexpr int repeats = 6;
+    constexpr int repeats = 11;
     phi::GpuTimer timer;
     float time_cost = 0;
     const auto& stream = ctx.stream();

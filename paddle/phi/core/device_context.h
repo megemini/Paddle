@@ -48,12 +48,12 @@ class PADDLE_API DeviceContext {
   /**
    * @brief Move construct.
    */
-  DeviceContext(DeviceContext&&);
+  DeviceContext(DeviceContext&&) noexcept;
 
   /**
    * @brief Move assign operator.
    */
-  DeviceContext& operator=(DeviceContext&&);
+  DeviceContext& operator=(DeviceContext&&) noexcept;
 
   /**
    * @brief Default destruct.
@@ -145,11 +145,11 @@ class PADDLE_API DeviceContext {
   /**
    * @brief Allocate device memory for tensor.
    */
-  void* Alloc(TensorBase*,
-              DataType dtype,
-              size_t requested_size = 0,
-              bool pinned = false,
-              bool fake_alloc = false) const;
+  virtual void* Alloc(TensorBase*,
+                      DataType dtype,
+                      size_t requested_size = 0,
+                      bool pinned = false,
+                      bool fake_alloc = false) const;
 
   template <typename T>
   T* Alloc(TensorBase* tensor,

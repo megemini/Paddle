@@ -30,6 +30,7 @@ enum XPUFCCalcType {
   FC_INT16 = 0,
   FC_INT32,
   FC_FLOAT,
+  FC_INT32_WITH_LL,
 };
 
 template <typename T>
@@ -41,6 +42,8 @@ XPUFCCalcType FCCalcType() {
     return XPUFCCalcType::FC_INT32;
   } else if (std::getenv("XPU_PADDLE_FC_LOCAL_INT16") != nullptr) {
     return XPUFCCalcType::FC_FLOAT;
+  } else if (std::getenv("XPU_PADDLE_FC_INT32_WITH_LL") != nullptr) {
+    return XPUFCCalcType::FC_INT32_WITH_LL;
   }
   return XPUFCCalcType::FC_INT16;
 }
@@ -119,9 +122,9 @@ static void GetFCInfo(const phi::DDim& x_dims,
                       bool trans_y,
                       XpuFcInfo* info) {
   DDim new_x_dims =
-      (x_dims.size() > 1) ? x_dims : phi::make_ddim({1, x_dims[0]});
+      (x_dims.size() > 1) ? x_dims : common::make_ddim({1, x_dims[0]});
   DDim new_y_dims =
-      (y_dims.size() > 1) ? y_dims : phi::make_ddim({y_dims[0], 1});
+      (y_dims.size() > 1) ? y_dims : common::make_ddim({y_dims[0], 1});
 
   auto mat_dim_a = phi::funcs::CreateMatrixDescriptor(new_x_dims, 0, trans_x);
   auto mat_dim_b = phi::funcs::CreateMatrixDescriptor(new_y_dims, 0, trans_y);
@@ -387,15 +390,17 @@ static void MatMulXPUFunction(xpu::Context* xpu_ctx,
   using XPUType = typename XPUTypeTrait<T>::Type;
   int fccal_type = FCCalcType<XPUType>();
 
-  decltype(&xpu_fc_wrapper<XPUType, int16_t>) fc_api_list[3] = {
+  decltype(&xpu_fc_wrapper<XPUType, int16_t>) fc_api_list[4] = {
       &xpu_fc_wrapper<XPUType, int16_t>,
       &xpu_fc_wrapper<XPUType, int32_t>,
       &xpu_fc_wrapper<XPUType, float>,
+      &xpu_fc_wrapper<XPUType, int_with_ll_t>,
   };
-  decltype(&xpu_fc_batch_wrapper<XPUType, int16_t>) fc_batch_api_list[3] = {
+  decltype(&xpu_fc_batch_wrapper<XPUType, int16_t>) fc_batch_api_list[4] = {
       &xpu_fc_batch_wrapper<XPUType, int16_t>,
       &xpu_fc_batch_wrapper<XPUType, int32_t>,
       &xpu_fc_batch_wrapper<XPUType, float>,
+      &xpu_fc_batch_wrapper<XPUType, int_with_ll_t>,
   };
 
   auto fc_api = fc_api_list[fccal_type];

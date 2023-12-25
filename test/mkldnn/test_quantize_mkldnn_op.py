@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import OpTest
 
 import paddle
-from paddle.fluid.tests.unittests.eager_op_test import OpTest
 
 
 class TestQuantizeOp(OpTest):
@@ -48,7 +48,7 @@ class TestQuantizeOp(OpTest):
                 'float32'
             )
 
-        self.inputs = {'Input': OpTest.np_dtype_to_fluid_dtype(self.input)}
+        self.inputs = {'Input': OpTest.np_dtype_to_base_dtype(self.input)}
         self.attrs = {
             'Scale': self.scale,
             'Shift': self.shift,

@@ -32,6 +32,8 @@
 #ifdef PADDLE_WITH_RCCL
 #include "paddle/fluid/platform/dynload/rccl.h"
 #endif
+#include "paddle/fluid/framework/scope.h"
+#include "paddle/fluid/memory/allocation/allocator_facade.h"
 #include "paddle/fluid/platform/bfloat16.h"
 #include "paddle/fluid/platform/device/gpu/gpu_dnn.h"
 #include "paddle/fluid/platform/enforce.h"
@@ -59,7 +61,7 @@ inline ncclDataType_t ToNCCLDataType(framework::proto::VarType::Type type) {
     return ncclUint8;
   } else if (type == framework::proto::VarType::BOOL) {
     return ncclUint8;
-#if NCCL_VERSION_CODE >= 21000
+#if NCCL_VERSION_CODE >= 21000 && CUDA_VERSION >= 11000
   } else if (type == framework::proto::VarType::BF16) {
     return ncclBfloat16;
 #endif
@@ -86,7 +88,7 @@ inline ncclDataType_t ToNCCLDataType(phi::DataType type) {
     return ncclInt8;
   } else if (type == phi::DataType::BOOL) {
     return ncclUint8;
-#if NCCL_VERSION_CODE >= 21000
+#if NCCL_VERSION_CODE >= 21000 && CUDA_VERSION >= 11000
   } else if (type == phi::DataType::BFLOAT16) {
     return ncclBfloat16;
 #endif

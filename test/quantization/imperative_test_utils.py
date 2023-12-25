@@ -47,7 +47,7 @@ def fix_model_dict(model):
             value = np.zeros_like(p_value).astype('float32')
         else:
             value = (
-                np.random.normal(loc=0.0, scale=0.01, size=np.product(p_shape))
+                np.random.normal(loc=0.0, scale=0.01, size=np.prod(p_shape))
                 .reshape(p_shape)
                 .astype('float32')
             )
@@ -165,7 +165,7 @@ class ImperativeLenet(paddle.nn.Layer):
         x = self.features(x)
 
         x = paddle.flatten(x, 1)
-        x = self.add(x, paddle.to_tensor(0.0))  # For CI
+        x = self.add(x, paddle.to_tensor([0.0]))  # For CI
         x = self.fc(x)
         return x
 

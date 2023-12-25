@@ -75,7 +75,7 @@ template <typename T, typename Context>
 void SlogDeterminantKernel(const Context& dev_ctx,
                            const DenseTensor& x,
                            DenseTensor* out) {
-  auto input_dim = vectorize(x.dims());
+  auto input_dim = common::vectorize(x.dims());
   auto input_dim_size = input_dim.size();
 
   auto batch_count = detail::GetBatchCount(x.dims());
@@ -94,11 +94,11 @@ void SlogDeterminantKernel(const Context& dev_ctx,
   std::vector<int> output_dim_vec(input_dim.begin(), input_dim.end() - 2);
   if (input_dim.size() == static_cast<size_t>(2)) {
     // when input is a two-dimension matrix, The det value is a number.
-    output_dim_vec = {1};
+    output_dim_vec = {};
   }
   output_dim_vec.insert(output_dim_vec.begin(),
                         2);  // make the output dims as same as numpy
-  auto output_dims = phi::make_ddim(output_dim_vec);
+  auto output_dims = common::make_ddim(output_dim_vec);
   out->Resize(output_dims);
   VLOG(2) << "output dim:" << out->dims();
 }

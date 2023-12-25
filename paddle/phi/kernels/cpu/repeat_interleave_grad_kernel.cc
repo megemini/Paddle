@@ -26,7 +26,7 @@ namespace phi {
 template <typename T, typename Context>
 void RepeatInterleaveWithTensorIndexGradKernel(
     const Context& ctx,
-    const DenseTensor& x,
+    const DenseTensor& x UNUSED,
     const DenseTensor& repeats_tensor,
     const DenseTensor& out_grad,
     int dim,
@@ -74,7 +74,7 @@ void RepeatInterleaveWithTensorIndexGradKernel(
 
 template <typename T, typename Context>
 void RepeatInterleaveGradKernel(const Context& ctx,
-                                const DenseTensor& x,
+                                const DenseTensor& x UNUSED,
                                 const DenseTensor& out_grad,
                                 int repeats,
                                 int dim,
@@ -90,7 +90,7 @@ void RepeatInterleaveGradKernel(const Context& ctx,
   for (int i = 0; i < x_grad->dims()[dim]; i++) {
     std::fill_n(index_vec.begin() + i * repeats, repeats, i);
   }
-  index.Resize(phi::make_ddim({index_size}));
+  index.Resize(common::make_ddim({index_size}));
   phi::TensorFromVector<int>(index_vec, ctx, &index);
   const DenseTensor index_copy = index;
   IndexSelectGradInner<Context, T, int>(ctx, out_grad, index_copy, x_grad, dim);

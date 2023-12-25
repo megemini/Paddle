@@ -31,13 +31,15 @@ void TileKernel(const Context& dev_ctx,
                 DenseTensor* out) {
   using XPUType = typename XPUTypeTrait<T>::Type;
   auto rank = x.dims().size();
-  PADDLE_ENFORCE_GE(
-      rank,
-      1,
-      errors::InvalidArgument(
-          "The rank of the input 'x' for tile op must be a positive "
-          "integer, but the value received is %d.",
-          rank));
+  std::vector<int64_t> repeat_times = repeat_times_arr.GetData();
+  int repeat_times_size = repeat_times.size();
+  rank = std::max(rank, repeat_times_size);
+  PADDLE_ENFORCE_GE(rank,
+                    0,
+                    errors::InvalidArgument(
+                        "The rank of the input 'x' for tile op must be a >=0 "
+                        "integer, but the value received is %d.",
+                        rank));
   PADDLE_ENFORCE_LE(
       rank,
       MAX_RANK_SUPPORTED,
@@ -46,14 +48,12 @@ void TileKernel(const Context& dev_ctx,
           "must be less than or equal to %d, but the value received is %d.",
           MAX_RANK_SUPPORTED,
           rank));
-  std::vector<int64_t> repeat_times = repeat_times_arr.GetData();
-  int repeat_times_size = repeat_times.size();
   PADDLE_ENFORCE_GE(
       repeat_times_size,
-      1,
+      0,
       errors::InvalidArgument(
           "The number of elements of the input 'repeat_times' for tile "
-          "op must be positive, but the value received is %d.",
+          "op must be >=0, but the value received is %d.",
           repeat_times_size));
   PADDLE_ENFORCE_LE(
       repeat_times_size,
@@ -74,7 +74,7 @@ void TileKernel(const Context& dev_ctx,
             "be positive integers, but the value received is %d.",
             repeat_times[i]));
   }
-  auto vec_in_dims = phi::vectorize<int>(in_dims);
+  auto vec_in_dims = common::vectorize<int>(in_dims);
   if (repeat_times.size() < vec_in_dims.size()) {
     int diff = vec_in_dims.size() - repeat_times.size();
     repeat_times.insert(repeat_times.begin(), diff, 1);
@@ -91,31 +91,26 @@ void TileKernel(const Context& dev_ctx,
           vec_in_dims.size(),
           repeat_times.size()));
 
-  DDim new_in_dims = phi::make_ddim(vec_in_dims);
+  DDim new_in_dims = common::make_ddim(vec_in_dims);
   DDim out_dims(new_in_dims);
 
   for (size_t i = 0; i < repeat_times.size(); ++i) {
     out_dims[i] *= repeat_times[i];
   }
-  auto vec_out_dims = phi::vectorize<int>(out_dims);
+  auto vec_out_dims = common::vectorize<int>(out_dims);
   out->Resize(out_dims);
   dev_ctx.template Alloc<T>(out);
 
   std::vector<int64_t> temp(repeat_times.size(), 1);
-  if (repeat_times == temp) {
+  if (rank == 0 || repeat_times == temp) {
     out->Resize(x.dims());
     dev_ctx.template Alloc<T>(out);
-    if (std::is_same<T, double>::value) {
-      int r = xpu::copy(dev_ctx.x_context(),
-                        reinterpret_cast<const int8_t*>(x.data<double>()),
-                        reinterpret_cast<int8_t*>(out->data<double>()),
-                        8 * x.numel());
-      PADDLE_ENFORCE_XDNN_SUCCESS(r, "copy");
-    } else {
-      int r = xpu::copy(
-          dev_ctx.x_context(), x.data<T>(), out->data<T>(), x.numel());
-      PADDLE_ENFORCE_XDNN_SUCCESS(r, "copy");
-    }
+    int64_t count = x.numel() * sizeof(T);
+    int r = xpu::copy(dev_ctx.x_context(),
+                      reinterpret_cast<const int8_t*>(x.data<T>()),
+                      reinterpret_cast<int8_t*>(out->data<T>()),
+                      count);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "copy");
     return;
   }
 

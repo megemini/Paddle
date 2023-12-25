@@ -15,14 +15,14 @@
 
 import unittest
 
-from paddle.fluid import core
+from paddle.base import core
 
 core._set_prim_backward_enabled(True)
 
 import parameterized as param
 
 import paddle
-from paddle.fluid import core, framework
+from paddle.base import core, framework
 
 
 @param.parameterized_class(
@@ -67,6 +67,11 @@ class TestGetGradOpDescPrimEnabled(unittest.TestCase):
                 for n, vs in cls.outputs.items()
             },
         )
+
+        for _, outs in cls.outputs.items():
+            for out in outs:
+                block.create_var(name=out + core.grad_var_suffix())
+
         cls.fwd = block.ops[0].desc
 
     @classmethod

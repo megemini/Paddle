@@ -25,7 +25,7 @@
 #ifdef PADDLE_WITH_XPU
 #include "paddle/fluid/platform/device/xpu/xpu_op_list.h"
 #endif
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
 #include "paddle/fluid/platform/mkldnn_op_list.h"
 #endif
 #include "paddle/fluid/framework/library_type.h"
@@ -33,10 +33,11 @@
 #include "paddle/fluid/platform/place.h"
 #include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/fluid/platform/profiler/supplement_tracing.h"
+#include "paddle/phi/core/flags.h"
 
-DECLARE_bool(check_nan_inf);
-DECLARE_bool(benchmark);
-DECLARE_bool(run_kp_kernel);
+PHI_DECLARE_bool(check_nan_inf);
+PD_DECLARE_bool(benchmark);
+PHI_DECLARE_bool(run_kp_kernel);
 
 namespace paddle {
 namespace imperative {
@@ -164,7 +165,7 @@ PreparedOp PrepareImpl(
   platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
   auto* dev_ctx = pool.Get(place);
 
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
   // MKLDNN variant of code reads attributes in some of GetKernelTypeForVar and
   // GetKernelType functions, so we need to copy the attributes there.
   // Const qualifier of Attrs had to be discarded to overwrite it.
@@ -196,7 +197,7 @@ PreparedOp PrepareImpl(
 // 1. Whether mkldnn kernel fallbacks to plain kernel;
 // 2. Whether this op has specific implementation;
 // 3. Whether mkldnn kernel can be used.
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
   if (!op.DnnFallback() && !paddle::platform::in_mkldnn_white_list(op.Type()) &&
       op.CanMKLDNNBeUsed(dygraph_exe_ctx, expected_kernel_key.dtype())) {
     expected_kernel_key.set_backend(phi::Backend::ONEDNN);

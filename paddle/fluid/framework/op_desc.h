@@ -21,10 +21,12 @@ limitations under the License. */
 #include <utility>
 #include <vector>
 
+#include "paddle/common/macros.h"
 #include "paddle/fluid/distributed/auto_parallel/dist_attr.h"
 #include "paddle/fluid/framework/attribute.h"
 #include "paddle/fluid/framework/type_defs.h"
 #include "paddle/fluid/framework/var_desc.h"
+#include "paddle/utils/test_macros.h"
 
 namespace paddle {
 namespace framework {
@@ -35,9 +37,11 @@ class ProgramDesc;
 
 using paddle::distributed::auto_parallel::OperatorDistAttr;
 
-class OpDesc {
+class TEST_API OpDesc {
  public:
-  OpDesc() {}
+  OpDesc();
+
+  ~OpDesc();
 
   OpDesc(const std::string &type,
          const VariableNameMap &inputs,
@@ -60,7 +64,7 @@ class OpDesc {
 
   std::string Type() const { return desc_.type(); }
 
-  void SetType(const std::string &type) { desc_.set_type(type); }
+  void SetType(const std::string &type);
 
   const std::vector<std::string> &Input(const std::string &name) const;
 
@@ -76,7 +80,7 @@ class OpDesc {
 
   bool HasOutput(const std::string &name) const;
 
-  bool HasInput(const std::string &name) const;
+  bool HasInput(const std::string &name, bool with_attr_var = false) const;
 
   std::vector<std::string> OutputArgumentNames() const;
 
@@ -150,7 +154,7 @@ class OpDesc {
 
   const AttributeMap &GetRuntimeAttrMap() const;
 
-  std::vector<std::string> InputNames(bool with_attr_var = false) const {
+  std::vector<std::string> InputNames(bool with_attr_var UNUSED = false) const {
     return MapKeys(inputs_);
   }
   std::vector<std::string> OutputNames() const { return MapKeys(outputs_); }

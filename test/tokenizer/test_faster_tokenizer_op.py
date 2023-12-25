@@ -21,8 +21,9 @@ from bert_tokenizer import BertTokenizer
 
 import paddle
 from paddle import _legacy_C_ops, nn
-from paddle.fluid.framework import _non_static_mode, core
-from paddle.fluid.layer_helper import LayerHelper
+from paddle.base.framework import core
+from paddle.base.layer_helper import LayerHelper
+from paddle.framework import in_dynamic_mode
 
 
 def to_string_tensor(string_values, name):
@@ -77,7 +78,7 @@ class FasterTokenizer(nn.Layer):
         is_split_into_words=False,
         pad_to_max_seq_len=False,
     ):
-        if _non_static_mode():
+        if in_dynamic_mode():
             input_ids, seg_ids = _legacy_C_ops.faster_tokenizer(
                 self.vocab,
                 text,
@@ -135,6 +136,7 @@ class Predictor:
 
         # fast_tokenizer op only support cpu.
         config.disable_gpu()
+        config.disable_mkldnn()
         config.set_cpu_math_library_num_threads(10)
 
         config.switch_use_feed_fetch_ops(False)
@@ -149,7 +151,6 @@ class Predictor:
         ]
 
     def predict(self, data):
-
         self.input_handles[0].copy_from_cpu(data)
         self.predictor.run()
         input_ids = self.output_handles[0].copy_to_cpu()

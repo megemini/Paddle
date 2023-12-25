@@ -34,18 +34,18 @@ class ReduceOp:
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            if dist.get_rank() == 0:
-                data = paddle.to_tensor([[4, 5, 6], [4, 5, 6]])
-            else:
-                data = paddle.to_tensor([[1, 2, 3], [1, 2, 3]])
-            dist.all_reduce(data, op=dist.ReduceOp.SUM)
-            print(data)
-            # [[5, 7, 9], [5, 7, 9]] (2 GPUs)
+            >>> dist.init_parallel_env()
+            >>> if dist.get_rank() == 0:
+            ...     data = paddle.to_tensor([[4, 5, 6], [4, 5, 6]])
+            >>> else:
+            ...     data = paddle.to_tensor([[1, 2, 3], [1, 2, 3]])
+            >>> dist.all_reduce(data, op=dist.ReduceOp.SUM)
+            >>> print(data)
+            >>> # [[5, 7, 9], [5, 7, 9]] (2 GPUs)
     """
 
     SUM = 0
@@ -56,7 +56,7 @@ class ReduceOp:
 
 
 def _get_reduce_op(reduce_op, func_name):
-    if framework.in_dygraph_mode():
+    if framework.in_dynamic_mode():
         if reduce_op == ReduceOp.SUM:
             return framework.core.ReduceOp.SUM
         elif reduce_op == ReduceOp.MAX:
@@ -106,19 +106,19 @@ def reduce(tensor, dst, op=ReduceOp.SUM, group=None, sync_op=True):
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            if dist.get_rank() == 0:
-                data = paddle.to_tensor([[4, 5, 6], [4, 5, 6]])
-            else:
-                data = paddle.to_tensor([[1, 2, 3], [1, 2, 3]])
-            dist.reduce(data, dst=0)
-            print(data)
-            # [[5, 7, 9], [5, 7, 9]] (2 GPUs, out for rank 0)
-            # [[1, 2, 3], [1, 2, 3]] (2 GPUs, out for rank 1)
+            >>> dist.init_parallel_env()
+            >>> if dist.get_rank() == 0:
+            ...     data = paddle.to_tensor([[4, 5, 6], [4, 5, 6]])
+            >>> else:
+            ...     data = paddle.to_tensor([[1, 2, 3], [1, 2, 3]])
+            >>> dist.reduce(data, dst=0)
+            >>> print(data)
+            >>> # [[5, 7, 9], [5, 7, 9]] (2 GPUs, out for rank 0)
+            >>> # [[1, 2, 3], [1, 2, 3]] (2 GPUs, out for rank 1)
     """
     return stream.reduce(
         tensor,

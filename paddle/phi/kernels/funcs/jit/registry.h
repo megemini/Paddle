@@ -19,8 +19,8 @@
 #include <type_traits>
 #include <utility>  // for std::move
 
+#include "paddle/common/macros.h"
 #include "paddle/phi/common/place.h"
-#include "paddle/phi/core/macros.h"
 #include "paddle/phi/kernels/funcs/jit/kernel_base.h"
 #include "paddle/phi/kernels/funcs/jit/kernel_pool.h"
 
@@ -43,7 +43,7 @@ struct JitKernelRegistrarFunctor;
 
 template <typename Pool, typename PlaceType, size_t I, typename... KernelImpls>
 struct JitKernelRegistrarFunctor<Pool, PlaceType, true, I, KernelImpls...> {
-  void operator()(KernelType kt) const {}
+  void operator()(KernelType kt UNUSED) const {}
 };
 
 template <typename Pool, typename PlaceType, size_t I, typename... KernelImpls>

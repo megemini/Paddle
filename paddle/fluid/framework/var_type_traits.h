@@ -25,7 +25,9 @@
 #include "paddle/fluid/framework/lod_tensor_array.h"
 #include "paddle/fluid/framework/raw_tensor.h"
 #include "paddle/fluid/framework/string_array.h"
+#include "paddle/fluid/framework/tensor_ref_array.h"
 #include "paddle/fluid/platform/place.h"
+#include "paddle/utils/test_macros.h"
 #ifdef PADDLE_WITH_CUDA
 #include <cudnn.h>
 #if defined(PADDLE_WITH_NCCL)
@@ -41,6 +43,10 @@
 
 #if defined(PADDLE_WITH_XPU_BKCL)
 #include "xpu/bkcl.h"
+#endif
+
+#if defined(PADDLE_WITH_CUSTOM_DEVICE)
+#include "paddle/phi/backends/c_comm_lib.h"
 #endif
 
 namespace phi {
@@ -90,7 +96,7 @@ class OrderedMultiDeviceLoDTensorBlockingQueueHolder;
 namespace paddle {
 namespace framework {
 
-const char *ToTypeName(int var_id);
+TEST_API const char *ToTypeName(int var_id);
 const std::type_index &VarTraitIdToTypeIndex(int var_id);
 int TypeIndexToVarTraitId(const std::type_index &type);
 
@@ -196,6 +202,9 @@ using VarTypeRegistry = detail::VarTypeRegistryImpl<
     BKCLUniqueId,
     platform::BKCLCommunicator,
 #endif
+#if defined(PADDLE_WITH_CUSTOM_DEVICE)
+    phi::ccl::CCLRootId,
+#endif
     std::vector<std::unique_ptr<operators::CUDAGraphWithInOuts>>,
     int,
     float,
@@ -203,7 +212,8 @@ using VarTypeRegistry = detail::VarTypeRegistryImpl<
     std::vector<int>,
     std::vector<float>,
     std::vector<std::string>,
-    RawTensor>;
+    RawTensor,
+    VariableRefArray>;
 template <typename T>
 struct VarTypeTrait {
   static_assert(VarTypeRegistry::IsRegistered<T>(), "Must be registered type");

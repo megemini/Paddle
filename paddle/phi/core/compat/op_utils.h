@@ -18,10 +18,10 @@ limitations under the License. */
 #include <unordered_set>
 
 #include "glog/logging.h"
+#include "paddle/common/macros.h"
 #include "paddle/phi/core/compat/arg_map_context.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/core/infermeta_utils.h"
-#include "paddle/phi/core/macros.h"
 #include "paddle/phi/core/type_defs.h"
 #include "paddle/utils/flat_hash_map.h"
 
@@ -31,7 +31,7 @@ const static std::string deprecated_kernel_name = "deprecated";  // NOLINT
 
 const std::unordered_set<std::string> standard_kernel_suffixs({
     "sr",  // SelectedRows kernel
-    "raw"  // fallback kernel of origfinal fluid op
+    "raw"  // fallback kernel of original fluid op
 });
 
 /**
@@ -210,18 +210,12 @@ class OpUtilsMap {
 };
 
 struct BaseKernelNameRegistrar {
-  BaseKernelNameRegistrar(const char* op_type, const char* base_kernel_name) {
-    OpUtilsMap::Instance().InsertBaseKernelName(op_type, base_kernel_name);
-    OpUtilsMap::Instance().InsertFluidOplName(op_type, base_kernel_name);
-  }
+  BaseKernelNameRegistrar(const char* op_type, const char* base_kernel_name);
 };
 
 struct ArgumentMappingFnRegistrar {
   ArgumentMappingFnRegistrar(const char* op_type,
-                             ArgumentMappingFn arg_mapping_fn) {
-    OpUtilsMap::Instance().InsertArgumentMappingFn(op_type,
-                                                   std::move(arg_mapping_fn));
-  }
+                             ArgumentMappingFn arg_mapping_fn);
 };
 
 #define PD_REGISTER_BASE_KERNEL_NAME(op_type, base_kernel_name)               \

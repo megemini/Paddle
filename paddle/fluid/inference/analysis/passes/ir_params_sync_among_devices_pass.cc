@@ -17,20 +17,22 @@
 #include <cstdlib>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
-#include "paddle/fluid/framework/data_layout.h"
 #include "paddle/fluid/framework/framework.pb.h"
 #include "paddle/fluid/framework/ir/graph_helper.h"
-#include "paddle/fluid/framework/lod_tensor.h"
+#include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/tensor_util.h"
-#include "paddle/fluid/platform/bfloat16.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/phi/common/data_type.h"
+#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/core/dense_tensor.h"
 
-DEFINE_bool(
+PD_DEFINE_bool(  // NOLINT
     custom_model_save_cpu,
     false,
     "Keep old mode for developers, the model is saved on cpu not device.");
+
+PHI_DECLARE_bool(enable_pir_in_executor);
 
 namespace paddle {
 namespace inference {
@@ -65,9 +67,9 @@ void IrParamsSyncAmongDevicesPass::CopyParamsToGpu(Argument *argument) {
   bool with_dynamic_shape = false;
   if (argument->Has("max_input_shape") && argument->Has("min_input_shape") &&
       argument->Has("optim_input_shape")) {
-    with_dynamic_shape = (argument->max_input_shape().size() > 0 &&
-                          argument->min_input_shape().size() > 0 &&
-                          argument->optim_input_shape().size() > 0);
+    with_dynamic_shape = (!argument->max_input_shape().empty() &&
+                          !argument->min_input_shape().empty() &&
+                          !argument->optim_input_shape().empty());
   }
   with_dynamic_shape =
       with_dynamic_shape || (argument->Has("tensorrt_tuned_dynamic_shape") &&
@@ -139,9 +141,8 @@ void IrParamsSyncAmongDevicesPass::CopyParamsToCustomDevice(
     repetitive_params = graph.Get<std::vector<std::string>>(
         framework::ir::kRepetitiveParamAttr);
 
-  LOG(INFO) << "Sync params from CPU to CustomDevice"
-            << argument->custom_device_type() << "/"
-            << argument->custom_device_id();
+  LOG(INFO) << "Sync params from CPU to " << argument->custom_device_type()
+            << ":" << argument->custom_device_id();
 
   platform::Place place = platform::CustomPlace(argument->custom_device_type(),
                                                 argument->custom_device_id());
@@ -189,7 +190,8 @@ void IrParamsSyncAmongDevicesPass::CopyParamsToXpu(Argument *argument) {
   for (size_t i = 0; i < main_graph.SubGraphsSize(); i++) {
     auto *graph = main_graph.GetSubGraph(i);
     for (auto *node : graph->Nodes()) {
-      if (!node->IsVar() || !node->Var()->Persistable()) continue;
+      if (!node->IsVar() || !node->Var() || !node->Var()->Persistable())
+        continue;
       auto *var = scope->FindVar(node->Name());
       if (!var->IsType<phi::DenseTensor>()) continue;
       auto *tensor = var->GetMutable<phi::DenseTensor>();
@@ -206,6 +208,9 @@ void IrParamsSyncAmongDevicesPass::CopyParamsToXpu(Argument *argument) {
 #endif
 
 void IrParamsSyncAmongDevicesPass::RunImpl(Argument *argument) {
+  if (FLAGS_enable_pir_in_executor) {
+    return;
+  }
   PADDLE_ENFORCE_EQ(
       argument->scope_valid(),
       true,

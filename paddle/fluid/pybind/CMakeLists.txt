@@ -4,7 +4,7 @@ set(PYBIND_DEPS
     pybind
     python
     proto_desc
-    memory
+    standalone_executor
     executor
     fleet_wrapper
     box_wrapper
@@ -19,6 +19,7 @@ set(PYBIND_DEPS
     layer
     tracer
     engine
+    common
     scope_pool
     analysis_predictor
     imperative_profiler
@@ -28,7 +29,6 @@ set(PYBIND_DEPS
     gloo_wrapper
     infer_io_utils
     heter_wrapper
-    generator
     op_version_registry
     ps_gpu_wrapper
     custom_operator
@@ -37,16 +37,23 @@ set(PYBIND_DEPS
     fleet_executor
     global_utils
     phi_utils
-    tcp_store
-    comm_context_manager
+    phi
+    op_dialect_vjp
+    program_translator
+    pir_transforms
     new_profiler
-    auto_parallel
-    jit_layer
-    jit_property
+    fluid_jit
     prim_utils
-    operants_manager
-    phi_tensor_operants
-    static_tensor_operants)
+    gather_op_handle
+    static_tensor_operants
+    type_info
+    auto_parallel)
+
+if(WITH_CINN)
+  set(PYBIND_DEPS
+      ${PYBIND_DEPS} pir_transforms op_with_group_merge_pass
+      add_broadcast_to_elementwise_pass pd_to_cinn_pass sub_graph_checker)
+endif()
 
 if(WITH_PSCORE)
   set(PYBIND_DEPS ${PYBIND_DEPS} ps_service)
@@ -55,18 +62,8 @@ if(WITH_PSCORE)
   endif()
 endif()
 if(WITH_RPC)
-  set(PYBIND_DEPS
-      ${PYBIND_DEPS}
-      paddle_rpc
-      brpc
-      ssl
-      crypto
-      protobuf
-      zlib
-      leveldb
-      snappy
-      gflags
-      glog)
+  set(PYBIND_DEPS ${PYBIND_DEPS} paddle_rpc ${EXTERNAL_BRPC_DEPS} zlib phi
+                  common)
 endif()
 if(WITH_GPU OR WITH_ROCM)
   set(PYBIND_DEPS ${PYBIND_DEPS} dynload_cuda)
@@ -85,10 +82,25 @@ if(WITH_NCCL OR WITH_RCCL)
   set(PYBIND_DEPS ${PYBIND_DEPS} reducer)
 endif()
 
+if(WITH_XPU)
+  set(PYBIND_DEPS ${PYBIND_DEPS} dynload_xpti)
+endif()
+
 if(WITH_XPU_BKCL)
   set(PYBIND_DEPS ${PYBIND_DEPS} reducer)
   set(PYBIND_DEPS ${PYBIND_DEPS} bkcl_context)
   set(PYBIND_DEPS ${PYBIND_DEPS} heter_ccl_context)
+endif()
+
+if(WITH_CUSTOM_DEVICE)
+  set(PYBIND_DEPS ${PYBIND_DEPS} xccl_context)
+  if(NOT
+     (WITH_NCCL
+      OR WITH_RCCL
+      OR WITH_XPU_BKCL))
+    set(PYBIND_DEPS ${PYBIND_DEPS} reducer)
+    set(PYBIND_DEPS ${PYBIND_DEPS} heter_ccl_context)
+  endif()
 endif()
 
 if(NOT WIN32)
@@ -100,14 +112,19 @@ if(NOT WIN32)
 endif()
 
 if(WITH_PYTHON)
-  list(APPEND PYBIND_DEPS py_func_op)
+  # list(APPEND PYBIND_DEPS py_func_op)
+  set(PYBIND_DEPS ${PYBIND_DEPS} py_func_op)
 endif()
 
 set(PYBIND_SRCS
     pybind.cc
     imperative.cc
     inference_api.cc
-    ir.cc
+    ops_api.cc
+    static_op_function.cc
+    control_flow_api.cc
+    pir.cc
+    graph.cc
     bind_fleet_executor.cc
     reader_py.cc
     protobuf.cc
@@ -134,10 +151,20 @@ set(PYBIND_SRCS
     custom_device_py.cc
     xpu_streams_py.cc
     jit.cc
-    auto_parallel_py.cc)
+    auto_parallel_py.cc
+    eval_frame_tools.cc
+    eval_frame.c)
+
+if(NOT WITH_SHARED_IR)
+  # Note: We want to compile pir source into paddle.so directly, because
+  # we can't get all pir symbols when link pir static lib
+  file(GLOB_RECURSE PIR_CPP_SOURCES "${CMAKE_SOURCE_DIR}/paddle/pir/*.cc")
+  set(PYBIND_SRCS ${PYBIND_SRCS} ${PIR_CPP_SOURCES})
+else()
+  set(PYBIND_DEPS ${PYBIND_DEPS} pir)
+endif()
 
 if(WITH_CUSTOM_DEVICE)
-  set(PYBIND_DEPS ${PYBIND_DEPS} phi_capi)
   set(PYBIND_DEPS ${PYBIND_DEPS} custom_device_common_op_registry)
 endif()
 
@@ -175,7 +202,7 @@ if(WITH_GLOO)
 endif()
 
 if(WITH_CRYPTO)
-  set(PYBIND_DEPS ${PYBIND_DEPS} paddle_crypto)
+  set(PYBIND_DEPS ${PYBIND_DEPS} framework_io)
   set(PYBIND_SRCS ${PYBIND_SRCS} crypto.cc)
 endif()
 
@@ -207,6 +234,10 @@ if(WITH_PSCORE)
   list(APPEND PYBIND_DEPS fleet index_wrapper index_sampler)
   list(APPEND PYBIND_SRCS)
   set(PYBIND_SRCS fleet_py.cc ${PYBIND_SRCS})
+endif()
+
+if(WITH_CINN)
+  set(PYBIND_SRCS ${PYBIND_SRCS} test.cc)
 endif()
 
 if(WITH_RPC)
@@ -258,10 +289,19 @@ if(WITH_PYTHON)
     list(APPEND OP_FUNCTION_GENERETOR_DEPS ${PYTHON_LIBRARIES})
   endif()
 
+  if(WITH_CUSTOM_DEVICE)
+    set(OP_FUNCTION_GENERETOR_DEPS ${OP_FUNCTION_GENERETOR_DEPS}
+                                   custom_device_common_op_registry)
+  endif()
+
   add_executable(eager_legacy_op_function_generator
                  eager_legacy_op_function_generator.cc)
-  target_link_libraries(eager_legacy_op_function_generator
-                        ${OP_FUNCTION_GENERETOR_DEPS})
+  set(GENERATOR_DEPS ${PYBIND_DEPS})
+  list(REMOVE_DUPLICATES GENERATOR_DEPS)
+  if(NOT WITH_ARM)
+    list(REMOVE_ITEM GENERATOR_DEPS python)
+  endif()
+  target_link_libraries(eager_legacy_op_function_generator ${GENERATOR_DEPS})
   if(NOT WIN32)
     add_executable(kernel_signature_generator kernel_signature_generator.cc)
     target_link_libraries(kernel_signature_generator
@@ -317,6 +357,28 @@ if(WITH_PYTHON)
       "    )\n"
       ")\n"
       "exit /b 0")
+
+    if(WITH_SHARED_PHI)
+      add_custom_command(
+        OUTPUT ${op_impl_path}/phi.dll
+        COMMAND ${CMAKE_COMMAND} -E copy ${PHI_LIB} ${op_impl_path}
+        DEPENDS phi)
+      list(APPEND EAGER_OP_IMPL_DEPS ${op_impl_path}/phi.dll)
+    endif()
+
+    if(WITH_SHARED_IR)
+      add_custom_command(
+        OUTPUT ${op_impl_path}/ir.dll
+        COMMAND ${CMAKE_COMMAND} -E copy ${IR_LIB} ${op_impl_path}
+        DEPENDS pir)
+      list(APPEND EAGER_OP_IMPL_DEPS ${op_impl_path}/ir.dll)
+    endif()
+
+    add_custom_command(
+      OUTPUT ${op_impl_path}/common.dll
+      COMMAND ${CMAKE_COMMAND} -E copy ${COMMON_LIB} ${op_impl_path}
+      DEPENDS common)
+    list(APPEND EAGER_OP_IMPL_DEPS ${op_impl_path}/common.dll)
 
     if(${CBLAS_PROVIDER} STREQUAL MKLML)
       add_custom_command(
@@ -437,8 +499,6 @@ if(WITH_PYTHON)
                       DEPENDS ${eager_impl_file})
   endif()
 
-  list(APPEND PYBIND_DEPS standalone_executor staticgraph_executor_statistics)
-
   if(NOT ((NOT WITH_PYTHON) AND ON_INFER))
     set(PYBIND_SRCS eager.cc ${PYBIND_SRCS})
     set(PYBIND_SRCS eager_functions.cc ${PYBIND_SRCS})
@@ -454,6 +514,7 @@ if(WITH_PYTHON)
     list(APPEND PYBIND_DEPS backward)
     list(APPEND PYBIND_DEPS grad_node_info)
     list(APPEND PYBIND_DEPS phi)
+    list(APPEND PYBIND_DEPS common)
     list(APPEND PYBIND_DEPS final_dygraph_function)
     list(APPEND PYBIND_DEPS final_dygraph_node)
     list(APPEND PYBIND_DEPS dygraph_function)
@@ -465,10 +526,8 @@ if(WITH_PYTHON)
     list(APPEND PYBIND_DEPS python)
     list(APPEND PYBIND_DEPS custom_operator)
     list(APPEND PYBIND_DEPS custom_operator_node)
-    list(APPEND PYBIND_DEPS tensor_api)
     list(APPEND PYBIND_DEPS eager_tensor_operants)
     list(APPEND PYBIND_DEPS pybind_util)
-    list(APPEND PYBIND_DEPS flags)
   endif()
 
   # On Linux, cc_library(paddle SHARED ..) will generate the libpaddle.so,
@@ -485,6 +544,11 @@ if(WITH_PYTHON)
     SRCS ${PYBIND_SRCS}
     DEPS ${PYBIND_DEPS} ${GLOB_OP_LIB} ${GLOB_OPERATOR_DEPS})
 
+  # cc_test do not respect deps, whole archive to link symbols that may need by test
+  if(WITH_TESTING)
+    #set_target_properties(${SHARD_LIB_NAME} PROPERTIES LINK_FLAGS "-Wl,--whole-archive")
+  endif()
+
   # TODO(zhiqiu): some symbols not exported even setting the following
   # property. Need to find a better way.
 
@@ -493,6 +557,7 @@ if(WITH_PYTHON)
   #                PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
   # endif()
 
+  add_dependencies(${SHARD_LIB_NAME} ops_api_gen)
   if(NOT ((NOT WITH_PYTHON) AND ON_INFER))
     add_dependencies(${SHARD_LIB_NAME} legacy_eager_codegen)
     add_dependencies(${SHARD_LIB_NAME} eager_legacy_op_function_generator_cmd)

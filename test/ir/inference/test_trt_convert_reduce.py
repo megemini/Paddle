@@ -51,6 +51,12 @@ class TrtConvertReduceTest(TrtLayerAutoScanTest):
                 return np.random.random([1, 3, 64, 64]).astype(np.float32)
             elif dtype == 2:
                 return np.random.random([1, 3, 64, 64]).astype(np.int32)
+            elif dtype == 0:
+                return np.random.random([1, 3, 64, 64]).astype(np.bool_)
+            elif dtype == 3:
+                return np.random.random([1, 3, 64, 64]).astype(np.int64)
+            elif dtype == 6:
+                return np.random.random([1, 3, 64, 64]).astype(np.float64)
 
         for keep_dim in [True, False]:
             for dim in [
@@ -65,64 +71,66 @@ class TrtConvertReduceTest(TrtLayerAutoScanTest):
                 [3, 4, 5],
             ]:
                 for reduce_all in [True, False]:
-                    for out_dtype in [-1, 2, 5]:
-                        for op_type in [
-                            "reduce_max",
-                            "reduce_min",
-                            "reduce_mean",
-                            "reduce_sum",
-                            "reduce_prod",
-                        ]:
-                            dics1 = [
-                                {
-                                    "keep_dim": keep_dim,
-                                    "dim": dim,
-                                    "reduce_all": reduce_all,
-                                    "out_dtype": out_dtype,
-                                    "in_dtype": out_dtype,
-                                },
-                                {},
+                    for out_dtype in [-1, 0, 2, 5, 3, 6]:
+                        if out_dtype != 0:
+                            reduce_type_list = [
+                                "reduce_max",
+                                "reduce_min",
+                                "reduce_mean",
+                                "reduce_sum",
+                                "reduce_prod",
                             ]
-                            dics2 = [
-                                {
-                                    "keep_dim": keep_dim,
-                                    "dim": dim,
-                                    "reduce_all": reduce_all,
-                                    "out_dtype": out_dtype,
-                                    "in_dtype": out_dtype,
-                                },
-                                {},
+                        else:
+                            reduce_type_list = [
+                                "reduce_all",
+                                "reduce_any",
                             ]
-                            for dics in [dics1, dics2]:
-                                ops_config = [
-                                    {
-                                        "op_type": op_type,
-                                        "op_inputs": {"X": ["input_data"]},
-                                        "op_outputs": {
-                                            "Out": ["reduce_output_data"]
-                                        },
-                                        "op_attrs": dics[0],
-                                    }
-                                ]
-                                ops = self.generate_op_config(ops_config)
 
-                                program_config = ProgramConfig(
-                                    ops=ops,
-                                    weights={},
-                                    inputs={
-                                        "input_data": TensorConfig(
-                                            data_gen=partial(
-                                                generate_input1, out_dtype, dics
-                                            )
-                                        )
+                        for op_type in reduce_type_list:
+                            dics = [
+                                {
+                                    "keep_dim": keep_dim,
+                                    "dim": dim,
+                                    "reduce_all": reduce_all,
+                                    "out_dtype": out_dtype,
+                                    "in_dtype": out_dtype,
+                                },
+                                {},
+                            ]
+
+                            ops_config = [
+                                {
+                                    "op_type": op_type,
+                                    "op_inputs": {"X": ["input_data"]},
+                                    "op_outputs": {
+                                        "Out": ["reduce_output_data"]
                                     },
-                                    outputs=["reduce_output_data"],
-                                )
+                                    "op_attrs": dics[0],
+                                }
+                            ]
+                            if op_type in ["reduce_any", "reduce_all"]:
+                                ops_config[0]["outputs_dtype"] = {
+                                    "reduce_output_data": np.bool_
+                                }
+                            ops = self.generate_op_config(ops_config)
 
-                                if not self.is_program_valid(program_config):
-                                    continue
+                            program_config = ProgramConfig(
+                                ops=ops,
+                                weights={},
+                                inputs={
+                                    "input_data": TensorConfig(
+                                        data_gen=partial(
+                                            generate_input1, out_dtype, dics
+                                        )
+                                    )
+                                },
+                                outputs=["reduce_output_data"],
+                            )
 
-                                yield program_config
+                            if not self.is_program_valid(program_config):
+                                continue
+
+                            yield program_config
 
     def sample_predictor_configs(
         self, program_config
@@ -156,10 +164,12 @@ class TrtConvertReduceTest(TrtLayerAutoScanTest):
         # for static_shape
         clear_dynamic_shape()
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, False
         ), (1e-5, 1e-5)
         self.trt_param.precision = paddle_infer.PrecisionType.Half
+        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, False
         ), (1e-3, 1e-3)
@@ -167,10 +177,12 @@ class TrtConvertReduceTest(TrtLayerAutoScanTest):
         # for dynamic_shape
         generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), (1e-5, 1e-5)
         self.trt_param.precision = paddle_infer.PrecisionType.Half
+        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), (1e-3, 1e-3)

@@ -31,15 +31,20 @@ class CAllGatherOp : public framework::OperatorWithKernel {
                       platform::errors::InvalidArgument(
                           "The value of nranks should be >=2."));
     framework::DDim dim = ctx->GetInputDim("X");
-    dim[0] = dim[0] * nranks;
-    if (dim[0] < 0) dim[0] = -1;
+    // 0D use stack/unstack while others use concat/split
+    if (dim.size() == 0) {
+      dim = common::make_ddim({nranks});
+    } else {
+      dim[0] = dim[0] * nranks;
+      if (dim[0] < 0) dim[0] = -1;
+    }
     ctx->SetOutputDim("Out", dim);
   }
 };
 
 class CAllGatherOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
-  void Make() {
+  void Make() override {
     AddInput("X", "(Tensor) tensor to be allgather");
     AddOutput("Out", "(Tensor) the allgather result");
     AddAttr<int>("ring_id", "(int default 0) communication ring id.")

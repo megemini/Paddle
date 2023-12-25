@@ -70,9 +70,10 @@ void sgd_dense_param_sparse_grad_impl(const DenseTensor& param,
   phi::jit::sgd_attr_t attr;
   attr.param_height = param_out->dims()[0];
   attr.param_width = param_out->numel() / attr.param_height;
-  attr.grad_height = grad_rows.size();  // note: it is not grad->height()
+  attr.grad_height =
+      static_cast<int>(grad_rows.size());  // note: it is not grad->height()
   attr.grad_width = grad_value.numel() / attr.grad_height;
-  attr.selected_rows_size = grad_rows.size();
+  attr.selected_rows_size = static_cast<int>(grad_rows.size());
 
   auto sgd =
       phi::jit::KernelFuncs<phi::jit::SgdTuple<T>, phi::CPUPlace>::Cache().At(
@@ -117,10 +118,10 @@ void SGDDenseKernel(const Context& dev_ctx,
                     const DenseTensor& param,
                     const DenseTensor& learning_rate,
                     const DenseTensor& grad,
-                    const paddle::optional<DenseTensor>& master_param,
-                    bool multi_precision,
+                    const paddle::optional<DenseTensor>& master_param UNUSED,
+                    bool multi_precision UNUSED,
                     DenseTensor* param_out,
-                    DenseTensor* master_param_out) {
+                    DenseTensor* master_param_out UNUSED) {
   dev_ctx.template Alloc<T>(param_out);
   sgd_dense_param_dense_grad_impl<T>(param, learning_rate, grad, param_out);
 }
@@ -131,27 +132,27 @@ void SGDDenseParamSparseGradKernel(
     const DenseTensor& param,
     const DenseTensor& learning_rate,
     const SelectedRows& grad,
-    const paddle::optional<DenseTensor>& master_param,
-    bool multi_precision,
+    const paddle::optional<DenseTensor>& master_param UNUSED,
+    bool multi_precision UNUSED,
     DenseTensor* param_out,
-    DenseTensor* master_param_out) {
+    DenseTensor* master_param_out UNUSED) {
   dev_ctx.template Alloc<T>(param_out);
   sgd_dense_param_sparse_grad_impl<T>(param, learning_rate, grad, param_out);
 }
 
 template <typename T, typename Context>
 void SGDSparseParamSparseGradKernel(
-    const Context& dev_ctx,
+    const Context& dev_ctx UNUSED,
     const SelectedRows& param,
     const DenseTensor& learning_rate,
     const SelectedRows& grad,
-    const paddle::optional<SelectedRows>& master_param,
-    bool multi_precision,
+    const paddle::optional<SelectedRows>& master_param UNUSED,
+    bool multi_precision UNUSED,
     SelectedRows* param_out,
-    SelectedRows* master_param_out) {
+    SelectedRows* master_param_out UNUSED) {
   // for distributed training, a sparse var may be empty,
   // just skip updating.
-  if (grad.rows().size() == 0) {
+  if (grad.rows().empty()) {
     return;
   }
 

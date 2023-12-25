@@ -12,18 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
+
 import unittest
 
-sys.path.append('../../python/paddle/fluid/tests/unittests')
-
 import numpy as np
-from eager_op_test import OpTest
 from get_test_cover_info import (
     XPUOpTestWrapper,
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import OpTest
 from op_test_xpu import XPUOpTest
 
 import paddle
@@ -60,8 +58,8 @@ class XPUTestLogicalAnd(XPUOpTestWrapper):
 
             self.attrs = {'use_xpu': True}
             self.inputs = {
-                'X': OpTest.np_dtype_to_fluid_dtype(x),
-                'Y': OpTest.np_dtype_to_fluid_dtype(y),
+                'X': OpTest.np_dtype_to_base_dtype(x),
+                'Y': OpTest.np_dtype_to_base_dtype(y),
             }
             self.outputs = {'Out': out}
 
@@ -121,8 +119,8 @@ class XPUTestLogicalOr(XPUOpTestWrapper):
 
             self.attrs = {'use_xpu': True}
             self.inputs = {
-                'X': OpTest.np_dtype_to_fluid_dtype(x),
-                'Y': OpTest.np_dtype_to_fluid_dtype(y),
+                'X': OpTest.np_dtype_to_base_dtype(x),
+                'Y': OpTest.np_dtype_to_base_dtype(y),
             }
             self.outputs = {'Out': out}
 
@@ -182,8 +180,8 @@ class XPUTestLogicalXor(XPUOpTestWrapper):
 
             self.attrs = {'use_xpu': True}
             self.inputs = {
-                'X': OpTest.np_dtype_to_fluid_dtype(x),
-                'Y': OpTest.np_dtype_to_fluid_dtype(y),
+                'X': OpTest.np_dtype_to_base_dtype(x),
+                'Y': OpTest.np_dtype_to_base_dtype(y),
             }
             self.outputs = {'Out': out}
 
@@ -239,7 +237,7 @@ class XPUTestLogicalNot(XPUOpTestWrapper):
             out = np.logical_not(x)
 
             self.attrs = {'use_xpu': True}
-            self.inputs = {'X': OpTest.np_dtype_to_fluid_dtype(x)}
+            self.inputs = {'X': OpTest.np_dtype_to_base_dtype(x)}
             self.outputs = {'Out': out}
 
         def init_case(self):

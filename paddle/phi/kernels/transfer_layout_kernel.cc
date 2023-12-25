@@ -25,7 +25,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/funcs/data_layout_transform.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/phi/kernels/memcpy_kernel.h"
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
 #include "paddle/phi/backends/onednn/onednn_helper.h"
 #endif
 namespace phi {
@@ -69,17 +69,19 @@ void TransferLayoutGeneral(const Context& dev_ctx,
     dst_dim[i] = src_dim[axis[i]];
   }
 
-  out->Resize(phi::make_ddim(dst_dim));
+  out->Resize(common::make_ddim(dst_dim));
   dev_ctx.Alloc(out, x.dtype());
-
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   // In GPU fp16 model, we will insert many transfer_layout ops in
-  // conv2d_fusion_layout_transfer_pass, so we optimize this kernel on GPU
+  // fused_conv2d_add_act_layout_transfer_pass, so we optimize this kernel on
+  // GPU
   if (std::is_same<Context, phi::GPUContext>::value) {
     std::vector<int> axis_nchw_nhwc = {0, 2, 3, 1};
     std::vector<int> axis_nhwc_nchw = {0, 3, 1, 2};
-    const int batch = src_dim[0];
-    int row_len = src_dim[1];
-    int col_len = src_dim[2] * src_dim[3];
+    auto* gpu_ctx = reinterpret_cast<const phi::GPUContext*>(&dev_ctx);
+    const int64_t batch = src_dim[0];
+    int64_t row_len = src_dim[1];
+    int64_t col_len = src_dim[2] * src_dim[3];
     if (axis == axis_nhwc_nchw) {
       row_len = src_dim[1] * src_dim[2];
       col_len = src_dim[3];
@@ -89,21 +91,35 @@ void TransferLayoutGeneral(const Context& dev_ctx,
                             x.data<phi::dtype::float16>(),
                             batch,
                             row_len,
-                            col_len);
+                            col_len,
+                            gpu_ctx);
       return;
     } else if (x.dtype() == phi::DataType::FLOAT32) {
-      funcs::BatchTranspose(
-          out->data<float>(), x.data<float>(), batch, row_len, col_len);
+      funcs::BatchTranspose(out->data<float>(),
+                            x.data<float>(),
+                            batch,
+                            row_len,
+                            col_len,
+                            gpu_ctx);
+      return;
+    } else if (x.dtype() == phi::DataType::BFLOAT16) {
+      funcs::BatchTranspose(out->data<phi::dtype::bfloat16>(),
+                            x.data<phi::dtype::bfloat16>(),
+                            batch,
+                            row_len,
+                            col_len,
+                            gpu_ctx);
       return;
     }
   }
+#endif
 
   PD_VISIT_ALL_TYPES(x.dtype(), "CastDataLayout", ([&] {
                        CastDataLayout<data_t, Context>(dev_ctx, x, axis, out);
                      }));
 }
 
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
 template <typename Context>
 void TransferLayoutMKLDNN(const Context& dev_ctx,
                           const DenseTensor& x,
@@ -188,7 +204,7 @@ void TransferLayoutKernel(const Context& dev_ctx,
     return;
   }
 
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
   TransferLayoutMKLDNN<Context>(dev_ctx,
                                 x,
                                 static_cast<DataLayout>(src_layout),

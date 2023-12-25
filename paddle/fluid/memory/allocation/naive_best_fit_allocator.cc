@@ -16,7 +16,6 @@
 
 #include <mutex>
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
 #include "paddle/fluid/memory/allocation/buddy_allocator.h"
 #include "paddle/fluid/memory/allocation/system_allocator.h"
@@ -30,7 +29,7 @@
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #include "paddle/fluid/platform/cuda_device_guard.h"
 #endif
-
+#include "paddle/fluid/platform/flags.h"
 PADDLE_DEFINE_EXPORTED_bool(
     init_allocated_mem,
     false,
@@ -39,10 +38,10 @@ PADDLE_DEFINE_EXPORTED_bool(
     "To find this error in time, we use init_allocated_mem to indicate "
     "that initializing the allocated memory with a small value "
     "during unit testing.");
-DECLARE_double(fraction_of_gpu_memory_to_use);
-DECLARE_uint64(initial_gpu_memory_in_mb);
-DECLARE_uint64(reallocate_gpu_memory_in_mb);
-DECLARE_bool(benchmark);
+PHI_DECLARE_double(fraction_of_gpu_memory_to_use);
+PHI_DECLARE_uint64(initial_gpu_memory_in_mb);
+PHI_DECLARE_uint64(reallocate_gpu_memory_in_mb);
+PD_DECLARE_bool(benchmark);
 
 namespace paddle {
 namespace memory {
@@ -150,7 +149,7 @@ void *Alloc<platform::XPUPlace>(const platform::XPUPlace &place, size_t size) {
   VLOG(10) << "Allocate " << size << " bytes on " << platform::Place(place);
   void *p = nullptr;
 
-  platform::XPUDeviceGuard gurad(place.device);
+  platform::XPUDeviceGuard guard(place.device);
   int ret = xpu_malloc(reinterpret_cast<void **>(&p), size);
   if (ret != XPU_SUCCESS) {
     VLOG(10) << "xpu memory malloc(" << size << ") failed, try again";
@@ -183,7 +182,7 @@ void Free<platform::XPUPlace>(const platform::XPUPlace &place,
   VLOG(10) << "Free " << size << " bytes on " << platform::Place(place);
   VLOG(10) << "Free pointer=" << p << " on " << platform::Place(place);
 
-  platform::XPUDeviceGuard gurad(place.device);
+  platform::XPUDeviceGuard guard(place.device);
   xpu_free(p);
 #else
   PADDLE_THROW(
@@ -249,11 +248,11 @@ class GPUBuddyAllocatorList {
 
     std::call_once(*init_flags_[pos], [this, pos] {
       platform::SetDeviceId(devices_[pos]);
-      allocators_[pos].reset(
-          new BuddyAllocator(std::unique_ptr<detail::SystemAllocator>(
-                                 new detail::GPUAllocator(devices_[pos])),
-                             platform::GpuMinChunkSize(),
-                             platform::GpuMaxChunkSize()));
+      allocators_[pos] = std::make_unique<BuddyAllocator>(
+          std::unique_ptr<detail::SystemAllocator>(
+              new detail::GPUAllocator(devices_[pos])),
+          platform::GpuMinChunkSize(),
+          platform::GpuMaxChunkSize());
       VLOG(10) << "\n\nNOTE:\n"
                << "You can set GFlags environment variable "
                << "'FLAGS_fraction_of_gpu_memory_to_use' "
@@ -380,14 +379,14 @@ template <>
 void *Alloc<platform::CUDAPinnedPlace>(const platform::CUDAPinnedPlace &place,
                                        size_t size) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  VLOG(10) << "Allocate " << size << " bytes on " << platform::Place(place);
   auto *buddy_allocator = GetCUDAPinnedBuddyAllocator();
   void *ptr = buddy_allocator->Alloc(size);
 
   if (ptr == nullptr) {
     LOG(WARNING) << "cudaHostAlloc Cannot allocate " << size
                  << " bytes in CUDAPinnedPlace";
-  }
-  if (FLAGS_init_allocated_mem) {
+  } else if (FLAGS_init_allocated_mem) {
     memset(ptr, 0xEF, size);
   }
   return ptr;
@@ -402,6 +401,7 @@ void Free<platform::CUDAPinnedPlace>(const platform::CUDAPinnedPlace &place,
                                      void *p,
                                      size_t size) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  VLOG(10) << "Free " << size << " bytes on " << platform::Place(place);
   GetCUDAPinnedBuddyAllocator()->Free(p);
 #else
   PADDLE_THROW(platform::errors::PermissionDenied(
@@ -413,6 +413,7 @@ template <>
 uint64_t Release<platform::CUDAPinnedPlace>(
     const platform::CUDAPinnedPlace &place) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  VLOG(10) << "Release on " << platform::Place(place);
   return GetCUDAPinnedBuddyAllocator()->Release();
 #else
   PADDLE_THROW(platform::errors::PermissionDenied(
@@ -428,7 +429,7 @@ class BuddyAllocatorList {
       : device_type_(device_type) {
     auto devices = phi::DeviceManager::GetSelectedDeviceList(device_type);
     for (auto dev_id : devices) {
-      init_flags_[dev_id].reset(new std::once_flag());
+      init_flags_[dev_id] = std::make_unique<std::once_flag>();
     }
   }
 
@@ -458,13 +459,13 @@ class BuddyAllocatorList {
       phi::DeviceManager::SetDevice(device_type_, dev_id);
       platform::CustomPlace place(device_type_, dev_id);
 
-      allocators_[dev_id].reset(new BuddyAllocator(
+      allocators_[dev_id] = std::make_unique<BuddyAllocator>(
           std::unique_ptr<detail::SystemAllocator>(
               new detail::CustomAllocator(device_type_, dev_id)),
           phi::DeviceManager::GetMinChunkSize(place),
           phi::DeviceManager::GetMaxChunkSize(place),
           phi::DeviceManager::GetExtraPaddingSize(place),
-          device_type_));
+          device_type_);
     });
 
     return allocators_[dev_id].get();
@@ -529,7 +530,9 @@ void Free<platform::CustomPlace>(const platform::CustomPlace &place,
                                  size_t size) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
   VLOG(10) << "Free pointer=" << p << " on " << platform::Place(place);
-  GetBuddyAllocator(place)->Free(p);
+  if (phi::DeviceManager::HasDeviceType(place.GetDeviceType())) {
+    GetBuddyAllocator(place)->Free(p);
+  }
 #else
   PADDLE_THROW(platform::errors::PermissionDenied(
       "'CustomPlace' is not supported in CPU only device."));
@@ -556,7 +559,9 @@ size_t Used<platform::CustomPlace>(const platform::CustomPlace &place) {
 #endif
 }
 
-struct AllocVisitor : std::unary_function<const Place, void *> {
+struct AllocVisitor {
+  using argument_type = const Place;
+  using result_type = void *;
   inline explicit AllocVisitor(size_t size) : size_(size) {}
 
   template <typename Place>
@@ -568,7 +573,9 @@ struct AllocVisitor : std::unary_function<const Place, void *> {
   size_t size_;
 };
 
-struct FreeVisitor : public std::unary_function<const Place, void> {
+struct FreeVisitor {
+  using argument_type = const Place;
+  using result_type = void;
   inline explicit FreeVisitor(void *ptr, size_t size)
       : ptr_(ptr), size_(size) {}
 
@@ -582,7 +589,9 @@ struct FreeVisitor : public std::unary_function<const Place, void> {
   size_t size_;
 };
 
-struct ReleaseVisitor : std::unary_function<const Place, uint64_t> {
+struct ReleaseVisitor {
+  using argument_type = const Place;
+  using result_type = uint64_t;
   template <typename Place>
   inline uint64_t operator()(const Place &place) const {
     return Release<Place>(place);

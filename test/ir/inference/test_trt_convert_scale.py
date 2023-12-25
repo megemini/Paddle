@@ -43,12 +43,14 @@ class TrtConvertScaleTest(TrtLayerAutoScanTest):
                 )
             elif self.dims == 1:
                 return np.ones([24]).astype(np.int32 if is_int else np.float32)
+            elif self.dims == 0:
+                return np.ones([]).astype(np.int32 if is_int else np.float32)
 
         def generate_weight1(attrs: List[Dict[str, Any]], is_int):
             return np.ones([1]).astype(np.int32 if is_int else np.float32)
 
         for num_input in [0, 1]:
-            for dims in [1, 2, 3, 4]:
+            for dims in [0, 1, 2, 3, 4]:
                 for batch in [1, 2]:
                     for scale in [0.1, -1.0]:
                         for bias in [0.0, 1.2]:
@@ -111,6 +113,9 @@ class TrtConvertScaleTest(TrtLayerAutoScanTest):
                                             )
                                         },
                                         outputs=["scale_out"],
+                                        no_cast_list=["scale_input"]
+                                        if is_int
+                                        else [],
                                     )
 
                                     yield program_config
@@ -141,6 +146,10 @@ class TrtConvertScaleTest(TrtLayerAutoScanTest):
                 self.dynamic_shape.min_input_shape = {"scale_input": [24]}
                 self.dynamic_shape.max_input_shape = {"scale_input": [48]}
                 self.dynamic_shape.opt_input_shape = {"scale_input": [24]}
+            elif self.dims == 0:
+                self.dynamic_shape.min_input_shape = {"scale_input": []}
+                self.dynamic_shape.max_input_shape = {"scale_input": []}
+                self.dynamic_shape.opt_input_shape = {"scale_input": []}
 
         def clear_dynamic_shape():
             self.dynamic_shape.min_input_shape = {}
@@ -148,6 +157,8 @@ class TrtConvertScaleTest(TrtLayerAutoScanTest):
             self.dynamic_shape.opt_input_shape = {}
 
         def generate_trt_nodes_num(attrs, dynamic_shape):
+            if not dynamic_shape and (self.dims == 1 or self.dims == 0):
+                return 0, 3
             return 1, 2
 
         attrs = [
@@ -157,10 +168,12 @@ class TrtConvertScaleTest(TrtLayerAutoScanTest):
         # for static_shape
         clear_dynamic_shape()
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, False
         ), 1e-5
         self.trt_param.precision = paddle_infer.PrecisionType.Half
+        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, False
         ), (1e-3, 1e-3)
@@ -168,10 +181,12 @@ class TrtConvertScaleTest(TrtLayerAutoScanTest):
         # for dynamic_shape
         generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), 1e-5
         self.trt_param.precision = paddle_infer.PrecisionType.Half
+        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), (1e-3, 1e-3)
@@ -189,23 +204,12 @@ class TrtConvertScaleTest(TrtLayerAutoScanTest):
         )
 
         def teller2(program_config, predictor_config):
-            if self.dims == 1 and len(self.dynamic_shape.min_input_shape) == 0:
-                return True
-            return False
-
-        self.add_skip_case(
-            teller2,
-            SkipReasons.TRT_NOT_SUPPORT,
-            "INPUT DIM EQUAL TO 1 OF STATIC SHAPE NOT SUPPORT",
-        )
-
-        def teller3(program_config, predictor_config):
             if self.is_int and len(self.dynamic_shape.min_input_shape) == 0:
                 return True
             return False
 
         self.add_skip_case(
-            teller3,
+            teller2,
             SkipReasons.TRT_NOT_SUPPORT,
             "INTEGER INPUT OF STATIC SHAPE NOT SUPPORT",
         )

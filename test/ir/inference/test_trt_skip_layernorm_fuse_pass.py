@@ -20,14 +20,14 @@ import numpy as np
 from inference_pass_test import InferencePassTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.core import AnalysisConfig, PassVersionChecker
+from paddle import base
+from paddle.base import core
+from paddle.base.core import AnalysisConfig, PassVersionChecker
 
 
 class SkipLayernormFusePassTest0(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 3, 128, 128], dtype="float32"
             )
@@ -60,8 +60,9 @@ class SkipLayernormFusePassTest0(InferencePassTest):
         return paddle.add(data1, data2)
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu, atol=0.01, rtol=0.00001)
@@ -72,7 +73,7 @@ class SkipLayernormFusePassTest0(InferencePassTest):
 
 class SkipLayernormFusePassTest1(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 256, 1536], dtype="float32"
             )
@@ -107,8 +108,9 @@ class SkipLayernormFusePassTest1(InferencePassTest):
         return paddle.add(data1, data2)
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu, atol=0.01, rtol=0.00001)
@@ -119,7 +121,7 @@ class SkipLayernormFusePassTest1(InferencePassTest):
 
 class SkipLayernormFusePassTest2(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 128, 64, 768], dtype="float32"
             )
@@ -154,8 +156,9 @@ class SkipLayernormFusePassTest2(InferencePassTest):
         return paddle.add(data1, data2)
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu, atol=0.1, rtol=0.00001)
@@ -166,7 +169,7 @@ class SkipLayernormFusePassTest2(InferencePassTest):
 
 class SkipLayernormFusePassTest3(InferencePassTest):
     def setUp(self):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             data1 = paddle.static.data(
                 name="data1", shape=[-1, 128, 128], dtype="float32"
             )
@@ -201,8 +204,9 @@ class SkipLayernormFusePassTest3(InferencePassTest):
         return paddle.add(data1, data2)
 
     def test_check_output(self):
-        if os.path.exists(self.path + "_opt_cache"):
-            shutil.rmtree(self.path + "_opt_cache")
+        opt_path = os.path.join(self.path, '_opt_cache')
+        if os.path.exists(opt_path):
+            shutil.rmtree(opt_path)
         if core.is_compiled_with_cuda():
             use_gpu = True
             self.check_output_with_option(use_gpu, atol=0.1, rtol=0.00001)

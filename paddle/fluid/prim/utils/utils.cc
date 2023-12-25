@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include "paddle/fluid/prim/utils/utils.h"
+#include "paddle/fluid/platform/flags.h"
 #include "paddle/fluid/prim/utils/static/static_global_utils.h"
-#include "paddle/phi/core/flags.h"
 
 PADDLE_DEFINE_EXPORTED_bool(prim_enabled, false, "enable_prim or not");
 namespace paddle {
@@ -53,6 +53,13 @@ size_t PrimCommonUtils::CheckSkipCompOps(const std::string& op_type) {
 
 void PrimCommonUtils::AddSkipCompOps(const std::string& op_type) {
   StaticCompositeContext::Instance().AddSkipCompOps(op_type);
+}
+
+void PrimCommonUtils::SetPrimBackwardBlacklist(
+    const std::unordered_set<std::string>& op_types) {
+  for (const auto& item : op_types) {
+    StaticCompositeContext::Instance().AddSkipCompOps(item);
+  }
 }
 
 void PrimCommonUtils::RemoveSkipCompOps(const std::string& op_type) {

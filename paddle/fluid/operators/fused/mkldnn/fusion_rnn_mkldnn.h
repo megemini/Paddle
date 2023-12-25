@@ -30,12 +30,12 @@ class RNNMKLDNNHandler : public phi::funcs::OneDNNHandlerT<T, T_alg> {
  public:
   RNNMKLDNNHandler(const paddle::framework::ExecutionContext& ctx,
                    const phi::OneDNNContext& dev_ctx,
-                   const dnnl::engine onednn_engine,
+                   const dnnl::engine onednn_engine UNUSED,
                    platform::Place cpu_place,
-                   const phi::DenseTensor* input,
-                   const phi::DenseTensor* weight_h,
-                   const phi::DenseTensor* h0,
-                   const bool is_reverse,
+                   const phi::DenseTensor* input UNUSED,
+                   const phi::DenseTensor* weight_h UNUSED,
+                   const phi::DenseTensor* h0 UNUSED,
+                   const bool is_reverse UNUSED,
                    const int64_t N,
                    const int64_t Ti,
                    const int64_t IC,
@@ -81,7 +81,7 @@ class RNNMKLDNNHandler : public phi::funcs::OneDNNHandlerT<T, T_alg> {
 
   bool is_NTC(const dnnl::memory::desc& md) {
     auto ntc_md = dnnl::memory::desc(
-        md.dims(), md.data_type(), dnnl::memory::format_tag::ntc);
+        md.get_dims(), md.get_data_type(), dnnl::memory::format_tag::ntc);
     return md == ntc_md;
   }
 
