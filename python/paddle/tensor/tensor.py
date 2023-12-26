@@ -13,3 +13,15 @@
 # limitations under the License.
 
 # TODO: define the basic tensor classes
+
+from __future__ import annotations
+
+from .manipulation import broadcast, cast
+from .math import add
+
+
+class Tensor:
+    def cast(x: Tensor, dtype) -> Tensor: ...
+    def cast(dtype) -> Tensor: ...
+    def add(x: Tensor, y: Tensor, name: str | None = None) -> Tensor: ...
+

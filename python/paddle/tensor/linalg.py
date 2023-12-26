@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .tensor import Tensor
+
+
 import numpy as np
 
 import paddle
@@ -1109,7 +1117,7 @@ def cond(x, p=None, name=None):
         )
 
 
-def dot(x, y, name=None):
+def dot(x: Tensor, y: Tensor, name: str | None = None) -> Tensor:
     """
     This operator calculates inner product for vectors.
 
@@ -1647,7 +1655,7 @@ def matrix_rank(x, tol=None, hermitian=False, name=None):
         return out
 
 
-def bmm(x, y, name=None):
+def bmm(x: Tensor, y: Tensor, name: str | None = None) -> Tensor:
     """
     Applies batched matrix multiplication to two tensors.
 

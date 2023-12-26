@@ -11,6 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .tensor import Tensor
+
+
 """
 math functions
 """
@@ -146,7 +155,7 @@ def _get_reduce_axis_with_tensor(axis, x):
     return reduce_all, axis
 
 
-def log(x, name=None):
+def log(x: Tensor, name: str | None = None) -> Tensor:
     r"""
     Calculates the natural log of the given input Tensor, element-wise.
 
@@ -640,7 +649,7 @@ def _elementwise_op(helper):
     return helper.append_activation(out)
 
 
-def add(x, y, name=None):
+def add(x: Tensor, y: Tensor, name: str | None = None) -> Tensor:
     """
     Elementwise Add Operator.
     Add two tensors element-wise

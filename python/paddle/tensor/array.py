@@ -14,6 +14,14 @@
 
 # Define functions about array.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass
+
+
 import paddle
 
 from ..base.data_feeder import check_type, check_variable_and_dtype

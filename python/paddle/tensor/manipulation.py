@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .tensor import Tensor
+
+
 # TODO: define functions to manipulate a tensor
 
 import numpy as np
@@ -178,7 +186,7 @@ def tensor_array_to_tensor(input, axis=1, use_stack=False, name=None):
         return out, out_index
 
 
-def cast(x, dtype):
+def cast(x: Tensor, dtype) -> Tensor:
     """
 
     Take in the Tensor :attr:`x` with :attr:`x.dtype` and cast it
@@ -1338,7 +1346,9 @@ def concat(x, axis=0, name=None):
         return out
 
 
-def broadcast_tensors(input, name=None):
+def broadcast_tensors(
+    input: list[Tensor], name: str | None = None
+) -> list[Tensor]:
     """
     Broadcast a list of tensors following broadcast semantics
 

@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .tensor import Tensor
+
 # TODO: define functions to get create a tensor
 
 import math
@@ -2261,7 +2268,7 @@ def empty_like(x, dtype=None, name=None):
         return out
 
 
-def assign(x, output=None):
+def assign(x: Tensor, output=None) -> Tensor:
     """
 
     Copy value of the :attr:`x` to the :attr:`output`.
@@ -2605,7 +2612,7 @@ def _memcpy(input, place=None, output=None):
     return output
 
 
-def complex(real, imag, name=None):
+def complex(real: Tensor, imag: Tensor, name: str | None = None) -> Tensor:
     """Return a compelx tensor given the real and image component.
 
     Args:

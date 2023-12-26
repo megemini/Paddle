@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .tensor import Tensor
+
 # TODO: define logic functions of a tensor
 
 import paddle
@@ -339,7 +346,7 @@ def logical_not_(x, name=None):
         return _C_ops.logical_not_(x)
 
 
-def is_empty(x, name=None):
+def is_empty(x: Tensor, name: str | None = None) -> Tensor:
     """
 
     Test whether a Tensor is empty.
@@ -503,7 +510,7 @@ def allclose(x, y, rtol=1e-05, atol=1e-08, equal_nan=False, name=None):
 
 
 @templatedoc()
-def equal(x, y, name=None):
+def equal(x: Tensor, y: Tensor, name: str | None = None) -> Tensor:
     """
 
     This layer returns the truth value of :math:`x == y` elementwise.
