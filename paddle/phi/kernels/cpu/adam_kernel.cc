@@ -13,8 +13,9 @@
 // limitations under the License.
 
 #include "paddle/phi/kernels/adam_kernel.h"
-
 #include <vector>
+#include "paddle/phi/common/amp_type_traits.h"
+#include "paddle/phi/common/type_traits.h"
 
 #include "glog/logging.h"
 
@@ -29,29 +30,29 @@ PD_DECLARE_int32(inner_op_parallelism);
 namespace phi {
 
 template <typename T, typename Context>
-void AdamDenseKernel(const Context& dev_ctx,
-                     const DenseTensor& param,
-                     const DenseTensor& grad,
-                     const DenseTensor& learning_rate,
-                     const DenseTensor& moment1,
-                     const DenseTensor& moment2,
-                     const DenseTensor& beta1_pow,
-                     const DenseTensor& beta2_pow,
-                     const paddle::optional<DenseTensor>& master_param,
-                     const paddle::optional<DenseTensor>& skip_update,
-                     const Scalar& beta1,
-                     const Scalar& beta2,
-                     const Scalar& epsilon,
-                     bool lazy_mode,
-                     int64_t min_row_size_to_use_multithread,
-                     bool multi_precision,
-                     bool use_global_beta_pow,
-                     DenseTensor* param_out,
-                     DenseTensor* moment1_out,
-                     DenseTensor* moment2_out,
-                     DenseTensor* beta1_pow_out,
-                     DenseTensor* beta2_pow_out,
-                     DenseTensor* master_param_outs) {
+void AdamDenseKernelRaw(const Context& dev_ctx,
+                        const DenseTensor& param,
+                        const DenseTensor& grad,
+                        const DenseTensor& learning_rate,
+                        const DenseTensor& moment1,
+                        const DenseTensor& moment2,
+                        const DenseTensor& beta1_pow,
+                        const DenseTensor& beta2_pow,
+                        const paddle::optional<DenseTensor>& master_param,
+                        const paddle::optional<DenseTensor>& skip_update,
+                        const Scalar& beta1,
+                        const Scalar& beta2,
+                        const Scalar& epsilon,
+                        bool lazy_mode,
+                        int64_t min_row_size_to_use_multithread,
+                        bool multi_precision,
+                        bool use_global_beta_pow,
+                        DenseTensor* param_out,
+                        DenseTensor* moment1_out,
+                        DenseTensor* moment2_out,
+                        DenseTensor* beta1_pow_out,
+                        DenseTensor* beta2_pow_out,
+                        DenseTensor* master_param_outs) {
   VLOG(4) << "use_global_beta_pow:" << use_global_beta_pow;
 
   bool skip_update_ = false;
@@ -168,6 +169,116 @@ void AdamDenseKernel(const Context& dev_ctx,
   }
 }
 
+// If T is not complex
+template <
+    typename T,
+    typename Context,
+    std::enable_if_t<!std::is_same<T, phi::dtype::complex<float>>::value &&
+                         !std::is_same<T, phi::dtype::complex<double>>::value,
+                     bool> = true>
+void AdamDenseKernel(const Context& dev_ctx,
+                     const DenseTensor& param,
+                     const DenseTensor& grad,
+                     const DenseTensor& learning_rate,
+                     const DenseTensor& moment1,
+                     const DenseTensor& moment2,
+                     const DenseTensor& beta1_pow,
+                     const DenseTensor& beta2_pow,
+                     const paddle::optional<DenseTensor>& master_param,
+                     const paddle::optional<DenseTensor>& skip_update,
+                     const Scalar& beta1,
+                     const Scalar& beta2,
+                     const Scalar& epsilon,
+                     bool lazy_mode,
+                     int64_t min_row_size_to_use_multithread,
+                     bool multi_precision,
+                     bool use_global_beta_pow,
+                     DenseTensor* param_out,
+                     DenseTensor* moment1_out,
+                     DenseTensor* moment2_out,
+                     DenseTensor* beta1_pow_out,
+                     DenseTensor* beta2_pow_out,
+                     DenseTensor* master_param_outs) {
+  // AdamDenseKernelRaw<T, Context>(dev_ctx,
+  //                                param,
+  //                                grad,
+  //                                learning_rate,
+  //                                moment1,
+  //                                moment2,
+  //                                beta1_pow,
+  //                                beta2_pow,
+  //                                master_param,
+  //                                skip_update,
+  //                                beta1,
+  //                                beta2,
+  //                                epsilon,
+  //                                lazy_mode,
+  //                                min_row_size_to_use_multithread,
+  //                                multi_precision,
+  //                                use_global_beta_pow,
+  //                                param_out,
+  //                                moment1_out,
+  //                                moment2_out,
+  //                                beta1_pow_out,
+  //                                beta2_pow_out,
+  //                                master_param_outs);
+}
+
+// If T is complex
+template <
+    typename T,
+    typename Context,
+    std::enable_if_t<std::is_same<T, phi::dtype::complex<float>>::value ||
+                         std::is_same<T, phi::dtype::complex<double>>::value,
+                     bool> = true>
+void AdamDenseKernel(const Context& dev_ctx,
+                     const DenseTensor& param,
+                     const DenseTensor& grad,
+                     const DenseTensor& learning_rate,
+                     const DenseTensor& moment1,
+                     const DenseTensor& moment2,
+                     const DenseTensor& beta1_pow,
+                     const DenseTensor& beta2_pow,
+                     const paddle::optional<DenseTensor>& master_param,
+                     const paddle::optional<DenseTensor>& skip_update,
+                     const Scalar& beta1,
+                     const Scalar& beta2,
+                     const Scalar& epsilon,
+                     bool lazy_mode,
+                     int64_t min_row_size_to_use_multithread,
+                     bool multi_precision,
+                     bool use_global_beta_pow,
+                     DenseTensor* param_out,
+                     DenseTensor* moment1_out,
+                     DenseTensor* moment2_out,
+                     DenseTensor* beta1_pow_out,
+                     DenseTensor* beta2_pow_out,
+                     DenseTensor* master_param_outs) {
+  // AdamDenseKernelRaw<T, Context>(dev_ctx,
+  //                                param,
+  //                                grad,
+  //                                learning_rate,
+  //                                moment1,
+  //                                moment2,
+  //                                beta1_pow,
+  //                                beta2_pow,
+  //                                master_param,
+  //                                skip_update,
+  //                                beta1,
+  //                                beta2,
+  //                                epsilon,
+  //                                lazy_mode,
+  //                                min_row_size_to_use_multithread,
+  //                                multi_precision,
+  //                                use_global_beta_pow,
+  //                                param_out,
+  //                                moment1_out,
+  //                                moment2_out,
+  //                                beta1_pow_out,
+  //                                beta2_pow_out,
+  //                                master_param_outs, )
+}
+
 template <typename T, typename Context>
 void MergedAdamKernel(
     const Context& dev_ctx,
@@ -271,8 +382,14 @@ void MergedAdamKernel(
 
 }  // namespace phi
 
-PD_REGISTER_KERNEL(adam, CPU, ALL_LAYOUT, phi::AdamDenseKernel, float, double) {
-}
+PD_REGISTER_KERNEL(adam,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::AdamDenseKernel,
+                   float,
+                   double,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 
 PD_REGISTER_KERNEL(
     merged_adam, CPU, ALL_LAYOUT, phi::MergedAdamKernel, float, double) {}
