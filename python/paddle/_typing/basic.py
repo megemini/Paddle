@@ -36,8 +36,6 @@ if TYPE_CHECKING:
     from paddle.regularizer import WeightDecayRegularizer
 
 
-Numberic: TypeAlias = Union[int, float, complex, np.number, "Tensor"]
-TensorLike: TypeAlias = Union[npt.NDArray[Any], "Tensor", Numberic]
 _TensorIndexItem: TypeAlias = Union[
     None, bool, int, slice, "Tensor", EllipsisType
 ]
@@ -55,10 +53,15 @@ NestedList = Union[_T, List["NestedList[_T]"]]
 NestedStructure = Union[
     _T, Dict[str, "NestedStructure[_T]"], Sequence["NestedStructure[_T]"]
 ]
+
+Numberic: TypeAlias = Union[int, float, complex, np.number, "Tensor"]
 IntSequence = Sequence[int]
 NumbericSequence = Sequence[Numberic]
 NestedNumbericSequence: TypeAlias = NestedSequence[Numberic]
 TensorOrTensors: TypeAlias = Union["Tensor", Sequence["Tensor"]]
+TensorLike: TypeAlias = Union[
+    npt.NDArray[Any], "Tensor", Numberic, NestedNumbericSequence
+]
 
 ParamAttrLike: TypeAlias = Union[
     "ParamAttr", "Initializer", "WeightDecayRegularizer", str, bool
