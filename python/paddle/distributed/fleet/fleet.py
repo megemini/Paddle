@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import copy
 import os
 import time
+from typing import TYPE_CHECKING, Literal, overload
 
 import paddle
 from paddle.base import compiler
@@ -30,6 +33,12 @@ from .base.runtime_factory import RuntimeFactory
 from .base.strategy_compiler import StrategyCompiler
 from .meta_parallel import model_parallel_random_seed
 from .utils.log_util import logger, set_log_level
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle.base.core import DistFleetWrapper, _Scope
+    from paddle.distributed.communication.group import Group
+    from paddle.optimizer import Optimizer
 
 __all__ = []
 
@@ -154,7 +163,10 @@ class Fleet:
 
     """
 
-    def __init__(self):
+    strategy_compiler: StrategyCompiler | None
+    user_defined_optimizer: Optimizer
+
+    def __init__(self) -> None:
         self._role_maker = None
         self.strategy_compiler = None
         self._is_collective = False
@@ -165,11 +177,11 @@ class Fleet:
 
     def init(
         self,
-        role_maker=None,
-        is_collective=False,
-        strategy=None,
-        log_level="INFO",
-    ):
+        role_maker: RoleMakerBase | None = None,
+        is_collective: bool = False,
+        strategy: DistributedStrategy | None = None,
+        log_level: int | str = "INFO",
+    ) -> None:
         """
         Initialize role_maker in Fleet.
 
@@ -177,7 +189,7 @@ class Fleet:
         what you want to run your code behind.
 
         Args:
-            role_maker (RoleMakerBase, optional): A ``RoleMakerBase`` containing the configuration
+            role_maker (RoleMakerBase|None, optional): A ``RoleMakerBase`` containing the configuration
                 of environment variables related to distributed training.If you did not initialize
                 the rolemaker by yourself, it will be automatically initialized to PaddleRoleMaker.
                 The default value is None.
@@ -185,7 +197,7 @@ class Fleet:
                 runs on Collective mode or ParameterServer mode. True means the program runs on
                 Collective mode, and False means running on ParameterServer mode. The default value
                 is False.
-            strategy (DistributedStrategy): Extra properties for distributed training.
+            strategy (DistributedStrategy|None): Extra properties for distributed training.
                 For details, please refer to paddle.distributed.fleet.DistributedStrategy. Default: None.
             log_level (Integer, String, optional): A ``Integer`` or ``String`` Variable determining how hight
                 the logging level is. Default is "INFO".
@@ -361,13 +373,13 @@ class Fleet:
     # test allreduce perf
     def allreduce_perf(
         self,
-        iteration,
-        x,
-        group,
-        perf_size,
-        perf_threshold_time,
-        warmup=False,
-    ):
+        iteration: int,
+        x: Tensor,
+        group: Group,
+        perf_size: int,
+        perf_threshold_time: int,
+        warmup: bool = False,
+    ) -> None:
         if group is None or group.nranks <= 1:
             logger.warning("allreduce_perf is invalid, group invalid!")
             return
@@ -390,7 +402,14 @@ class Fleet:
             )
 
     # test reduce perf
-    def reduce_perf(self, iteration, x, group, perf_size, perf_threshold_time):
+    def reduce_perf(
+        self,
+        iteration: int,
+        x: Tensor,
+        group: Group,
+        perf_size: int,
+        perf_threshold_time: int,
+    ) -> None:
         if group is None or group.nranks <= 1:
             logger.warning("reduce_perf is invalid, group invalid!")
             return
@@ -412,8 +431,13 @@ class Fleet:
 
     # test broadcast perf
     def broadcast_perf(
-        self, iteration, x, group, perf_size, perf_threshold_time
-    ):
+        self,
+        iteration: int,
+        x: Tensor,
+        group: Group,
+        perf_size: int,
+        perf_threshold_time: int,
+    ) -> None:
         if group is None or group.nranks <= 1:
             logger.warning("broadcast_perf is invalid, group invalid!")
             return
@@ -435,8 +459,13 @@ class Fleet:
 
     # test allgather perf
     def allgather_perf(
-        self, iteration, x, group, perf_size, perf_threshold_time
-    ):
+        self,
+        iteration: int,
+        x: Tensor,
+        group: Group,
+        perf_size: int,
+        perf_threshold_time: int,
+    ) -> None:
         if group is None or group.nranks <= 1:
             logger.warning("allgather_perf is invalid, group invalid!")
             return
@@ -460,12 +489,12 @@ class Fleet:
     # test reduce_scatter perf
     def reduce_scatter_perf(
         self,
-        iteration,
-        x,
-        group,
-        perf_size,
-        perf_threshold_time,
-    ):
+        iteration: int,
+        x: Tensor,
+        group: Group,
+        perf_size: int,
+        perf_threshold_time: int,
+    ) -> None:
         if group is None or group.nranks <= 1:
             logger.warning("reduce_scatter_perf is invalid, group invalid!")
             return
@@ -500,7 +529,12 @@ class Fleet:
                 f"[Perf Warning] ReduceScatter Test Timeout! {ret} > {perf_threshold_time}"
             )
 
-    def _collective_perf_impl(self, round=50, context={}, hcg=None):
+    def _collective_perf_impl(
+        self,
+        round: int = 50,
+        context: dict[str, tuple[int, int]] = {},
+        hcg: tp.HybridCommunicateGroup | None = None,
+    ) -> None:
         if hcg is None:
             hcg = self.get_hybrid_communicate_group()
 
@@ -560,7 +594,14 @@ class Fleet:
                 )
                 nbytes = nbytes << 1
 
-    def collective_perf(self, comm_type, round=50, size_and_time={}):
+    def collective_perf(
+        self,
+        comm_type: Literal[
+            "allreduce", "broadcast", "reduce", "allgather", "reduce_scatter"
+        ],
+        round: int = 50,
+        size_and_time: dict[int, int] = {},
+    ) -> None:
         """
         Run performance test for given communication type
         and compare the time cost with the threshold.
@@ -595,7 +636,7 @@ class Fleet:
             context = {comm_type: [size, time_threshold]}
             self._collective_perf_impl(round=round, context=context)
 
-    def _init_hybrid_parallel_env(self):
+    def _init_hybrid_parallel_env(self) -> None:
         """initialize the hybrid environment."""
         self.hybrid_configs = self._user_defined_strategy.hybrid_configs
         self.dp_degree = self.hybrid_configs["dp_degree"]
@@ -660,15 +701,15 @@ class Fleet:
             else:
                 model_parallel_random_seed(tensor_init_seed)
 
-    def get_hybrid_communicate_group(self):
+    def get_hybrid_communicate_group(self) -> tp.HybridCommunicateGroup:
         assert self._hcg is not None
         return self._hcg
 
-    def get_hybrid_parallel_topology(self):
+    def get_hybrid_parallel_topology(self) -> tp.CommunicateTopology:
         assert self._topology is not None
         return self._topology
 
-    def is_first_worker(self):
+    def is_first_worker(self) -> bool:
         """
         Check whether the node is the first instance of worker.
 
@@ -685,7 +726,7 @@ class Fleet:
         """
         return self._role_maker._is_first_worker()
 
-    def worker_index(self):
+    def worker_index(self) -> int:
         """
         Get current worker index.
 
@@ -703,7 +744,7 @@ class Fleet:
         """
         return self._role_maker._worker_index()
 
-    def worker_num(self):
+    def worker_num(self) -> int:
         """
         Get current total worker number.
 
@@ -721,19 +762,19 @@ class Fleet:
         """
         return self._role_maker._worker_num()
 
-    def node_num(self):
+    def node_num(self) -> int:
         return self._role_maker._get_node_num()
 
-    def local_rank(self):
+    def local_rank(self) -> str:
         return self._role_maker._get_local_rank()
 
-    def local_device_ids(self):
+    def local_device_ids(self) -> str:
         return self._role_maker._get_local_device_ids()
 
-    def world_device_ids(self):
+    def world_device_ids(self) -> str:
         return self._role_maker._get_world_device_ids()
 
-    def is_worker(self):
+    def is_worker(self) -> bool:
         """
         Check whether the node is an instance of worker.
 
@@ -752,8 +793,20 @@ class Fleet:
         """
         return self._role_maker._is_worker()
 
-    def is_coordinator(self):
+    def is_coordinator(self) -> bool:
         return self._role_maker._is_coordinator()
+
+    @overload
+    def worker_endpoints(self, to_string: Literal[True] = ...) -> str:
+        ...
+
+    @overload
+    def worker_endpoints(self, to_string: Literal[False] = ...) -> list[str]:
+        ...
+
+    @overload
+    def worker_endpoints(self, to_string: bool = ...) -> str | list[str]:
+        ...
 
     def worker_endpoints(self, to_string=False):
         """
@@ -776,7 +829,7 @@ class Fleet:
         else:
             return self._role_maker._get_trainer_endpoints()
 
-    def server_num(self):
+    def server_num(self) -> int:
         """
         Get current total worker number.
 
@@ -793,7 +846,7 @@ class Fleet:
         """
         return len(self._role_maker._get_pserver_endpoints())
 
-    def server_index(self):
+    def server_index(self) -> int:
         """
         Get current server index.
 
@@ -810,6 +863,18 @@ class Fleet:
 
         """
         return self._role_maker._server_index()
+
+    @overload
+    def server_endpoints(self, to_string: Literal[True] = ...) -> str:
+        ...
+
+    @overload
+    def server_endpoints(self, to_string: Literal[False] = ...) -> list[str]:
+        ...
+
+    @overload
+    def server_endpoints(self, to_string: bool = ...) -> str | list[str]:
+        ...
 
     def server_endpoints(self, to_string=False):
         """
@@ -833,7 +898,7 @@ class Fleet:
         else:
             return self._role_maker._get_pserver_endpoints()
 
-    def is_server(self):
+    def is_server(self) -> bool:
         """
         Check whether the node is an instance of server.
 
@@ -852,7 +917,7 @@ class Fleet:
         """
         return self._role_maker._is_server()
 
-    def barrier_worker(self):
+    def barrier_worker(self) -> None:
         """
         barrier all workers
 
@@ -869,7 +934,9 @@ class Fleet:
         """
         self._role_maker._barrier("worker")
 
-    def all_reduce(self, input, mode="sum"):
+    def all_reduce(
+        self, input: list[float], mode: Literal["sum", "max", "min"] = "sum"
+    ) -> list[float]:
         """
         all reduce input between all workers, mode can be sum, mean or max, default is sum
 
@@ -889,7 +956,7 @@ class Fleet:
 
     @is_non_distributed_check
     @inited_runtime_handler
-    def init_worker(self, scopes=None):
+    def init_worker(self, scopes: list[_Scope] | None = None) -> None:
         """
         initialize `Communicator` for parameter server training.
 
@@ -914,18 +981,18 @@ class Fleet:
 
     @is_non_distributed_check
     @inited_runtime_handler
-    def init_coordinator(self, scopes=None):
+    def init_coordinator(self, scopes: list[_Scope] | None = None) -> None:
         """
         initialize coordinator node
         """
         self._runtime_handle._init_coordinator(scopes)
 
-    def make_fl_strategy(self):
+    def make_fl_strategy(self) -> None:
         self._runtime_handle._make_fl_strategy()
 
     @is_non_distributed_check
     @inited_runtime_handler
-    def get_fl_client(self):
+    def get_fl_client(self) -> DistFleetWrapper:
         """
         get worker(training node) ptr
         """
