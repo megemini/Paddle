@@ -157,7 +157,7 @@ class IterableDataset(Dataset[_T]):
             >>> import numpy as np
             >>> from paddle.io import IterableDataset, DataLoader, get_worker_info
 
-            >>> class SplitedIterableDataset(IterableDataset):
+            >>> class SplitedIterableDataset(IterableDataset): # type: ignore[type-arg]
             ...     def __init__(self, start, end):
             ...         self.start = start
             ...         self.end = end
@@ -212,7 +212,7 @@ class IterableDataset(Dataset[_T]):
             >>> import numpy as np
             >>> from paddle.io import IterableDataset, DataLoader, get_worker_info
 
-            >>> class RangeIterableDataset(IterableDataset):
+            >>> class RangeIterableDataset(IterableDataset): # type: ignore[type-arg]
             ...     def __init__(self, start, end):
             ...         self.start = start
             ...         self.end = end
