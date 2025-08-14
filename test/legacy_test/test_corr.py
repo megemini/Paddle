@@ -15,16 +15,14 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle import base
-
-np_minor_version = int((np.__version__).split('.')[1])
 
 
 def numpy_corr(np_arr, rowvar=True, dtype='float64'):
     # np.corrcoef support parameter 'dtype' since 1.20
-    if np_minor_version < 20:
+    if np.lib.NumpyVersion(np.__version__) < "1.20.0":
         return np.corrcoef(np_arr, rowvar=rowvar)
     return np.corrcoef(np_arr, rowvar=rowvar, dtype=dtype)
 
@@ -35,10 +33,7 @@ class Corr_Test(unittest.TestCase):
 
     def test_tensor_corr_default(self):
         typelist = ['float64', 'float32']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -60,11 +55,8 @@ class Corr_Test(unittest.TestCase):
 
     def test_tensor_corr_rowvar(self):
         typelist = ['float64', 'float32']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:

@@ -26,7 +26,7 @@ class TestShape3DFP32OneDNNOp(OpTest):
         self.op_type = "shape"
         self.python_api = paddle.tensor.shape
         self.config()
-        self.attrs = {'use_mkldnn': True}
+        self.attrs = {'use_onednn': True}
         self.inputs = {'Input': np.zeros(self.shape).astype(self.dtype)}
         self.outputs = {'Out': np.array(self.shape)}
 
@@ -35,7 +35,7 @@ class TestShape3DFP32OneDNNOp(OpTest):
         self.dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
 
 class TestShape0DFP32OneDNNOp(TestShape3DFP32OneDNNOp):

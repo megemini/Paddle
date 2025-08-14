@@ -20,13 +20,12 @@ limitations under the License. */
 #include "paddle/phi/core/distributed/auto_parallel/inferspmd_utils.h"
 #include "paddle/phi/core/distributed/auto_parallel/utils.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 using phi::distributed::auto_parallel::str_join;
 
 ////////////////// Utils Functions //////////////////
-std::vector<int64_t> GetDefaultDataParallelDimsmapping(
+std::vector<int64_t> GetDefaultDataParallelDimsMapping(
     const int64_t batch_axis_dim, const int ndim) {
   std::vector<int64_t> dims_mapping(ndim, -1);
   dims_mapping[0] = batch_axis_dim;
@@ -39,8 +38,8 @@ SpmdInfo DefaultDataParallelInferSpmd(
     const std::vector<const DistMetaTensor*>& ins,
     const std::vector<const DistMetaTensor*>& outs) {
   // step1: Build Einsum Notation for input tensor's batch axis
-  int64_t ninputs = ins.size();
-  int64_t noutputs = outs.size();
+  int64_t ninputs = static_cast<int64_t>(ins.size());
+  int64_t noutputs = static_cast<int64_t>(outs.size());
   std::vector<std::pair<std::string, std::vector<int64_t>>> axes_sharding_info;
   std::string batch_axis = "b";
 
@@ -60,9 +59,9 @@ SpmdInfo DefaultDataParallelInferSpmd(
     int ndim = outs[i]->dims().size();
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(ins[0]->dist_attr());
-    std::vector<int64_t> dst_dims_maping =
-        GetDefaultDataParallelDimsmapping(batch_axis_dim, ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping =
+        GetDefaultDataParallelDimsMapping(batch_axis_dim, ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     output_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -72,9 +71,9 @@ SpmdInfo DefaultDataParallelInferSpmd(
     int ndim = ins[i]->dims().size();
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(ins[i]->dist_attr());
-    std::vector<int64_t> dst_dims_maping =
-        GetDefaultDataParallelDimsmapping(batch_axis_dim, ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping =
+        GetDefaultDataParallelDimsMapping(batch_axis_dim, ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     dst_input_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -102,8 +101,8 @@ SpmdInfo DefaultDataParallelInferSpmdReverse(
     const std::vector<const DistMetaTensor*>& ins,
     const std::vector<const DistMetaTensor*>& outs) {
   // step1: Build Einsum Notation for input tensor's batch axis
-  int64_t ninputs = ins.size();
-  int64_t noutputs = outs.size();
+  int64_t ninputs = static_cast<int64_t>(ins.size());
+  int64_t noutputs = static_cast<int64_t>(outs.size());
   std::vector<std::pair<std::string, std::vector<int64_t>>> axes_sharding_info;
   std::string batch_axis = "b";
 
@@ -123,9 +122,9 @@ SpmdInfo DefaultDataParallelInferSpmdReverse(
     int ndim = outs[i]->dims().size();
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(outs[i]->dist_attr());
-    std::vector<int64_t> dst_dims_maping =
-        GetDefaultDataParallelDimsmapping(batch_axis_dim, ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping =
+        GetDefaultDataParallelDimsMapping(batch_axis_dim, ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     output_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -135,9 +134,9 @@ SpmdInfo DefaultDataParallelInferSpmdReverse(
     int ndim = ins[i]->dims().size();
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(ins[i]->dist_attr());
-    std::vector<int64_t> dst_dims_maping =
-        GetDefaultDataParallelDimsmapping(batch_axis_dim, ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping =
+        GetDefaultDataParallelDimsMapping(batch_axis_dim, ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     dst_input_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -162,5 +161,4 @@ SpmdInfo DefaultDataParallelInferSpmdReverse(
           ToArgDistAttr(output_dist_attrs)};
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

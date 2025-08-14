@@ -15,6 +15,7 @@
 #pragma once
 
 #include "paddle/fluid/framework/new_executor/instruction/instruction_base.h"
+#include "paddle/fluid/framework/new_executor/new_executor_defs.h"
 
 namespace pir {
 class Operation;
@@ -28,7 +29,7 @@ class ValueExecutionInfo;
 class LegacyKernelInstruction : public InstructionBase {
  public:
   LegacyKernelInstruction(size_t id,
-                          const platform::Place& place,
+                          const phi::Place& place,
                           ::pir::Operation* op,
                           const ValueExecutionInfo* value_exec_info);
 

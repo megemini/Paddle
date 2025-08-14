@@ -31,13 +31,14 @@ class InferencePassTest(unittest.TestCase):
         paddle.enable_static()
         super().__init__(methodName)
         paddle.enable_static()
-        self.main_program = base.Program()
-        self.startup_program = base.Program()
+        with paddle.pir_utils.OldIrGuard():
+            self.main_program = base.Program()
+            self.startup_program = base.Program()
         self.feeds = None
         self.fetch_list = None
 
-        self.enable_mkldnn = False
-        self.enable_mkldnn_bfloat16 = False
+        self.enable_onednn = False
+        self.enable_onednn_bfloat16 = False
         self.enable_trt = False
         self.enable_tensorrt_varseqlen = False
         self.trt_parameters = None
@@ -92,14 +93,15 @@ class InferencePassTest(unittest.TestCase):
         '''
         Return PaddlePaddle outputs.
         '''
-        with base.scope_guard(scope):
-            outs = executor.run(
-                program=program,
-                feed=self.feeds,
-                fetch_list=self.fetch_list,
-                return_numpy=False,
-            )
-        return outs
+        with paddle.pir_utils.OldIrGuard():
+            with base.scope_guard(scope):
+                outs = executor.run(
+                    program=program,
+                    feed=self.feeds,
+                    fetch_list=self.fetch_list,
+                    return_numpy=False,
+                )
+            return outs
 
     def _get_inference_outs(self, config):
         '''
@@ -114,7 +116,7 @@ class InferencePassTest(unittest.TestCase):
             tensor = predictor.get_input_tensor(name)
             feed_data = list(self.feeds.values())[i]
             tensor.copy_from_cpu(np.array(feed_data))
-            if type(feed_data) == base.LoDTensor:
+            if type(feed_data) == base.DenseTensor:
                 tensor.set_lod(feed_data.lod())
 
         predictor.zero_copy_run()
@@ -128,7 +130,7 @@ class InferencePassTest(unittest.TestCase):
         return outs
 
     def _get_analysis_config(
-        self, use_gpu=False, use_trt=False, use_mkldnn=False
+        self, use_gpu=False, use_trt=False, use_onednn=False
     ):
         '''
         Return a new object of AnalysisConfig.
@@ -142,7 +144,7 @@ class InferencePassTest(unittest.TestCase):
                 self.path + ".pdmodel", self.path + ".pdiparams"
             )
         config.disable_gpu()
-        config.disable_mkldnn()
+        config.disable_onednn()
         config.switch_specify_input_names(True)
         config.switch_ir_optim(True)
         config.switch_use_feed_fetch_ops(False)
@@ -176,10 +178,10 @@ class InferencePassTest(unittest.TestCase):
                 if self.enable_tensorrt_varseqlen:
                     config.enable_tensorrt_varseqlen()
 
-        elif use_mkldnn:
-            config.enable_mkldnn()
-            if self.enable_mkldnn_bfloat16:
-                config.enable_mkldnn_bfloat16()
+        elif use_onednn:
+            config.enable_onednn()
+            if self.enable_onednn_bfloat16:
+                config.enable_onednn_bfloat16()
         print('config summary:', config.summary())
         return config
 
@@ -206,22 +208,25 @@ class InferencePassTest(unittest.TestCase):
         '''
         place = base.CUDAPlace(0) if use_gpu else base.CPUPlace()
         executor = base.Executor(place)
-        scope = base.Scope()
-        device = "GPU" if use_gpu else "CPU"
-        with base.scope_guard(scope):
-            executor.run(self.startup_program)
-        self._save_models(
-            self.path,
-            list(self.feeds.keys()),
-            self.fetch_list,
-            executor,
-            self.main_program,
-            scope,
-        )
-        paddle_outs = self._get_paddle_outs(executor, self.main_program, scope)
-        inference_outs = self._get_inference_outs(
-            self._get_analysis_config(use_gpu=use_gpu)
-        )
+        with paddle.pir_utils.OldIrGuard():
+            scope = base.Scope()
+            device = "GPU" if use_gpu else "CPU"
+            with base.scope_guard(scope):
+                executor.run(self.startup_program)
+            self._save_models(
+                self.path,
+                list(self.feeds.keys()),
+                self.fetch_list,
+                executor,
+                self.main_program,
+                scope,
+            )
+            paddle_outs = self._get_paddle_outs(
+                executor, self.main_program, scope
+            )
+            inference_outs = self._get_inference_outs(
+                self._get_analysis_config(use_gpu=use_gpu)
+            )
 
         # Check whether the results calculated on CPU and on GPU are the same.
         self.assertTrue(
@@ -280,25 +285,25 @@ class InferencePassTest(unittest.TestCase):
                     err_msg='Output has diff between GPU and TensorRT. ',
                 )
 
-        # Check whether the mkldnn results and the CPU results are the same.
-        if (not use_gpu) and self.enable_mkldnn:
-            mkldnn_outputs = self._get_inference_outs(
+        # Check whether the onednn results and the CPU results are the same.
+        if (not use_gpu) and self.enable_onednn:
+            onednn_outputs = self._get_inference_outs(
                 self._get_analysis_config(
-                    use_gpu=use_gpu, use_mkldnn=self.enable_mkldnn
+                    use_gpu=use_gpu, use_onednn=self.enable_onednn
                 )
             )
 
             self.assertTrue(
-                len(paddle_outs) == len(mkldnn_outputs),
+                len(paddle_outs) == len(onednn_outputs),
                 "The number of outputs is different between CPU and MKLDNN. ",
             )
 
-            if self.enable_mkldnn_bfloat16:
+            if self.enable_onednn_bfloat16:
                 atol = 0.01
-            for paddle_out, mkldnn_output in zip(paddle_outs, mkldnn_outputs):
+            for paddle_out, onednn_output in zip(paddle_outs, onednn_outputs):
                 np.testing.assert_allclose(
                     np.array(paddle_out),
-                    mkldnn_output,
+                    onednn_output,
                     rtol=1e-05,
                     atol=atol,
                     err_msg='Output has diff between CPU and MKLDNN. ',

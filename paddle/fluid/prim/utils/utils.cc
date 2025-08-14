@@ -13,12 +13,9 @@
 // limitations under the License.
 
 #include "paddle/fluid/prim/utils/utils.h"
-#include "paddle/fluid/platform/flags.h"
 #include "paddle/fluid/prim/utils/static/static_global_utils.h"
 
-PADDLE_DEFINE_EXPORTED_bool(prim_enabled, false, "enable_prim or not");
-namespace paddle {
-namespace prim {
+namespace paddle::prim {
 bool PrimCommonUtils::IsBwdPrimEnabled() {
   return StaticCompositeContext::Instance().IsBwdPrimEnabled();
 }
@@ -41,6 +38,10 @@ bool PrimCommonUtils::IsFwdPrimEnabled() {
 
 void PrimCommonUtils::SetFwdPrimEnabled(bool enable_prim) {
   StaticCompositeContext::Instance().SetFwdPrimEnabled(enable_prim);
+}
+
+bool PrimCommonUtils::IsAllPrimEnabled() {
+  return StaticCompositeContext::Instance().IsAllPrimEnabled();
 }
 
 void PrimCommonUtils::SetAllPrimEnabled(bool enable_prim) {
@@ -71,5 +72,4 @@ void PrimCommonUtils::SetTargetGradName(
   StaticCompositeContext::Instance().SetTargetGradName(m);
 }
 
-}  // namespace prim
-}  // namespace paddle
+}  // namespace paddle::prim

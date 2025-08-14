@@ -26,8 +26,10 @@ root_path = sys.argv[4]
 
 def read_yaml_ops():
     ops_list = []
-    yaml_path = root_path + "/paddle/phi/api/yaml/ops.yaml"
-    legacy_yaml_path = root_path + "/paddle/phi/api/yaml/legacy_ops.yaml"
+    yaml_path = root_path + "/paddle/phi/ops/yaml/ops.yaml"
+    legacy_yaml_path = (
+        root_path + "/paddle/phi/ops/yaml/inconsistent/dygraph_ops.yaml"
+    )
 
     with open(yaml_path, 'r') as f:
         ops_list = yaml.load(f, Loader=yaml.FullLoader)
@@ -87,8 +89,10 @@ def get_api_diff(dev_api_file, pr_api_file):
 
 
 def get_yaml_diff(branch):
-    ops_yaml_path = root_path + "/paddle/phi/api/yaml/ops.yaml"
-    legacy_yaml_path = root_path + "/paddle/phi/api/yaml/legacy_ops.yaml"
+    ops_yaml_path = root_path + "/paddle/phi/ops/yaml/ops.yaml"
+    legacy_yaml_path = (
+        root_path + "/paddle/phi/ops/yaml/inconsistent/dygraph_ops.yaml"
+    )
     git_cmd = (
         "git diff -U0 upstream/"
         + branch
@@ -229,7 +233,7 @@ if len(api_add) == 0 and len(api_delete) == 0:
         # if op args in yaml is modified and this args is in API,
         # this PR need to be reviewed.
         if each_diff.startswith('-  args'):
-            yaml_op_args_str = each_diff.strip('-  args : ')
+            yaml_op_args_str = each_diff.removeprefix('-  args : ')
             yaml_op_args = get_yaml_op_args(yaml_op_args_str)
             for api in pr_apis:
                 if get_api_args(api) == yaml_op_args:

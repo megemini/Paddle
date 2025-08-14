@@ -20,7 +20,7 @@ limitations under the License. */
 #include <mutex>  // NOLINT
 
 #include "paddle/phi/backends/dynload/dynamic_loader.h"
-#include "paddle/phi/backends/dynload/port.h"
+#include "paddle/phi/common/port.h"
 
 namespace phi {
 namespace dynload {
@@ -42,13 +42,14 @@ extern void *xpti_dso_handle;
   };                                                             \
   extern DynLoad__##__name __name
 
-#define XPTI_ROUTINE_EACH(__macro) \
-  __macro(xptiActivityEnable);     \
-  __macro(xptiActivityDisable);    \
-  __macro(xptiStartTracing);       \
-  __macro(xptiStopTracing);        \
-  __macro(xptiActivityFlushAll);   \
-  __macro(xptiActivityGetNextRecord);
+#define XPTI_ROUTINE_EACH(__macro)    \
+  __macro(xptiActivityEnable);        \
+  __macro(xptiActivityDisable);       \
+  __macro(xptiStartTracing);          \
+  __macro(xptiStopTracing);           \
+  __macro(xptiActivityFlushAll);      \
+  __macro(xptiActivityGetNextRecord); \
+  __macro(xptiActivityPopRecord)
 
 XPTI_ROUTINE_EACH(DECLARE_DYNAMIC_LOAD_XPTI_WRAP);
 

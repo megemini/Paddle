@@ -12,21 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
-import textwrap
 import unittest
 
-import astor
 import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
-    IrMode,
-    ToStaticMode,
-    disable_test_case,
     enable_to_static_guard,
     test_ast_only,
-    test_legacy_and_pt_and_pir,
-    test_legacy_only,
 )
 from ifelse_simple_func import (
     dyfunc_with_if_else_early_return1,
@@ -36,7 +28,6 @@ from ifelse_simple_func import (
 import paddle
 import paddle.jit.dy2static as _jst
 from paddle.jit.dy2static.utils import func_to_source_code
-from paddle.utils import gast
 
 np.random.seed(0)
 
@@ -61,14 +52,6 @@ def decorated_simple_func(x, weight_numpy):
     return z
 
 
-def get_source_code(func):
-    raw_code = inspect.getsource(func)
-    code = textwrap.dedent(raw_code)
-    root = gast.parse(code)
-    source_code = astor.to_source(gast.gast_to_ast(root))
-    return source_code
-
-
 class StaticCode1:
     def dyfunc_with_if_else(x_v, label=None):
         loss = _jst.UndefinedVar('loss')
@@ -80,7 +63,7 @@ class StaticCode1:
             nonlocal x_v
             return (x_v,)
 
-        def set_args_0(__args):
+        def set_args_0(__args):  # noqa: PYI063
             nonlocal x_v
             (x_v,) = __args
 
@@ -108,7 +91,7 @@ class StaticCode1:
             nonlocal __return_0, __return_1, __return_value_0, loss
             return __return_0, __return_1, __return_value_0, loss
 
-        def set_args_1(__args):
+        def set_args_1(__args):  # noqa: PYI063
             nonlocal __return_0, __return_1, __return_value_0, loss
             __return_0, __return_1, __return_value_0, loss = __args
 
@@ -151,7 +134,7 @@ class StaticCode2:
             nonlocal x_v
             return (x_v,)
 
-        def set_args_2(__args):
+        def set_args_2(__args):  # noqa: PYI063
             nonlocal x_v
             (x_v,) = __args
 
@@ -179,7 +162,7 @@ class StaticCode2:
             nonlocal __return_2, __return_3, __return_value_1, loss
             return __return_2, __return_3, __return_value_1, loss
 
-        def set_args_3(__args):
+        def set_args_3(__args):  # noqa: PYI063
             nonlocal __return_2, __return_3, __return_value_1, loss
             __return_2, __return_3, __return_value_1, loss = __args
 
@@ -225,13 +208,11 @@ class TestEnableDeclarative(Dy2StTestBase):
         self.weight = np.random.randn(32, 64).astype('float32')
 
     @test_ast_only
-    @test_legacy_and_pt_and_pir
     def test_raise_error(self):
         net = paddle.jit.to_static(full_graph=True)(NetWithError())
         with self.assertRaises(ValueError):
             net(paddle.to_tensor(self.x))
 
-    @test_legacy_and_pt_and_pir
     def test_enable_disable_to_static(self):
         static_output = paddle.jit.to_static(decorated_simple_func)(
             self.x, self.weight
@@ -279,7 +260,6 @@ switch_mode_function = paddle.jit.to_static(full_graph=True)(
 
 class TestFunctionTrainEvalMode(Dy2StTestBase):
     @test_ast_only
-    @test_legacy_and_pt_and_pir
     def test_switch_mode(self):
         switch_mode_function.eval()
         switch_mode_function()
@@ -293,7 +273,6 @@ class TestFunctionTrainEvalMode(Dy2StTestBase):
         _, partial_layer = switch_mode_function.program_cache.last()[-1]
         self.assertEqual(partial_layer.training, True)
 
-    @test_legacy_and_pt_and_pir
     def test_raise_error(self):
         net = paddle.jit.to_static(SwitchModeNet())
 
@@ -308,20 +287,27 @@ class TestFunctionTrainEvalMode(Dy2StTestBase):
 
 
 class TestIfElseEarlyReturn(Dy2StTestBase):
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different rank
-    @test_legacy_only
     def test_ifelse_early_return1(self):
         answer = np.zeros([2, 2]) + 1
         static_func = paddle.jit.to_static(dyfunc_with_if_else_early_return1)
         out = static_func()
-        np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
+        if isinstance(out, paddle.Tensor):
+            np.testing.assert_allclose(
+                paddle.to_tensor(answer), out, rtol=1e-05
+            )
+        elif isinstance(out, tuple):
+            np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
 
-    @disable_test_case((ToStaticMode.AST, IrMode.PT))
     def test_ifelse_early_return2(self):
         answer = np.zeros([2, 2]) + 3
         static_func = paddle.jit.to_static(dyfunc_with_if_else_early_return2)
         out = static_func()
-        np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
+        if isinstance(out, paddle.Tensor):
+            np.testing.assert_allclose(
+                paddle.to_tensor(answer), out, rtol=1e-05
+            )
+        elif isinstance(out, tuple):
+            np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
 
 
 class TestRemoveCommentInDy2St(Dy2StTestBase):
@@ -332,7 +318,6 @@ class TestRemoveCommentInDy2St(Dy2StTestBase):
         # Comment3
         y = paddle.to_tensor([4, 5, 6])
 
-    @test_legacy_and_pt_and_pir
     def test_remove_comment(self):
         code_string = func_to_source_code(self.func_with_comment)
         self.assertEqual('#' not in code_string, True)
@@ -366,7 +351,6 @@ class Net2:
 
 
 class TestParameterRecorder(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_recorder(self):
         """function calls nn.Layer case."""
         net = Net()

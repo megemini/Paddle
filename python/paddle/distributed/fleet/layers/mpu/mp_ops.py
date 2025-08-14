@@ -12,16 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
+
 import paddle
 from paddle import _C_ops, _legacy_C_ops
 from paddle.autograd import PyLayer
 from paddle.base.data_feeder import check_dtype, check_variable_and_dtype
 from paddle.distributed import collective
-from paddle.framework import LayerHelper, _create_tensor, in_dynamic_mode
+from paddle.framework import (
+    LayerHelper,
+    _create_tensor,
+    in_dynamic_mode,
+    in_dynamic_or_pir_mode,
+    in_pir_mode,
+)
+from paddle.jit.marker import unified
 from paddle.nn import Layer
 from paddle.nn.utils import dygraph_utils
 
 from ....communication.reduce import ReduceOp, _get_reduce_op
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle._typing import ParamAttrLike, Size2
 
 
 class c_identity_eager(PyLayer):
@@ -31,19 +46,11 @@ class c_identity_eager(PyLayer):
         if skip_c_identity_dynamic:
             return tensor
         else:
-            return _legacy_C_ops.c_identity(
-                tensor,
-                'use_calc_stream',
-                True,
-                'ring_id',
-                group.id,
-                'use_model_parallel',
-                True,
-            )
+            return _C_ops.c_identity(tensor, group.id, True, True)
 
     @staticmethod
     def backward(ctx, dy):
-        op_type = _get_reduce_op(ReduceOp.SUM, "_c_identity")
+        op_type = _get_reduce_op(ReduceOp.SUM)
         ctx.group.process_group.all_reduce_on_calc_stream(dy, op_type)
         return dy
 
@@ -53,19 +60,7 @@ class c_split_eager(PyLayer):
     def forward(ctx, tensor, group, rank, nranks):
         ctx.group = group
         ctx.nranks = nranks
-        return _legacy_C_ops.c_split(
-            tensor,
-            'use_calc_stream',
-            True,
-            'ring_id',
-            group.id,
-            'rank',
-            rank,
-            'nranks',
-            nranks,
-            'use_model_parallel',
-            True,
-        )
+        return _C_ops.c_split(tensor, rank, nranks, group.id, True)
 
     @staticmethod
     def backward(ctx, dy):
@@ -80,6 +75,7 @@ class c_split_eager(PyLayer):
         return out
 
 
+@unified
 def _c_identity(tensor, group=None, skip_c_identity_dynamic=False):
     """
     Return a copy of the tensor, mainly used with model parallel.
@@ -98,6 +94,8 @@ def _c_identity(tensor, group=None, skip_c_identity_dynamic=False):
 
     if in_dynamic_mode():
         return c_identity_eager.apply(tensor, group, skip_c_identity_dynamic)
+    elif in_pir_mode():
+        return _C_ops.c_identity(tensor, ring_id, True, True)
     else:
         op_type = 'c_identity'
         helper = LayerHelper(op_type, **locals())
@@ -123,6 +121,7 @@ def _c_identity(tensor, group=None, skip_c_identity_dynamic=False):
         return out
 
 
+@unified
 def _c_concat(tensor, group=None):
     """
     Return allgather of the tensor, mainly used with model parallel.
@@ -144,20 +143,8 @@ def _c_concat(tensor, group=None):
     rank = group.rank
     nranks = group.nranks
 
-    if in_dynamic_mode():
-        return _legacy_C_ops.c_concat(
-            tensor,
-            'ring_id',
-            ring_id,
-            'use_calc_stream',
-            True,
-            'rank',
-            rank,
-            'nranks',
-            nranks,
-            'use_model_parallel',
-            True,
-        )
+    if in_dynamic_or_pir_mode():
+        return _C_ops.c_concat(tensor, rank, nranks, ring_id, True, True)
     else:
         op_type = 'c_concat'
         helper = LayerHelper(op_type, **locals())
@@ -185,6 +172,7 @@ def _c_concat(tensor, group=None):
         return out
 
 
+@unified
 def _c_split(tensor, group=None):
     """
     Split tensor evenly among all members, mainly used with model parallel.
@@ -254,16 +242,14 @@ class mp_allreduce_eager(PyLayer):
         ctx.skip_c_identity_dynamic = skip_c_identity_dynamic
 
         if use_calc_stream:
-            op_type = _get_reduce_op(op, "_mp_allreduce")
+            op_type = _get_reduce_op(op)
             group.process_group.all_reduce_on_calc_stream(tensor, op_type)
             return tensor
         else:
-            return _legacy_C_ops.c_allreduce_sum_(
+            return _C_ops.all_reduce_(
                 tensor,
-                'use_calc_stream',
-                use_calc_stream,
-                'ring_id',
                 group.id,
+                paddle.distributed.ReduceOp.SUM,
             )
 
     @staticmethod
@@ -271,17 +257,10 @@ class mp_allreduce_eager(PyLayer):
         if ctx.skip_c_identity_dynamic:
             return dy
         else:
-            return _legacy_C_ops.c_identity(
-                dy,
-                'use_calc_stream',
-                True,
-                'ring_id',
-                ctx.ring_id,
-                'use_model_parallel',
-                True,
-            )
+            return _C_ops.c_identity(dy, ctx.ring_id, True, True)
 
 
+@unified
 def _mp_allreduce(
     tensor,
     op=ReduceOp.SUM,
@@ -290,7 +269,7 @@ def _mp_allreduce(
     use_model_parallel=True,
     skip_c_identity_dynamic=False,
 ):
-    """[it is same as allreduce above, but it supports model parallel. And it support inplace startegy]"""
+    """[it is same as allreduce above, but it supports model parallel. And it support inplace strategy]"""
     if group is not None and not group.is_member():
         return
 
@@ -305,6 +284,9 @@ def _mp_allreduce(
             op,
             skip_c_identity_dynamic,
         )
+    elif in_pir_mode():
+        ring_id = 0 if group is None else group.id
+        return _C_ops.mp_allreduce_sum(tensor, ring_id)
     else:
         ring_id = 0 if group is None else group.id
         op_type = 'mp_allreduce_sum'
@@ -314,7 +296,7 @@ def _mp_allreduce(
         check_variable_and_dtype(
             tensor,
             'tensor',
-            ['float16', 'float32', 'float64', 'int32', 'int64' 'uint16'],
+            ['float16', 'float32', 'float64', 'int32', 'int64', 'uint16'],
             op_type,
         )
 
@@ -330,6 +312,7 @@ def _mp_allreduce(
         return out
 
 
+@unified
 def _c_lookup_table(table, index, start_index=0, vocab_size=-1, name=None):
     """
     Lookup table according to index.
@@ -345,6 +328,8 @@ def _c_lookup_table(table, index, start_index=0, vocab_size=-1, name=None):
         Tensor.
     """
     if in_dynamic_mode():
+        return _C_ops.c_embedding(table, index, start_index, vocab_size)
+    elif in_pir_mode():
         return _C_ops.c_embedding(table, index, start_index, vocab_size)
     else:
         op_type = 'c_embedding'
@@ -400,11 +385,10 @@ class _Linear(Layer):
 
     def extra_repr(self):
         name_str = f', name={self.name}' if self.name else ''
-        return 'in_features={}, out_features={}, dtype={}{}'.format(
-            self.weight.shape[0], self.weight.shape[1], self._dtype, name_str
-        )
+        return f'in_features={self.weight.shape[0]}, out_features={self.weight.shape[1]}, dtype={self._dtype}{name_str}'
 
 
+@unified
 def _c_softmax_with_cross_entropy(
     logits,
     label,
@@ -423,8 +407,10 @@ def _c_softmax_with_cross_entropy(
         else group.nranks
     )
 
-    input_dims = len(list(logits.shape))
-    label_dims = len(list(label.shape))
+    input_shape = list(logits.shape)
+    label_shape = list(label.shape)
+    input_dims = len(input_shape)
+    label_dims = len(label_shape)
     if input_dims - 1 != label_dims and input_dims != label_dims:
         raise ValueError(
             f'Expected input_dims - 1 = label_dims or input_dims == label_dims\
@@ -432,19 +418,16 @@ def _c_softmax_with_cross_entropy(
         )
     if input_dims - 1 == label_dims:
         label = paddle.unsqueeze(label, axis=-1)
+        label_shape = list(label.shape)
+    if label_shape[-1] < 1 or label_shape[-1] > input_shape[-1] * nranks:
+        raise ValueError(
+            f'Expected label_shape[-1] >= 1 and label_shape[-1] <= input_shape[-1] * nranks\
+             (got label_shape[-1] = {label_shape[-1]}, input_shape[-1] = {input_shape[-1]})'
+        )
 
     if in_dynamic_mode():
-        softmax, loss = _legacy_C_ops.c_softmax_with_cross_entropy(
-            logits,
-            label,
-            'ring_id',
-            ring_id,
-            'rank',
-            rank,
-            'nranks',
-            nranks,
-            'ignore_index',
-            ignore_index,
+        softmax, loss = _C_ops.c_softmax_with_cross_entropy(
+            logits, label, ignore_index, ring_id, rank, nranks
         )
         if not return_softmax:
             return loss
@@ -473,9 +456,99 @@ def _c_softmax_with_cross_entropy(
         return loss
 
 
+@unified
+def _c_softmax_with_multi_label_cross_entropy(
+    logits,
+    label,
+    smooth_weight,
+    group=None,
+    return_softmax=False,
+    ignore_index=-100,
+    sum_multi_label_loss=True,
+):
+    if group is not None and not group.is_member():
+        return
+    ring_id = 0 if group is None else group.id
+    global_rank = collective._get_global_env().rank
+    rank = global_rank if group is None else group.get_group_rank(global_rank)
+    nranks = (
+        collective._get_global_env().world_size
+        if group is None
+        else group.nranks
+    )
+
+    input_shape = list(logits.shape)
+    label_shape = list(label.shape)
+    input_dims = len(input_shape)
+    label_dims = len(label_shape)
+    if input_dims - 1 != label_dims and input_dims != label_dims:
+        raise ValueError(
+            f'Expected input_dims - 1 = label_dims or input_dims == label_dims\
+             (got input_dims{input_dims}, label_dims{label_dims})'
+        )
+    if input_dims - 1 == label_dims:
+        label = paddle.unsqueeze(label, axis=-1)
+        label_shape = list(label.shape)
+    if label_shape[-1] < 1 or label_shape[-1] > input_shape[-1] * nranks:
+        raise ValueError(
+            f'Expected label_shape[-1] >= 1 and label_shape[-1] <= input_shape[-1] * nranks\
+             (got label_shape[-1] = {label_shape[-1]}, input_shape[-1] = {input_shape[-1]})'
+        )
+
+    if in_dynamic_mode():
+        softmax, loss = _legacy_C_ops.c_softmax_with_multi_label_cross_entropy(
+            logits,
+            label,
+            smooth_weight,
+            'ring_id',
+            ring_id,
+            'rank',
+            rank,
+            'nranks',
+            nranks,
+            'ignore_index',
+            ignore_index,
+            'sum_multi_label_loss',
+            sum_multi_label_loss,
+        )
+        if not return_softmax:
+            return loss
+        else:
+            return loss, softmax
+    else:
+        attrs = {
+            'ring_id': ring_id,
+            'rank': rank,
+            'nranks': nranks,
+            'ignore_index': ignore_index,
+            'sum_multi_label_loss': sum_multi_label_loss,
+        }
+        helper = LayerHelper(
+            'c_softmax_with_multi_label_cross_entropy', **locals()
+        )
+        softmax = helper.create_variable_for_type_inference(dtype=logits.dtype)
+        loss = helper.create_variable_for_type_inference(dtype=logits.dtype)
+        helper.append_op(
+            type='c_softmax_with_multi_label_cross_entropy',
+            inputs={
+                'Logits': logits,
+                'Label': label,
+                'SmoothWeight': smooth_weight,
+            },
+            outputs={'Softmax': softmax, 'Loss': loss},
+            attrs=attrs,
+        )
+
+        if return_softmax:
+            return loss, softmax
+
+        return loss
+
+
+@unified
 def _linear(x, weight, bias=None, name=None):
     """
-    Fuction Linear
+    Function Linear
     """
     if in_dynamic_mode():
         pre_bias = _create_tensor(dtype=x.dtype)
@@ -698,16 +771,16 @@ def _parallel_embedding(
 
 
 def split(
-    x,
-    size,
-    operation,
-    axis=0,
-    num_partitions=1,
-    gather_out=True,
-    weight_attr=None,
-    bias_attr=None,
-    name=None,
-):
+    x: Tensor,
+    size: Size2,
+    operation: Literal['linear', 'embedding'],
+    axis: int = 0,
+    num_partitions: int = 1,
+    gather_out: bool = True,
+    weight_attr: ParamAttrLike | None = None,
+    bias_attr: ParamAttrLike | None = None,
+    name: str | None = None,
+) -> Tensor:
     """
 
     Split the weight of the specified operation into multiple devices
@@ -721,7 +794,7 @@ def split(
         of which is a matrix with (N/num_partitions + 1) rows and M column where the last
         row as the padding idx.
 
-        Suppose we split the NxM weight into two partitons on device_0 and device_1
+        Suppose we split the NxM weight into two partitions on device_0 and device_1
         respectively. Then, one each device, the final weight has (N/2 + 1) rows with the
         index range from 0 to N/2. On device_0, all values in the input within [0, N/2 -1]
         keep unchanged and all other values are changed to N/2 which is the padding index and
@@ -751,7 +824,7 @@ def split(
         of which is a matrix with N/num_partitions rows and M column.
 
         The linear layer put on single card is shown as below, the input variable is represented by X,
-        the weight matrix is represented by W and the output vaiable is O. The linear layer on single card is
+        the weight matrix is represented by W and the output variable is O. The linear layer on single card is
         simple matrix multiplication operation, O = X * W.
 
         .. image:: https://githubraw.cdn.bcebos.com/PaddlePaddle/docs/develop/docs/api/paddle/distributed/img/split_single.png
@@ -760,7 +833,7 @@ def split(
             :align: center
 
         Row Parallel Linear is shown as below. As the name suggests, Row Parallel Linear splits the weight matrix W into
-        [[W_row1], [W_row2]] along the row. And accordingly the input is splitted along the column into [X_col1, X_col2] and multiply their
+        [[W_row1], [W_row2]] along the row. And accordingly the input is split along the column into [X_col1, X_col2] and multiply their
         respective weight matrices. Finally apply AllReduce on the output from each card to get the final output.
 
         .. image:: https://githubraw.cdn.bcebos.com/PaddlePaddle/docs/develop/docs/api/paddle/distributed/img/split_row.png
@@ -770,12 +843,12 @@ def split(
 
     Case 3: Column Parallel Linear
         The weight of the linear operation is a NxM matrix with N rows and M columns.
-        With column parallel linear, the weight is split into num_paratitions partitions, each
+        With column parallel linear, the weight is split into num_partitions partitions, each
         of which is a matrix with N rows and M/num_partitions column.
 
         The linear layer put on single card has been illustrated on case 2 and Column Parallel Linear
         is shown as below. The Column Parallel Linear splits the weight matrix W into [W_col1, W_col2] along the column and
-        these splitted matrices respectively multiply the input. Finally apply AllGather on the output from each card to get the final output.
+        these split matrices respectively multiply the input. Finally apply AllGather on the output from each card to get the final output.
 
         .. image:: https://githubraw.cdn.bcebos.com/PaddlePaddle/docs/develop/docs/api/paddle/distributed/img/split_col.png
             :width: 800
@@ -783,7 +856,7 @@ def split(
             :align: center
 
     As observed, the column parallel linear and row parallel linear can be combined to skip one ALLGATHER communication
-    operator. Furthermore the Attention and MLP can be combined to imporve the performance as shown below.
+    operator. Furthermore the Attention and MLP can be combined to improve the performance as shown below.
 
     .. image:: https://githubraw.cdn.bcebos.com/PaddlePaddle/docs/develop/docs/api/paddle/distributed/img/split_col_row.png
             :width: 800
@@ -816,7 +889,7 @@ def split(
             >>> import paddle.distributed.fleet as fleet
 
             >>> paddle.enable_static()
-            >>> paddle.set_device('gpu:%d'%paddle.distributed.ParallelEnv().dev_id)
+            >>> paddle.set_device(f'gpu:{paddle.distributed.ParallelEnv().dev_id}')
             >>> fleet.init(is_collective=True)
             >>> data = paddle.randint(0, 8, shape=[10,4])
             >>> emb_out = paddle.distributed.split(
@@ -847,7 +920,7 @@ def split(
     if in_dynamic_mode():
         raise ValueError(
             "paddle.distributed.split cannot be used in dynamic "
-            "graph mode, plese use ParallelEmbedding, ParallelRowLinear, "
+            "graph mode, please use ParallelEmbedding, ParallelRowLinear, "
             "ParallelColumnLinear instead."
         )
     else:

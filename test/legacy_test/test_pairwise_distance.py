@@ -15,10 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_device_place, get_places
 
 import paddle
-from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 
 def np_pairwise_distance(x, y, p=2.0, epsilon=1e-6, keepdim=False):
@@ -48,11 +47,7 @@ def test_static(
 ):
     prog = paddle.static.Program()
     startup_prog = paddle.static.Program()
-    place = (
-        base.CUDAPlace(0)
-        if paddle.base.core.is_compiled_with_cuda()
-        else base.CPUPlace()
-    )
+    place = get_device_place()
     paddle.enable_static()
     with paddle.static.program_guard(prog, startup_prog):
         x = paddle.static.data(name='x', shape=x_np.shape, dtype=x_np.dtype)
@@ -100,9 +95,7 @@ class TestPairwiseDistance(unittest.TestCase):
         all_shape = [[5], [100, 100]]
         dtypes = ['float32', 'float64']
         p_list = [-1, 0, 1, 2, np.inf, -np.inf]
-        places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            places.append(paddle.CUDAPlace(0))
+        places = get_places()
         keeps = [False, True]
         for place in places:
             for shape in all_shape:
@@ -152,7 +145,6 @@ class TestPairwiseDistance(unittest.TestCase):
                                 rtol=1e-05,
                             )
 
-                            @test_with_pir_api
                             def dynamic_and_pir_mode_test():
                                 static_ret = test_static(
                                     place,
@@ -228,7 +220,6 @@ class TestPairwiseDistance(unittest.TestCase):
             dygraph_functional_ret, excepted_value, rtol=1e-05
         )
 
-        @test_with_pir_api
         def dynamic_and_pir_mode_test():
             static_ret = test_static(
                 place=place,
@@ -293,7 +284,6 @@ class TestPairwiseDistance(unittest.TestCase):
             dygraph_functional_ret, excepted_value, rtol=1e-05
         )
 
-        @test_with_pir_api
         def dynamic_and_pir_mode_test():
             static_ret = test_static(
                 place=place,
@@ -324,7 +314,6 @@ class TestPairwiseDistance(unittest.TestCase):
 
         dynamic_and_pir_mode_test()
 
-    @test_with_pir_api
     def test_pairwise_distance_fp16(self):
         shape = [100, 100]
         if not paddle.device.is_compiled_with_cuda():
@@ -333,6 +322,40 @@ class TestPairwiseDistance(unittest.TestCase):
         x_np = np.random.random(shape).astype('float16')
         y_np = np.random.random(shape).astype('float16')
         static_ret = test_static(place, x_np, y_np)
+
+
+class TestPairwiseDistance_ZeroSize(unittest.TestCase):
+    def test_pairwise_distance(self):
+        epsilon = 1e-6
+        all_shape = [[0], [100, 0]]
+        dtype = 'float32'
+        p = 0
+        places = get_places()
+        keeps = [False, True]
+        for place in places:
+            for shape in all_shape:
+                for keepdim in keeps:
+                    x_np = np.random.random(shape).astype(dtype)
+                    y_np = np.random.random(shape).astype(dtype)
+
+                    excepted_value = np_pairwise_distance(
+                        x_np, y_np, p, epsilon=epsilon, keepdim=keepdim
+                    )
+                    paddle.disable_static(place)
+                    x = paddle.to_tensor(x_np)
+                    x.stop_gradient = False
+                    y = paddle.to_tensor(y_np)
+                    ret = call_pairwise_distance_functional(
+                        x=x, y=y, p=p, epsilon=epsilon, keepdim=keepdim
+                    )
+                    np.testing.assert_allclose(
+                        ret.numpy(),
+                        excepted_value,
+                        rtol=1e-05,
+                    )
+                    loss = paddle.sum(ret)
+                    loss.backward()
+                    np.testing.assert_allclose(x.grad.shape, x.shape)
 
 
 if __name__ == "__main__":

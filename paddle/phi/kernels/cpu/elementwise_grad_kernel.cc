@@ -18,6 +18,7 @@
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_utils.h"
 #include "paddle/phi/kernels/cpu/elementwise_grad.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/elementwise_functor.h"
 #include "paddle/phi/kernels/impl/elementwise_grad_kernel_impl.h"
 
@@ -30,6 +31,25 @@ void MaximumGradKernel(const Context& dev_ctx,
                        const DenseTensor& dout,
                        DenseTensor* dx,
                        DenseTensor* dy) {
+  if (dout.numel() == 0) {
+    if (dx) {
+      if (dx->numel() == 0) {
+        dev_ctx.template Alloc<T>(dx);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      if (dy->numel() == 0) {
+        dev_ctx.template Alloc<T>(dy);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
   funcs::ElementwiseGradPreProcess(dout, dx);
   int axis = -1;
   phi::funcs::ElemwiseGradCompute<Context, T, MaxGradDx<T>, MaxGradDy<T>>(
@@ -43,12 +63,95 @@ void MinimumGradKernel(const Context& dev_ctx,
                        const DenseTensor& dout,
                        DenseTensor* dx,
                        DenseTensor* dy) {
+  if (dout.numel() == 0) {
+    if (dx) {
+      if (dx->numel() == 0) {
+        dev_ctx.template Alloc<T>(dx);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      if (dy->numel() == 0) {
+        dev_ctx.template Alloc<T>(dy);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
   funcs::ElementwiseGradPreProcess(dout, dx);
   int axis = -1;
   phi::funcs::ElemwiseGradCompute<Context, T, MinGradDx<T>, MinGradDy<T>>(
       dev_ctx, x, y, dout, dout, axis, dx, dy, MinGradDx<T>(), MinGradDy<T>());
 }
 
+template <typename T, typename Context>
+void RemainderGradKernel(const Context& dev_ctx,
+                         const DenseTensor& x,
+                         const DenseTensor& y,
+                         const DenseTensor& dout,
+                         DenseTensor* dx,
+                         DenseTensor* dy) {
+  if (dout.numel() == 0) {
+    if (dx) {
+      if (dx->numel() == 0) {
+        dev_ctx.template Alloc<T>(dx);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      if (dy->numel() == 0) {
+        dev_ctx.template Alloc<T>(dy);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
+  funcs::ElementwiseGradPreProcess(dout, dx);
+  int axis = -1;
+  phi::funcs::
+      ElemwiseGradCompute<Context, T, RemainderGradDx<T>, RemainderGradDy<T>>(
+          dev_ctx,
+          x,
+          y,
+          dout,
+          dout,
+          axis,
+          dx,
+          dy,
+          RemainderGradDx<T>(),
+          RemainderGradDy<T>());
+}
+
+template <typename T, typename Context>
+void CopySignGradKernel(const Context& dev_ctx,
+                        const DenseTensor& x,
+                        const DenseTensor& y,
+                        const DenseTensor& out_grad,
+                        DenseTensor* x_grad,
+                        DenseTensor* y_grad) {
+  funcs::ElementwiseGradPreProcess(out_grad, x_grad);
+  int axis = -1;
+  phi::funcs::
+      ElemwiseGradCompute<Context, T, CopySignGradDX<T>, CopySignGradDY<T>>(
+          dev_ctx,
+          x,
+          y,
+          out_grad,
+          out_grad,
+          axis,
+          x_grad,
+          y_grad,
+          CopySignGradDX<T>(),
+          CopySignGradDY<T>());
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(fmax_grad,
@@ -89,6 +192,16 @@ PD_REGISTER_KERNEL(minimum_grad,
                    int64_t,
                    phi::dtype::bfloat16) {}
 
+PD_REGISTER_KERNEL(remainder_grad,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::RemainderGradKernel,
+                   float,
+                   double,
+                   int,
+                   int64_t,
+                   phi::dtype::bfloat16) {}
+
 PD_REGISTER_KERNEL(heaviside_grad,
                    CPU,
                    ALL_LAYOUT,
@@ -106,4 +219,21 @@ PD_REGISTER_KERNEL(elementwise_pow_grad,
                    double,
                    int,
                    int64_t,
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
+
+PD_REGISTER_KERNEL(copysign_grad,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::CopySignGradKernel,
+                   bool,
+                   uint8_t,
+                   int8_t,
+                   int16_t,
+                   int,
+                   int64_t,
+                   float,
+                   double,
+                   phi::dtype::float16,
                    phi::dtype::bfloat16) {}

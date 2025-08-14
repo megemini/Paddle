@@ -13,11 +13,11 @@
 // limitations under the License.
 
 #include "paddle/fluid/eager/amp_auto_cast.h"
-#include "paddle/fluid/eager/amp_utils.h"
 #include "paddle/fluid/eager/api/manual/fluid_manual/dygraph_forward_api.h"
 #include "paddle/fluid/eager/api/manual/fluid_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/fluid/imperative/amp_utils.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 std::tuple<paddle::Tensor,
            paddle::Tensor,
@@ -43,10 +43,8 @@ fused_feedforward_dygraph_function(
     const paddle::Tensor& Ln2Scale,
     const paddle::Tensor& Ln2Bias,
     const paddle::framework::AttributeMap& attr_map) {
-  paddle::platform::RecordEvent dygraph_entrance_record_event(
-      "fused_feedforward dygraph",
-      paddle::platform::TracerEventType::Operator,
-      1);
+  phi::RecordEvent dygraph_entrance_record_event(
+      "fused_feedforward dygraph", phi::TracerEventType::Operator, 1);
   VLOG(3) << "Running Eager Forward Op: fused_feedforward";
   // Dygraph Forward Pass
 
@@ -56,19 +54,21 @@ fused_feedforward_dygraph_function(
 
     paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
         amp_tensors_vector = {{X}, {Linear1Weight}, {Linear2Weight}};
-    if (Dropout1Seed.initialized())
+    if (Dropout1Seed.has_allocation())
       amp_tensors_vector.push_back({Dropout1Seed});
-    if (Dropout2Seed.initialized())
+    if (Dropout2Seed.has_allocation())
       amp_tensors_vector.push_back({Dropout2Seed});
-    if (Linear1Bias.initialized()) amp_tensors_vector.push_back({Linear1Bias});
-    if (Linear2Bias.initialized()) amp_tensors_vector.push_back({Linear2Bias});
-    if (Ln1Scale.initialized()) amp_tensors_vector.push_back({Ln1Scale});
-    if (Ln1Bias.initialized()) amp_tensors_vector.push_back({Ln1Bias});
-    if (Ln2Scale.initialized()) amp_tensors_vector.push_back({Ln2Scale});
-    if (Ln2Bias.initialized()) amp_tensors_vector.push_back({Ln2Bias});
+    if (Linear1Bias.has_allocation())
+      amp_tensors_vector.push_back({Linear1Bias});
+    if (Linear2Bias.has_allocation())
+      amp_tensors_vector.push_back({Linear2Bias});
+    if (Ln1Scale.has_allocation()) amp_tensors_vector.push_back({Ln1Scale});
+    if (Ln1Bias.has_allocation()) amp_tensors_vector.push_back({Ln1Bias});
+    if (Ln2Scale.has_allocation()) amp_tensors_vector.push_back({Ln2Scale});
+    if (Ln2Bias.has_allocation()) amp_tensors_vector.push_back({Ln2Bias});
 
-    auto amp_dst_dtype =
-        egr::GetAmpDestDtype("fused_feedforward", amp_tensors_vector);
+    auto amp_dst_dtype = paddle::imperative::GetAmpDestDtype(
+        "fused_feedforward", amp_tensors_vector);
 
     auto NEW_X = egr::AmpAutoCast("X", X, amp_dst_dtype, "fused_feedforward");
     auto NEW_Linear1Weight = egr::AmpAutoCast(
@@ -76,53 +76,53 @@ fused_feedforward_dygraph_function(
     auto NEW_Linear2Weight = egr::AmpAutoCast(
         "Linear2Weight", Linear2Weight, amp_dst_dtype, "fused_feedforward");
     auto NEW_Dropout1Seed =
-        ((Dropout1Seed.initialized()) ? egr::AmpAutoCast("Dropout1Seed",
-                                                         Dropout1Seed,
-                                                         amp_dst_dtype,
-                                                         "fused_feedforward")
-                                      : Dropout1Seed);
+        ((Dropout1Seed.has_allocation()) ? egr::AmpAutoCast("Dropout1Seed",
+                                                            Dropout1Seed,
+                                                            amp_dst_dtype,
+                                                            "fused_feedforward")
+                                         : Dropout1Seed);
     auto NEW_Dropout2Seed =
-        ((Dropout2Seed.initialized()) ? egr::AmpAutoCast("Dropout2Seed",
-                                                         Dropout2Seed,
-                                                         amp_dst_dtype,
-                                                         "fused_feedforward")
-                                      : Dropout2Seed);
+        ((Dropout2Seed.has_allocation()) ? egr::AmpAutoCast("Dropout2Seed",
+                                                            Dropout2Seed,
+                                                            amp_dst_dtype,
+                                                            "fused_feedforward")
+                                         : Dropout2Seed);
     auto NEW_Linear1Bias =
-        ((Linear1Bias.initialized()) ? egr::AmpAutoCast("Linear1Bias",
-                                                        Linear1Bias,
-                                                        amp_dst_dtype,
-                                                        "fused_feedforward")
-                                     : Linear1Bias);
+        ((Linear1Bias.has_allocation()) ? egr::AmpAutoCast("Linear1Bias",
+                                                           Linear1Bias,
+                                                           amp_dst_dtype,
+                                                           "fused_feedforward")
+                                        : Linear1Bias);
     auto NEW_Linear2Bias =
-        ((Linear2Bias.initialized()) ? egr::AmpAutoCast("Linear2Bias",
-                                                        Linear2Bias,
-                                                        amp_dst_dtype,
-                                                        "fused_feedforward")
-                                     : Linear2Bias);
+        ((Linear2Bias.has_allocation()) ? egr::AmpAutoCast("Linear2Bias",
+                                                           Linear2Bias,
+                                                           amp_dst_dtype,
+                                                           "fused_feedforward")
+                                        : Linear2Bias);
     auto NEW_Ln1Scale =
-        ((Ln1Scale.initialized())
+        ((Ln1Scale.has_allocation())
              ? egr::AmpAutoCast(
                    "Ln1Scale", Ln1Scale, amp_dst_dtype, "fused_feedforward")
              : Ln1Scale);
     auto NEW_Ln1Bias =
-        ((Ln1Bias.initialized())
+        ((Ln1Bias.has_allocation())
              ? egr::AmpAutoCast(
                    "Ln1Bias", Ln1Bias, amp_dst_dtype, "fused_feedforward")
              : Ln1Bias);
     auto NEW_Ln2Scale =
-        ((Ln2Scale.initialized())
+        ((Ln2Scale.has_allocation())
              ? egr::AmpAutoCast(
                    "Ln2Scale", Ln2Scale, amp_dst_dtype, "fused_feedforward")
              : Ln2Scale);
     auto NEW_Ln2Bias =
-        ((Ln2Bias.initialized())
+        ((Ln2Bias.has_allocation())
              ? egr::AmpAutoCast(
                    "Ln2Bias", Ln2Bias, amp_dst_dtype, "fused_feedforward")
              : Ln2Bias);
 
     {
       paddle::imperative::AutoCastGuard guard(
-          egr::Controller::Instance().GetCurrentTracer(),
+          egr::Controller::Instance().GetCurrentAmpAttrs(),
           paddle::imperative::AmpLevel::O0);
       return fused_feedforward_dygraph_function(NEW_X,
                                                 NEW_Dropout1Seed,
@@ -143,21 +143,21 @@ fused_feedforward_dygraph_function(
       {{"X", egr::EagerUtils::TrySyncToVars(X)},
        {"Linear1Weight", egr::EagerUtils::TrySyncToVars(Linear1Weight)},
        {"Linear2Weight", egr::EagerUtils::TrySyncToVars(Linear2Weight)}};
-  if (Dropout1Seed.initialized())
+  if (Dropout1Seed.has_allocation())
     ins["Dropout1Seed"] = egr::EagerUtils::TrySyncToVars(Dropout1Seed);
-  if (Dropout2Seed.initialized())
+  if (Dropout2Seed.has_allocation())
     ins["Dropout2Seed"] = egr::EagerUtils::TrySyncToVars(Dropout2Seed);
-  if (Linear1Bias.initialized())
+  if (Linear1Bias.has_allocation())
     ins["Linear1Bias"] = egr::EagerUtils::TrySyncToVars(Linear1Bias);
-  if (Linear2Bias.initialized())
+  if (Linear2Bias.has_allocation())
     ins["Linear2Bias"] = egr::EagerUtils::TrySyncToVars(Linear2Bias);
-  if (Ln1Scale.initialized())
+  if (Ln1Scale.has_allocation())
     ins["Ln1Scale"] = egr::EagerUtils::TrySyncToVars(Ln1Scale);
-  if (Ln1Bias.initialized())
+  if (Ln1Bias.has_allocation())
     ins["Ln1Bias"] = egr::EagerUtils::TrySyncToVars(Ln1Bias);
-  if (Ln2Scale.initialized())
+  if (Ln2Scale.has_allocation())
     ins["Ln2Scale"] = egr::EagerUtils::TrySyncToVars(Ln2Scale);
-  if (Ln2Bias.initialized())
+  if (Ln2Bias.has_allocation())
     ins["Ln2Bias"] = egr::EagerUtils::TrySyncToVars(Ln2Bias);
 
   std::map<std::string, std::vector<std::shared_ptr<egr::EagerVariable>>> outs =
@@ -270,10 +270,8 @@ fused_feedforward_dygraph_function(
   egr::EagerUtils::GetOutput(outs["Dropout2Out"][0], &Dropout2Out);
 
   {
-    paddle::platform::RecordEvent node_creation_record_event(
-        "fused_feedforward node_creation",
-        paddle::platform::TracerEventType::Operator,
-        1);
+    phi::RecordEvent node_creation_record_event(
+        "fused_feedforward node_creation", phi::TracerEventType::Operator, 1);
     egr::AutogradMeta* p_autograd_Out = egr::EagerUtils::autograd_meta(&Out);
     egr::AutogradMeta* p_autograd_Dropout1Mask =
         egr::EagerUtils::autograd_meta(&Dropout1Mask);
@@ -323,15 +321,15 @@ fused_feedforward_dygraph_function(
       grad_node->SetAttrMap(std::move(attrs));
       grad_node->SetDefaultAttrMap(std::move(default_attrs));
 
-      grad_node->SetTensorWrapperX(X);
-      grad_node->SetTensorWrapperLinear1Weight(Linear1Weight);
-      grad_node->SetTensorWrapperLinear1Bias(Linear1Bias);
-      grad_node->SetTensorWrapperLinear2Weight(Linear2Weight);
-      grad_node->SetTensorWrapperDropout1Mask(Dropout1Mask);
-      grad_node->SetTensorWrapperDropout2Mask(Dropout2Mask);
-      grad_node->SetTensorWrapperLinear1Out(Linear1Out);
-      grad_node->SetTensorWrapperDropout1Out(Dropout1Out);
-      grad_node->SetTensorWrapperDropout2Out(Dropout2Out);
+      grad_node->SetTensorWrapper_X(X);
+      grad_node->SetTensorWrapper_Linear1Weight(Linear1Weight);
+      grad_node->SetTensorWrapper_Linear1Bias(Linear1Bias);
+      grad_node->SetTensorWrapper_Linear2Weight(Linear2Weight);
+      grad_node->SetTensorWrapper_Dropout1Mask(Dropout1Mask);
+      grad_node->SetTensorWrapper_Dropout2Mask(Dropout2Mask);
+      grad_node->SetTensorWrapper_Linear1Out(Linear1Out);
+      grad_node->SetTensorWrapper_Dropout1Out(Dropout1Out);
+      grad_node->SetTensorWrapper_Dropout2Out(Dropout2Out);
 
       grad_node->SetGradOutMeta(X, 0);
       grad_node->SetGradOutMeta(Linear1Weight, 3);
@@ -339,24 +337,24 @@ fused_feedforward_dygraph_function(
       grad_node->SetGradOutMeta(Linear2Weight, 5);
 
       if (pre_layer_norm) {
-        grad_node->SetTensorWrapperLn1Scale(Ln1Scale);
-        grad_node->SetTensorWrapperLn1Bias(Ln1Bias);
-        grad_node->SetTensorWrapperLn1Out(Ln1Out);
-        grad_node->SetTensorWrapperLn1Mean(Ln1Mean);
-        grad_node->SetTensorWrapperLn1Variance(Ln1Variance);
+        grad_node->SetTensorWrapper_Ln1Scale(Ln1Scale);
+        grad_node->SetTensorWrapper_Ln1Bias(Ln1Bias);
+        grad_node->SetTensorWrapper_Ln1Out(Ln1Out);
+        grad_node->SetTensorWrapper_Ln1Mean(Ln1Mean);
+        grad_node->SetTensorWrapper_Ln1Variance(Ln1Variance);
         grad_node->SetGradOutMeta(Ln1Scale, 7);
         grad_node->SetGradOutMeta(Ln1Bias, 8);
       } else {
-        grad_node->SetTensorWrapperLn2Scale(Ln2Scale);
+        grad_node->SetTensorWrapper_Ln2Scale(Ln2Scale);
         grad_node->SetGradOutMeta(Ln2Scale, 9);
-        grad_node->SetTensorWrapperLn2Bias(Ln2Bias);
+        grad_node->SetTensorWrapper_Ln2Bias(Ln2Bias);
         grad_node->SetGradOutMeta(Ln2Bias, 10);
-        grad_node->SetTensorWrapperLn2Mean(Ln2Mean);
-        grad_node->SetTensorWrapperLn2Variance(Ln2Variance);
+        grad_node->SetTensorWrapper_Ln2Mean(Ln2Mean);
+        grad_node->SetTensorWrapper_Ln2Variance(Ln2Variance);
       }
 
-      if (Linear2Bias.initialized()) {
-        grad_node->SetTensorWrapperLinear2Bias(Linear2Bias);
+      if (Linear2Bias.has_allocation()) {
+        grad_node->SetTensorWrapper_Linear2Bias(Linear2Bias);
         grad_node->SetGradOutMeta(Linear2Bias, 6);
       }
 

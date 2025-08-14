@@ -12,12 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-from paddle import _C_ops, _legacy_C_ops
+from paddle import _C_ops
 
-from .. import core, framework
+from .. import core
 from ..framework import convert_np_dtype_to_dtype_
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle._typing import DTypeLike
 
 _supported_int_dtype_ = [
     core.VarDesc.VarType.UINT8,
@@ -57,16 +65,47 @@ _complex_dtypes = [
 _already_patch_eager_tensor = False
 
 
+_supported_dtype_conversions = {
+    # float
+    'float16': 'float16',
+    'half': 'float16',
+    'bfloat16': 'bfloat16',
+    'float32': 'float32',
+    'float': 'float32',
+    'float64': 'float64',
+    'double': 'float64',
+    # int
+    'int8': 'int8',
+    'char': 'int8',
+    # We handle uint8 conversion separately
+    # 'uint8': 'uint8',
+    # 'byte': 'uint8',
+    'int16': 'int16',
+    'short': 'int16',
+    'int32': 'int32',
+    'int': 'int32',
+    'int64': 'int64',
+    'long': 'int64',
+    # other
+    'bool': 'bool',
+    'complex64': 'complex64',
+    'complex128': 'complex128',
+    'cfloat': 'complex64',
+    'cdouble': 'complex128',
+}
+
+
 def monkey_patch_math_tensor():
     """
     Similar to monkey_patch_variable.
     The difference is, in dygraph mode, use auto-generated op functions for better performance.
     """
 
-    def astype(self, dtype):
+    def astype(self: Tensor, dtype: DTypeLike) -> Tensor:
         """
 
-        Cast a Tensor to a specified data type.
+        Cast a Tensor to a specified data type if it differs from the current dtype;
+        otherwise, return the original Tensor.
 
         Args:
             dtype: The target data type.
@@ -87,49 +126,112 @@ def monkey_patch_math_tensor():
                 >>> print("new tensor's dtype is: {}".format(new_tensor.dtype))
                 new tensor's dtype is: paddle.float32
         """
-        if not isinstance(dtype, core.VarDesc.VarType):
+        if not isinstance(dtype, (core.VarDesc.VarType, core.DataType)):
             dtype = convert_np_dtype_to_dtype_(dtype)
+
+        if self.dtype == dtype:
+            return self
+
         return _C_ops.cast(self, dtype)
 
-    def _scalar_elementwise_op_(var, scale, bias):
-        if framework.in_dygraph_mode():
-            return _C_ops.scale(var, float(scale), bias, True)
+    def byte(self: Tensor) -> Tensor:
+        # since paddle don't support float to uint8, so we need to convert it to int8 first
+        if self.is_floating_point():
+            tensor = astype(self, 'int8')
+            return astype(tensor, 'uint8')
+        elif self.is_complex():
+            real = astype(self.real(), 'int8')
+            return astype(real, 'uint8')
         else:
-            return _legacy_C_ops.scale(var, 'scale', scale, 'bias', bias)
+            return astype(self, 'uint8')
 
-    def _neg_(var):
+    def _create_dtype_conversion_methods():
+        """
+        Batch create all data type conversion methods
+        """
+        methods = []
+
+        for method_name, target_dtype in _supported_dtype_conversions.items():
+
+            def make_conversion_method(dtype):
+                def conversion_method(self: Tensor) -> Tensor:
+                    return astype(self, dtype)
+
+                return conversion_method
+
+            method_impl = make_conversion_method(target_dtype)
+            method_impl.__name__ = method_name
+            method_impl.__doc__ = f"""
+            Cast a Tensor to {target_dtype} data type if it differs from the current dtype;
+            otherwise, return the original Tensor.
+            Returns:
+                Tensor: a new Tensor with {target_dtype} dtype
+            """
+
+            methods.append((method_name, method_impl))
+
+        return methods
+
+    def type_as(self: Tensor, other: Tensor) -> Tensor:
+        return self.astype(other.dtype)
+
+    def _scalar_elementwise_op_(
+        var: Tensor, scale: float, bias: float
+    ) -> Tensor:
+        return _C_ops.scale(var, float(scale), bias, True)
+
+    def _neg_(var: Tensor) -> Tensor:
         return _scalar_elementwise_op_(var, -1.0, 0.0)
 
-    def _float_(var):
+    def _abs_(var: Tensor) -> Tensor:
+        return var.abs()
+
+    def _complex_(var: Tensor) -> complex:
+        numel = np.prod(var.shape)
+        assert (
+            numel == 1
+        ), "only one element variable can be converted to complex."
+        assert var._is_initialized(), "variable's tensor is not initialized"
+        if not var.is_complex():
+            var = var.astype('complex64')
+        return complex(np.array(var))
+
+    def _float_(var: Tensor) -> float:
         numel = np.prod(var.shape)
         assert (
             numel == 1
         ), "only one element variable can be converted to float."
-        tensor = var.value().get_tensor()
-        assert tensor._is_initialized(), "variable's tensor is not initialized"
-        if var.dtype == core.VarDesc.VarType.BF16:
+        assert var._is_initialized(), "variable's tensor is not initialized"
+        if (
+            var.dtype == core.VarDesc.VarType.BF16
+            or var.dtype == core.DataType.BFLOAT16
+        ):
             var = var.astype('float32')
         return float(np.array(var))
 
-    def _long_(var):
+    def _long_(var: Tensor) -> int:
         numel = np.prod(var.shape)
         assert numel == 1, "only one element variable can be converted to long."
-        tensor = var.value().get_tensor()
-        assert tensor._is_initialized(), "variable's tensor is not initialized"
-        if var.dtype == core.VarDesc.VarType.BF16:
+        assert var._is_initialized(), "variable's tensor is not initialized"
+        if (
+            var.dtype == core.VarDesc.VarType.BF16
+            or var.dtype == core.DataType.BFLOAT16
+        ):
             var = var.astype('float32')
         return int(np.array(var))
 
-    def _int_(var):
+    def _int_(var: Tensor) -> int:
         numel = np.prod(var.shape)
         assert numel == 1, "only one element variable can be converted to int."
-        tensor = var.value().get_tensor()
-        assert tensor._is_initialized(), "variable's tensor is not initialized"
-        if var.dtype == core.VarDesc.VarType.BF16:
+        assert var._is_initialized(), "variable's tensor is not initialized"
+        if (
+            var.dtype == core.VarDesc.VarType.BF16
+            or var.dtype == core.DataType.BFLOAT16
+        ):
             var = var.astype('float32')
         return int(np.array(var))
 
-    def _len_(var):
+    def _len_(var: Tensor) -> int:
         assert var.ndim > 0, "len() of a 0-D tensor is wrong"
         if var.type == core.VarDesc.VarType.VOCAB:
             return len(var.value().get_map_tensor())
@@ -138,57 +240,112 @@ def monkey_patch_math_tensor():
         else:
             return var.shape[0]
 
-    def _index_(var):
+    def _index_(var: Tensor) -> int:
         numel = np.prod(var.shape)
         assert (
             numel == 1
         ), "only one element variable can be converted to python index."
-        tensor = var.value().get_tensor()
-        assert tensor._is_initialized(), "variable's tensor is not initialized"
-        if var.dtype == core.VarDesc.VarType.BF16:
+        assert var._is_initialized(), "variable's tensor is not initialized"
+        if (
+            var.dtype == core.VarDesc.VarType.BF16
+            or var.dtype == core.DataType.BFLOAT16
+        ):
             var = var.astype('float32')
         return int(np.array(var))
 
     @property
-    def _ndim(var):
+    def _ndim(var: Tensor) -> int:
         return len(var.shape)
 
-    def ndimension(var):
+    def ndimension(var: Tensor) -> int:
         return len(var.shape)
 
-    def dim(var):
+    def dim(var: Tensor) -> int:
         return len(var.shape)
 
     @property
-    def _size_(var):
+    def _size_(var: Tensor) -> int:
         return int(np.prod(var.shape))
 
     @property
-    def _T_(var):
+    def _T_(var: Tensor) -> Tensor:
         if len(var.shape) == 1:
             return var
-        perm = []
-        for i in range(len(var.shape)):
-            perm.insert(0, i)
+        perm = list(reversed(range(len(var.shape))))
         out = _C_ops.transpose(var, perm)
         return out
 
+    @property
+    def _mT_(var: Tensor) -> Tensor:
+        if len(var.shape) < 2:
+            raise ValueError(
+                f"Tensor.ndim({var.ndim}) is required to be greater than or equal to 2."
+            )
+        perm = list(range(len(var.shape)))
+        perm[-1], perm[-2] = perm[-2], perm[-1]
+        out = _C_ops.transpose(var, perm)
+        return out
+
+    @property
+    def requires_grad(self: Tensor) -> bool:
+        """
+        Whether this Tensor requires gradient computation.
+
+        This is a convenience property that returns the opposite of stop_gradient.
+        Setting requires_grad=True is equivalent to setting stop_gradient=False.
+
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> x = paddle.randn([2, 3])
+                >>> print(x.requires_grad)  # False by default
+                >>>
+                >>> x.requires_grad = False
+                >>> print(x.stop_gradient)  # True
+        """
+        return not self.stop_gradient
+
+    @requires_grad.setter
+    def requires_grad(self: Tensor, value: bool) -> None:
+        """
+        Set whether this Tensor requires gradient computation.
+
+        Args:
+            value (bool): True to enable gradient computation, False to disable.
+        """
+        if not isinstance(value, bool):
+            raise TypeError(
+                f"requires_grad must be bool, but got {type(value)}"
+            )
+        self.stop_gradient = not value
+
     eager_methods = [
         ('__neg__', _neg_),
+        ('__abs__', _abs_),
+        ('__complex__', _complex_),
         ('__float__', _float_),
         ('__long__', _long_),
         ('__int__', _int_),
         ('__len__', _len_),
         ('__index__', _index_),
         ('astype', astype),
+        ('byte', byte),
+        ('uint8', byte),
+        ('type_as', type_as),
         ('dim', dim),
         ('ndimension', ndimension),
         ('ndim', _ndim),
         ('size', _size_),
         ('T', _T_),
+        ('mT', _mT_),
+        ("requires_grad", requires_grad),
         # for logical compare
         ('__array_ufunc__', None),
     ]
+
+    dtype_conversion_methods = _create_dtype_conversion_methods()
+    eager_methods.extend(dtype_conversion_methods)
 
     eager_cpp_level_patch = [
         "__add__",
@@ -202,12 +359,15 @@ def monkey_patch_math_tensor():
         '__rdiv__',
         '__rtruediv__',
         '__mod__',
+        '__rmod__',
         '__matmul__',
+        '__rmatmul__',
         '__gt__',
         '__ge__',
         '__lt__',
         '__le__',
         '__floordiv__',
+        '__rfloordiv__',
         '__pow__',
         '__rpow__',
         '__eq__',

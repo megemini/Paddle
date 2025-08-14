@@ -15,8 +15,8 @@
 #include "paddle/phi/backends/device_base.h"
 
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/utils/flags.h"
 
 PD_DECLARE_double(fraction_of_gpu_memory_to_use);
 PD_DECLARE_uint64(initial_gpu_memory_in_mb);
@@ -26,24 +26,72 @@ constexpr static float fraction_reserve_gpu_memory = 0.05f;
 
 namespace phi {
 
-#define INTERFACE_UNIMPLEMENT              \
-  PADDLE_THROW(phi::errors::Unimplemented( \
+#define INTERFACE_UNIMPLEMENT                 \
+  PADDLE_THROW(common::errors::Unimplemented( \
       "%s is not implemented on %s device.", __func__, Type()));
 
 // info
-size_t DeviceInterface::GetComputeCapability() {
+size_t DeviceInterface::GetComputeCapability(size_t dev_id) {
   VLOG(10) << Type() << " get compute capability " << 0;
   return 0;
 }
 
-size_t DeviceInterface::GetRuntimeVersion() {
+DeviceProp& DeviceInterface::GetDeviceProperties(size_t dev_id) {
+  static DeviceProp prop;
+  VLOG(10) << Type() << " get device properties " << 0;
+  return prop;
+}
+
+size_t DeviceInterface::GetRuntimeVersion(size_t dev_id) {
   VLOG(10) << Type() << " get runtime version " << 0;
   return 0;
 }
 
-size_t DeviceInterface::GetDriverVersion() {
+size_t DeviceInterface::GetDriverVersion(size_t dev_id) {
   VLOG(10) << Type() << " get driver version " << 0;
   return 0;
+}
+
+size_t DeviceInterface::GetMultiProcessors(size_t dev_id) {
+  VLOG(10) << Type() << " get multiprocessors " << 0;
+  return 0;
+}
+
+size_t DeviceInterface::GetMaxThreadsPerMultiProcessor(size_t dev_id) {
+  VLOG(10) << Type() << " get max threads per multiprocessor " << 0;
+  return 0;
+}
+
+size_t DeviceInterface::GetMaxThreadsPerBlock(size_t dev_id) {
+  VLOG(10) << Type() << " get max threads per block " << 0;
+  return 0;
+}
+
+std::array<unsigned int, 3> DeviceInterface::GetMaxGridDimSize(size_t dev_id) {
+  VLOG(10) << Type() << " get max grid dim size [" << 0 << ", " << 0 << ", "
+           << 0 << "]";
+  return {0, 0, 0};
+}
+
+bool DeviceInterface::IsFloat16Supported(size_t dev_id) {
+  VLOG(10) << Type() << " is float16 supported: " << false;
+  return false;
+}
+
+bool DeviceInterface::IsBFloat16Supported(size_t dev_id) {
+  VLOG(10) << Type() << " is bfloat16 supported: " << false;
+  return false;
+}
+
+void* DeviceInterface::InitEigenDevice(const Place& place,
+                                       phi::stream::stream_t stream,
+                                       phi::Allocator* allocator) {
+  VLOG(10) << Type() << " init eigen device ";
+  return 0;
+}
+
+void DeviceInterface::DestroyEigenDevice(size_t dev_id, void* eigen_device) {
+  VLOG(10) << Type() << " destroy eigen device ";
 }
 
 // device manage
@@ -71,16 +119,16 @@ void DeviceInterface::CreateStream(size_t dev_id,
   INTERFACE_UNIMPLEMENT;
 }
 
-void DeviceInterface::DestroyStream(size_t dev_id, stream::Stream* stream) {
+void DeviceInterface::DestroyStream(size_t dev_id, stream::stream_t stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 void DeviceInterface::SynchronizeStream(size_t dev_id,
-                                        const stream::Stream* stream) {
+                                        stream::stream_t stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
-bool DeviceInterface::QueryStream(size_t dev_id, const stream::Stream* stream) {
+bool DeviceInterface::QueryStream(size_t dev_id, stream::stream_t stream) {
   INTERFACE_UNIMPLEMENT;
   return true;
 }
@@ -208,19 +256,19 @@ size_t DeviceInterface::AllocSize(size_t dev_id, bool realloc) {
   size_t available_to_alloc = AvailableAllocSize(dev_id);
   PADDLE_ENFORCE_GT(available_to_alloc,
                     0,
-                    phi::errors::ResourceExhausted(
+                    common::errors::ResourceExhausted(
                         "Not enough available %s memory.", Type()));
   // If FLAGS_initial_gpu_memory_in_mb is 0, then initial memory will be
   // allocated by fraction
   size_t flag_mb = realloc ? FLAGS_reallocate_gpu_memory_in_mb
                            : FLAGS_initial_gpu_memory_in_mb;
   size_t alloc_bytes =
-      (flag_mb > 0ul
-           ? flag_mb << 20
-           : available_to_alloc * FLAGS_fraction_of_gpu_memory_to_use);
+      (flag_mb > 0ul ? flag_mb << 20
+                     : available_to_alloc *
+                           FLAGS_fraction_of_gpu_memory_to_use);  // NOLINT
   PADDLE_ENFORCE_GE(available_to_alloc,
                     alloc_bytes,
-                    phi::errors::ResourceExhausted(
+                    common::errors::ResourceExhausted(
                         "Not enough available %s memory.", Type()));
   return alloc_bytes;
 }
@@ -267,6 +315,10 @@ size_t DeviceInterface::GetExtraPaddingSize(size_t dev_id) {
   return 0;
 }
 
+void DeviceInterface::CCLCommName(ccl::CCLComm ccl_comm, char* comm_name) {
+  INTERFACE_UNIMPLEMENT;
+}
+
 void DeviceInterface::CCLDestroyComm(ccl::CCLComm ccl_comm) {
   INTERFACE_UNIMPLEMENT;
 }
@@ -284,50 +336,50 @@ void DeviceInterface::CCLGetUniqueId(ccl::CCLRootId* root_id) {
 
 void DeviceInterface::CCLBroadcast(void* data,
                                    size_t num,
-                                   ccl::CCLDataType data_type,
+                                   phi::DataType data_type,
                                    size_t root,
                                    const ccl::CCLComm& ccl_comm,
-                                   const stream::Stream& stream) {
+                                   const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 void DeviceInterface::CCLAllReduce(void* in_data,
                                    void* out_data,
                                    size_t num,
-                                   ccl::CCLDataType data_type,
+                                   phi::DataType data_type,
                                    ccl::CCLReduceOp reduce_op,
                                    const ccl::CCLComm& ccl_comm,
-                                   const stream::Stream& stream) {
+                                   const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 void DeviceInterface::CCLReduce(void* in_data,
                                 void* out_data,
                                 size_t num,
-                                ccl::CCLDataType data_type,
+                                phi::DataType data_type,
                                 ccl::CCLReduceOp reduce_op,
                                 size_t root_id,
                                 const ccl::CCLComm& ccl_comm,
-                                const stream::Stream& stream) {
+                                const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 void DeviceInterface::CCLAllGather(void* in_data,
                                    void* out_data,
                                    size_t num,
-                                   ccl::CCLDataType data_type,
+                                   phi::DataType data_type,
                                    const ccl::CCLComm& ccl_comm,
-                                   const stream::Stream& stream) {
+                                   const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 void DeviceInterface::CCLReduceScatter(void* in_data,
                                        void* out_data,
                                        size_t num,
-                                       ccl::CCLDataType data_type,
+                                       phi::DataType data_type,
                                        ccl::CCLReduceOp op,
                                        const ccl::CCLComm& ccl_comm,
-                                       const stream::Stream& stream) {
+                                       const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
@@ -337,38 +389,38 @@ void DeviceInterface::CCLGroupEnd() { INTERFACE_UNIMPLEMENT; }
 
 void DeviceInterface::CCLSend(void* sendbuf,
                               size_t num,
-                              ccl::CCLDataType data_type,
+                              phi::DataType data_type,
                               size_t dst_rank,
                               const ccl::CCLComm& ccl_comm,
-                              const stream::Stream& stream) {
+                              const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 void DeviceInterface::CCLRecv(void* recvbuf,
                               size_t num,
-                              ccl::CCLDataType data_type,
+                              phi::DataType data_type,
                               size_t src_rank,
                               const ccl::CCLComm& ccl_comm,
-                              const stream::Stream& stream) {
+                              const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 void DeviceInterface::CCLAllToAll(const void** send_buf,
                                   const size_t* send_count,
-                                  const ccl::CCLDataType* send_dtype,
+                                  const phi::DataType* send_dtype,
                                   void** recv_buf,
                                   const size_t* recv_count,
-                                  const ccl::CCLDataType* recv_dtype,
+                                  const phi::DataType* recv_dtype,
                                   size_t rank,
                                   size_t nranks,
                                   const ccl::CCLComm& comm,
-                                  const stream::Stream& stream) {
+                                  const stream::stream_t& stream) {
   INTERFACE_UNIMPLEMENT;
 }
 
 // blas
 void DeviceInterface::BlasAXPBY(size_t dev_id,
-                                const stream::Stream& stream,
+                                const stream::stream_t& stream,
                                 phi::DataType dtype,
                                 size_t numel,
                                 float alpha,

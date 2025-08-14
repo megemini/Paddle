@@ -16,6 +16,7 @@
 
 #include <memory>
 #include "paddle/fluid/framework/new_executor/instruction/instruction_base.h"
+#include "paddle/phi/core/ddim.h"
 
 namespace pir {
 class Operation;
@@ -28,7 +29,7 @@ class Scope;
 class CinnJitInstruction : public InstructionBase {
  public:
   CinnJitInstruction(size_t id,
-                     const platform::Place& place,
+                     const phi::Place& place,
                      ::pir::Operation* op,
                      const ValueExecutionInfo* value_exec_info);
 
@@ -45,13 +46,21 @@ class CinnJitInstruction : public InstructionBase {
 
   std::shared_ptr<FnPtrImpl> fn_ptr_impl_{nullptr};
 
-  platform::Place place_;
+  phi::Place place_;
 
   phi::DeviceContext* dev_ctx_;
 
-  phi::DenseTensor* out_tensor_;
+  int32_t input_tensor_size;
+  int32_t output_tensor_size;
 
+  bool need_update_shape{false};
   std::vector<phi::DenseTensor*> tensor_args_;
+  std::vector<phi::DenseTensor*> alloc_tensors_;
+  std::vector<phi::DDim> ir_dims_;
+
+  // Tensors that hold the temporary spaces used by the kernel. These tensors
+  // are managed by CinnJitInstruction, and not exposed to phi executor.
+  std::vector<phi::DenseTensor> temp_space_tensors_;
 
   ::pir::Operation* op_{nullptr};  // not owned
 };

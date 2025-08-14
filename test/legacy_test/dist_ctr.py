@@ -24,8 +24,7 @@ IS_SPARSE = True
 os.environ['PADDLE_ENABLE_REMOTE_PREFETCH'] = "1"
 
 # Fix seed for test
-base.default_startup_program().random_seed = 1
-base.default_main_program().random_seed = 1
+paddle.seed(1)
 
 
 class TestDistCTR2x2(TestDistRunnerBase):
@@ -36,19 +35,16 @@ class TestDistCTR2x2(TestDistRunnerBase):
             name="dnn_data",
             shape=[-1, 1],
             dtype="int64",
-            lod_level=1,
         )
         lr_data = paddle.static.data(
             name="lr_data",
             shape=[-1, 1],
             dtype="int64",
-            lod_level=1,
         )
         label = paddle.static.data(
             name="click",
             shape=[-1, 1],
             dtype="int64",
-            lod_level=0,
         )
 
         # build dnn model
@@ -75,7 +71,7 @@ class TestDistCTR2x2(TestDistRunnerBase):
                 weight_attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Constant(value=0.01)
                 ),
-                name='dnn-fc-%d' % i,
+                name=f'dnn-fc-{i}',
             )
             dnn_out = fc
 

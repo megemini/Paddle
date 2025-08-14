@@ -69,9 +69,7 @@ class TestOneDNNReshapeTransposeMatmulFusePass(PassAutoScanTest):
                     matmul_shape[-1],
                     int(self.num / matmul_shape[-1]),
                 ]
-            elif attrs[2]['transpose_X']:
-                shape_y = matmul_shape
-            elif attrs[2]['transpose_Y']:
+            elif attrs[2]['transpose_X'] or attrs[2]['transpose_Y']:
                 shape_y = matmul_shape
             else:
                 shape_y = [
@@ -147,12 +145,12 @@ class TestOneDNNReshapeTransposeMatmulFusePass(PassAutoScanTest):
         return program_config
 
     def sample_predictor_configs(self, program_config):
-        config = self.create_inference_config(use_mkldnn=True)
+        config = self.create_inference_config(use_onednn=True)
         yield config, ['fused_matmul'], (1e-5, 1e-5)
 
     def test(self):
         self.run_and_statis(
-            quant=False, passes=['reshape_transpose_matmul_mkldnn_fuse_pass']
+            quant=False, passes=['reshape_transpose_matmul_onednn_fuse_pass']
         )
 
 

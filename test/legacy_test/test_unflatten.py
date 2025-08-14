@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 def numpy_unflatten(x, axis, shape):
@@ -37,15 +37,11 @@ def numpy_unflatten(x, axis, shape):
                 sizes = np.prod(shape)
                 if sizes != x.shape[axis]:
                     raise ValueError(
-                        "The product of the elements in shape{} is not equal to {}.".format(
-                            shape, x.shape[axis]
-                        )
+                        f"The product of the elements in shape{shape} is not equal to {x.shape[axis]}."
                     )
     else:
         raise TypeError(
-            "The data type of x should be one of ['List', 'Tuple', 'Tensor'], but got {}".format(
-                type(shape)
-            )
+            f"The data type of x should be one of ['List', 'Tuple', 'Tensor'], but got {type(shape)}"
         )
     length = len(x.shape)
     if axis < 0:
@@ -73,9 +69,7 @@ class TestUnflattenAPI(unittest.TestCase):
         self.set_api()
         self.set_args()
         self.get_output()
-        self.places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def func_dygraph(self):
         for place in self.places:
@@ -92,13 +86,9 @@ class TestUnflattenAPI(unittest.TestCase):
         self.setUp()
         self.func_dygraph()
 
-    @test_with_pir_api
     def test_static(self):
         paddle.enable_static()
-        places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            places.append(paddle.CUDAPlace(0))
-        for place in places:
+        for place in get_places():
             with paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
             ):
@@ -125,6 +115,38 @@ class TestUnflattenAPI(unittest.TestCase):
                 )
 
                 np.testing.assert_allclose(fetches[0], self.output, rtol=1e-05)
+
+
+class TestUnflattenInputZeroSize(TestUnflattenAPI):
+    def set_args(self):
+        self.x = np.random.rand(4, 0, 16).astype('int16')
+        self.axis = 0
+        self.shape = (2, 2)
+        self.shape_is_tensor = False
+
+
+class TestUnflattenInputZeroSizeError(unittest.TestCase):
+    def test_errors(self):
+        paddle.disable_static()
+        x = np.random.rand(4, 0, 16).astype('float32')
+        x = paddle.to_tensor(x)
+        with self.assertRaises(Exception) as context:
+            paddle.unflatten(x, axis=0, shape=[-1, 0, 1])
+        self.assertTrue(
+            "Provided sizes don't multiply up" in str(context.exception)
+        )
+
+
+class TestUnflattenInputZeroSizeError2(unittest.TestCase):
+    def test_errors(self):
+        paddle.disable_static()
+        x = np.random.rand(4, 0, 16).astype('float32')
+        x = paddle.to_tensor(x)
+        with self.assertRaises(Exception) as context:
+            paddle.unflatten(x, axis=0, shape=[-1, 3])
+        self.assertTrue(
+            "The 'shape' attribute in ReshapeOp" in str(context.exception)
+        )
 
 
 # check the data type of the input x
@@ -266,15 +288,10 @@ class TestLayer(unittest.TestCase):
 
     def setUp(self):
         self.set_args()
-        self.places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def test_layer(self):
-        places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            places.append(paddle.CUDAPlace(0))
-        for place in places:
+        for place in get_places():
             paddle.disable_static()
             x = paddle.to_tensor(self.x, dtype='float32', place=place)
             unflatten = paddle.nn.Unflatten(self.axis, self.shape)
@@ -282,7 +299,6 @@ class TestLayer(unittest.TestCase):
 
             paddle.enable_static()
 
-            @test_with_pir_api
             def test_static_or_pir_mode():
                 with paddle.static.program_guard(
                     paddle.static.Program(), paddle.static.Program()
@@ -309,7 +325,7 @@ class TestLayer(unittest.TestCase):
 
 
 class TestLayerName(unittest.TestCase):
-    @test_with_pir_api
+
     def test_name(self):
         self.x = np.random.randn(3, 4, 4, 5).astype('float32')
         self.axis = 1

@@ -16,11 +16,11 @@ import unittest
 
 import numpy as np
 from op_test import OpTest, convert_float_to_uint16, convert_uint16_to_float
+from utils import static_guard
 
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestGatherNdOpWithEmptyIndex(OpTest):
@@ -74,7 +74,7 @@ class TestGatherNdOpWithEmptyIndexFP16(TestGatherNdOpWithEmptyIndex):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestGatherNdOpWithEmptyIndexBF16(TestGatherNdOpWithEmptyIndex):
     def config_dtype(self):
@@ -173,7 +173,7 @@ class TestGatherNdOpWithIndex1FP16(TestGatherNdOpWithIndex1):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestGatherNdOpWithIndex1BF16(TestGatherNdOpWithIndex1):
     def config_dtype(self):
@@ -245,7 +245,7 @@ class TestGatherNdOpWithLowIndexFP16(TestGatherNdOpWithLowIndex):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestGatherNdOpWithLowIndexBF16(TestGatherNdOpWithLowIndex):
     def config_dtype(self):
@@ -324,7 +324,7 @@ class TestGatherNdOpIndex1FP16(TestGatherNdOpIndex1):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestGatherNdOpIndex1BF16(TestGatherNdOpIndex1):
     def config_dtype(self):
@@ -394,7 +394,7 @@ class TestGatherNdOpWithSameIndexAsXFP16(TestGatherNdOpWithSameIndexAsX):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestGatherNdOpWithSameIndexAsXBF16(TestGatherNdOpWithSameIndexAsX):
     def config_dtype(self):
@@ -434,7 +434,7 @@ class TestGatherNdOpWithHighRankSame(OpTest):
         else:
             target_dtype = "float32"
         xnp = np.random.rand(*shape).astype(target_dtype)
-        index = np.vstack([np.random.randint(0, s, size=2) for s in shape]).T
+        index = np.vstack([np.random.randint(-s, s, size=2) for s in shape]).T
         output = xnp[tuple(index.T)]
         if self.dtype == np.uint16:
             xnp = convert_float_to_uint16(xnp)
@@ -466,7 +466,7 @@ class TestGatherNdOpWithHighRankSameFP16(TestGatherNdOpWithHighRankSame):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestGatherNdOpWithHighRankSameBF16(TestGatherNdOpWithHighRankSame):
     def config_dtype(self):
@@ -505,7 +505,7 @@ class TestGatherNdOpWithHighRankDiff(OpTest):
         else:
             target_dtype = "float32"
         xnp = np.random.rand(*shape).astype(target_dtype)
-        index = np.vstack([np.random.randint(0, s, size=200) for s in shape]).T
+        index = np.vstack([np.random.randint(-s, s, size=200) for s in shape]).T
         index_re = index.reshape([20, 5, 2, 5])
         output = xnp[tuple(index.T)].reshape([20, 5, 2])
         if self.dtype == np.uint16:
@@ -538,7 +538,7 @@ class TestGatherNdOpWithHighRankDiffFP16(TestGatherNdOpWithHighRankDiff):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestGatherNdOpWithHighRankDiffBF16(TestGatherNdOpWithHighRankDiff):
     def config_dtype(self):
@@ -562,67 +562,72 @@ class TestGatherNdOpWithHighRankDiffBF16(TestGatherNdOpWithHighRankDiff):
 
 # Test Python API
 class TestGatherNdOpAPI(unittest.TestCase):
-    @test_with_pir_api
+
     def test_case1(self):
-        x1 = paddle.static.data(
-            name='x1', shape=[-1, 30, 40, 50, 60], dtype='float32'
-        )
-        index1 = paddle.static.data(
-            name='index1', shape=[-1, 2, 4], dtype='int32'
-        )
-        output1 = paddle.gather_nd(x1, index1)
+        with static_guard():
+            x1 = paddle.static.data(
+                name='x1', shape=[-1, 30, 40, 50, 60], dtype='float32'
+            )
+            index1 = paddle.static.data(
+                name='index1', shape=[-1, 2, 4], dtype='int32'
+            )
+            output1 = paddle.gather_nd(x1, index1)
 
-    @test_with_pir_api
     def test_case2(self):
-        x2 = paddle.static.data(
-            name='x2', shape=[-1, 30, 40, 50], dtype='float32'
-        )
-        index2 = paddle.static.data(
-            name='index2', shape=[-1, 2, 2], dtype='int64'
-        )
-        output2 = paddle.gather_nd(x2, index2)
+        with static_guard():
+            x2 = paddle.static.data(
+                name='x2', shape=[-1, 30, 40, 50], dtype='float32'
+            )
+            index2 = paddle.static.data(
+                name='index2', shape=[-1, 2, 2], dtype='int64'
+            )
+            output2 = paddle.gather_nd(x2, index2)
 
-    @test_with_pir_api
     def test_case3(self):
-        x3 = paddle.static.data(name='x3', shape=[-1, 3, 4, 5], dtype='float32')
-        index3 = paddle.static.data(
-            name='index3', shape=[-1, 2, 1], dtype='int32'
-        )
-        output3 = paddle.gather_nd(x3, index3, name="gather_nd_layer")
+        with static_guard():
+            x3 = paddle.static.data(
+                name='x3', shape=[-1, 3, 4, 5], dtype='float32'
+            )
+            index3 = paddle.static.data(
+                name='index3', shape=[-1, 2, 1], dtype='int32'
+            )
+            output3 = paddle.gather_nd(x3, index3, name="gather_nd_layer")
 
 
 # Test Raise Index Error
 class TestGatherNdOpRaise(unittest.TestCase):
-    @test_with_pir_api
+
     def test_check_raise(self):
         def check_raise_is_test():
-            try:
-                x = paddle.static.data(
-                    name='x', shape=[-1, 3, 4, 5], dtype='float32'
-                )
-                index = paddle.static.data(
-                    name='index', shape=[-1, 2, 10], dtype='int32'
-                )
-                output = paddle.gather_nd(x, index)
-            except Exception as e:
-                t = "Input(Index).shape[-1] should be no greater than Input(X).rank"
-                if t in str(e):
-                    raise IndexError
+            with static_guard():
+                try:
+                    x = paddle.static.data(
+                        name='x', shape=[-1, 3, 4, 5], dtype='float32'
+                    )
+                    index = paddle.static.data(
+                        name='index', shape=[-1, 2, 10], dtype='int32'
+                    )
+                    output = paddle.gather_nd(x, index)
+                except Exception as e:
+                    t = "Input(Index).shape[-1] should be no greater than Input(X).rank"
+                    if t in str(e):
+                        raise IndexError
 
         self.assertRaises(IndexError, check_raise_is_test)
 
 
 class TestGatherNdError(unittest.TestCase):
-    def test_error(self):
-        with paddle.static.program_guard(
-            paddle.static.Program(), paddle.static.Program()
+
+    def test_error1(self):
+        with (
+            static_guard(),
+            paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ),
         ):
             shape = [8, 9, 6]
             x = paddle.static.data(shape=shape, dtype='float32', name='x')
             index = paddle.static.data(shape=shape, dtype='bool', name='index')
-            index_float = paddle.static.data(
-                shape=shape, dtype='float32', name='index_float'
-            )
             np_x = np.random.random(shape).astype('float32')
             np_index = np.array(np.random.randint(2, size=shape, dtype=bool))
 
@@ -636,6 +641,19 @@ class TestGatherNdError(unittest.TestCase):
 
             self.assertRaises(TypeError, test_index_type)
 
+    def test_error2(self):
+        with (
+            static_guard(),
+            paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ),
+        ):
+            shape = [8, 9, 6]
+            x = paddle.static.data(shape=shape, dtype='float32', name='x')
+            index_float = paddle.static.data(
+                shape=shape, dtype='float32', name='index_float'
+            )
+
             def test_index_dtype():
                 paddle.gather_nd(x, index_float)
 
@@ -643,7 +661,7 @@ class TestGatherNdError(unittest.TestCase):
 
 
 class TestGatherNdAPI2(unittest.TestCase):
-    @test_with_pir_api
+
     def test_static(self):
         with base.program_guard(base.Program(), base.Program()):
             data1 = paddle.static.data('data1', shape=[-1, 2], dtype='float64')
@@ -659,7 +677,6 @@ class TestGatherNdAPI2(unittest.TestCase):
             expected_output = np.array([[3, 4]])
         np.testing.assert_allclose(result, expected_output, rtol=1e-05)
 
-    @test_with_pir_api
     def test_static_fp16_with_gpu(self):
         if paddle.base.core.is_compiled_with_cuda():
             place = paddle.CUDAPlace(0)
@@ -695,13 +712,65 @@ class TestGatherNdAPI2(unittest.TestCase):
         paddle.disable_static()
         input_1 = np.array([[1, 2], [3, 4], [5, 6]])
         index_1 = np.array([[1]])
-        input = base.dygraph.to_variable(input_1)
-        index = base.dygraph.to_variable(index_1)
+        input = paddle.to_tensor(input_1)
+        index = paddle.to_tensor(index_1)
         output = paddle.gather(input, index)
         output_np = output.numpy()
         expected_output = np.array([[3, 4]])
         np.testing.assert_allclose(output_np, expected_output, rtol=1e-05)
         paddle.enable_static()
+
+
+class TestGatherNdOp_ZeroSize(OpTest):
+    def setUp(self):
+        self.op_type = "gather_nd"
+        self.python_api = paddle.gather_nd
+        self.public_python_api = paddle.gather_nd
+        xnp = np.random.random([10, 20])
+        index = np.random.random([0]).astype("int32")
+        output = xnp[tuple(index.T)]
+
+        self.inputs = {'X': xnp, 'Index': index}
+        self.outputs = {'Out': output}
+
+    def test_check_output(self):
+        self.check_output(check_pir=True)
+
+    def test_check_grad(self):
+        self.check_grad(
+            ['X'],
+            'Out',
+            check_pir=True,
+        )
+
+    def test_check_output_cpu(self):
+        self.check_output_with_place(check_pir=True, place=paddle.CPUPlace())
+
+
+class TestGatherNdOp_ZeroSize2(TestGatherNdOp_ZeroSize):
+    def setUp(self):
+        self.op_type = "gather_nd"
+        self.python_api = paddle.gather_nd
+        self.public_python_api = paddle.gather_nd
+        xnp = np.random.random([10, 20])
+        index = np.random.random([2, 0]).astype("int32")
+        output = np.tile(xnp, [2, 1, 1])
+
+        self.inputs = {'X': xnp, 'Index': index}
+        self.outputs = {'Out': output}
+
+
+class TestGatherNdOp_ZeroSize3(TestGatherNdOp_ZeroSize):
+    def setUp(self):
+        self.op_type = "gather_nd"
+        self.python_api = paddle.gather_nd
+        self.public_python_api = paddle.gather_nd
+        xnp = np.random.random([1, 2, 3, 2])
+        index = np.random.random([1, 1, 1, 0]).astype("int32")
+        output = np.tile(xnp, [1, 1, 1, 1, 1, 1, 1])
+
+        self.inputs = {'X': xnp, 'Index': index}
+        self.outputs = {'Out': output}
 
 
 if __name__ == "__main__":

@@ -18,6 +18,8 @@
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_utils.h"
+#include "paddle/phi/kernels/funcs/complex_functors.h"
+#include "paddle/phi/kernels/funcs/for_range.h"
 
 namespace phi {
 
@@ -72,31 +74,52 @@ void CrossGradKernel(const Context &dev_ctx,
                                 "But received: Input(X/Y).dims() == [%s].",
                                 input_x_dims));
   }
-  auto outer_loops = 1;
-  for (auto i = 0; i < dim; i++) {
-    outer_loops *= static_cast<int>(input_x_dims[i]);
+  int64_t outer_loops = 1;
+  for (int i = 0; i < dim; i++) {
+    outer_loops *= input_x_dims[i];
   }
-  auto slice_size = 1;
-  for (auto i = dim + 1; i < input_x_dims.size(); i++) {
-    slice_size *= static_cast<int>(input_x_dims[i]);
+  int64_t slice_size = 1;
+  for (int i = dim + 1; i < input_x_dims.size(); i++) {
+    slice_size *= input_x_dims[i];
   }
 
+  int64_t numel = x.numel();
+  DenseTensor x_conj, y_conj;
+  DenseTensorMeta meta_xy(x.dtype(), x.dims());
+  x_conj.set_meta(meta_xy);
+  y_conj.set_meta(meta_xy);
+
+  auto *input_x_conj_data = dev_ctx.template Alloc<T>(&x_conj);
+
+  auto *input_y_conj_data = dev_ctx.template Alloc<T>(&y_conj);
+
+  phi::funcs::ForRange<Context> for_range(dev_ctx, numel);
+  phi::funcs::ConjFunctor<T> functor_x(
+      input_x.data<T>(), numel, input_x_conj_data);
+  phi::funcs::ConjFunctor<T> functor_y(
+      input_y.data<T>(), numel, input_y_conj_data);
+  for_range(functor_x);
+  for_range(functor_y);
+
   std::vector<T> input_x_vec, input_y_vec, input_dout_vec;
-  phi::TensorToVector(input_x, dev_ctx, &input_x_vec);
-  phi::TensorToVector(input_y, dev_ctx, &input_y_vec);
+  phi::TensorToVector(x_conj, dev_ctx, &input_x_vec);
+  phi::TensorToVector(y_conj, dev_ctx, &input_y_vec);
   phi::TensorToVector(input_out_grad, dev_ctx, &input_dout_vec);
   std::vector<T> out_dx_vec(output_x_grad->numel());
   std::vector<T> out_dy_vec(output_y_grad->numel());
 
   dev_ctx.template Alloc<T>(output_x_grad);
   dev_ctx.template Alloc<T>(output_y_grad);
+  if (numel == 0) {
+    return;
+  }
 
-  for (auto i = 0; i < outer_loops; i++) {
-    for (auto j = 0; j < 3; j++) {
-      auto dst_pos = (3 * i + j) * slice_size;
-      auto in_pos1 = (3 * i + ((j + 1) % 3)) * slice_size;
-      auto in_pos2 = (3 * i + ((j + 2) % 3)) * slice_size;
-      for (auto k = 0; k < slice_size; k++) {
+  for (int64_t i = 0; i < outer_loops; i++) {
+    for (int64_t j = 0; j < 3; j++) {
+      int64_t dst_pos = (3 * i + j) * slice_size;
+      int64_t in_pos1 = (3 * i + ((j + 1) % 3)) * slice_size;
+      int64_t in_pos2 = (3 * i + ((j + 2) % 3)) * slice_size;
+      for (int64_t k = 0; k < slice_size; k++) {
         out_dx_vec[dst_pos + k] =
             input_dout_vec[in_pos2 + k] * input_y_vec[in_pos1 + k] -
             input_dout_vec[in_pos1 + k] * input_y_vec[in_pos2 + k];
@@ -120,4 +143,6 @@ PD_REGISTER_KERNEL(cross_grad,
                    float,
                    double,
                    int,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

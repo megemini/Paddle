@@ -26,7 +26,7 @@ namespace distributed {
 using phi::distributed::auto_parallel::str_join;
 
 ////////////////// Utils Functions //////////////////
-std::vector<int64_t> GetReplicatedDimsmapping(const int ndim) {
+std::vector<int64_t> GetReplicatedDimsMapping(const int ndim) {
   std::vector<int64_t> dims_mapping(ndim, -1);
   return dims_mapping;
 }
@@ -35,8 +35,8 @@ std::vector<int64_t> GetReplicatedDimsmapping(const int ndim) {
 SpmdInfo ReplicatedInferSpmd(const std::vector<const DistMetaTensor*>& ins,
                              const std::vector<const DistMetaTensor*>& outs) {
   // step1: Build Einsum Notation for input tensor's batch axis
-  int64_t ninputs = ins.size();
-  int64_t noutputs = outs.size();
+  int64_t ninputs = static_cast<int64_t>(ins.size());
+  int64_t noutputs = static_cast<int64_t>(outs.size());
 
   // Step2: Unshard Output's Dims Mapping.
   std::vector<TensorDistAttr> output_dist_attrs;
@@ -46,8 +46,8 @@ SpmdInfo ReplicatedInferSpmd(const std::vector<const DistMetaTensor*>& ins,
     int ndim = outs[i]->dims().size();
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(ins[0]->dist_attr());
-    std::vector<int64_t> dst_dims_maping = GetReplicatedDimsmapping(ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping = GetReplicatedDimsMapping(ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     output_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -61,8 +61,8 @@ SpmdInfo ReplicatedInferSpmd(const std::vector<const DistMetaTensor*>& ins,
     }
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(ins[i]->dist_attr());
-    std::vector<int64_t> dst_dims_maping = GetReplicatedDimsmapping(ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping = GetReplicatedDimsMapping(ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     dst_input_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -94,8 +94,8 @@ SpmdInfo ReplicatedInferSpmdReverse(
     const std::vector<const DistMetaTensor*>& ins,
     const std::vector<const DistMetaTensor*>& outs) {
   // step1: Build Einsum Notation for input tensor's batch axis
-  int64_t ninputs = ins.size();
-  int64_t noutputs = outs.size();
+  int64_t ninputs = static_cast<int64_t>(ins.size());
+  int64_t noutputs = static_cast<int64_t>(outs.size());
 
   // Step2: Unshard Output's Dims Mapping.
   std::vector<TensorDistAttr> output_dist_attrs;
@@ -103,8 +103,8 @@ SpmdInfo ReplicatedInferSpmdReverse(
     int ndim = outs[i]->dims().size();
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(outs[i]->dist_attr());
-    std::vector<int64_t> dst_dims_maping = GetReplicatedDimsmapping(ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping = GetReplicatedDimsMapping(ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     output_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -114,8 +114,8 @@ SpmdInfo ReplicatedInferSpmdReverse(
     int ndim = ins[i]->dims().size();
     TensorDistAttr dist_attr_dst =
         CopyTensorDistAttrForOutput(ins[i]->dist_attr());
-    std::vector<int64_t> dst_dims_maping = GetReplicatedDimsmapping(ndim);
-    dist_attr_dst.set_dims_mapping(dst_dims_maping);
+    std::vector<int64_t> dst_dims_mapping = GetReplicatedDimsMapping(ndim);
+    dist_attr_dst.set_dims_mapping(dst_dims_mapping);
     dst_input_dist_attrs.emplace_back(dist_attr_dst);
   }
 
@@ -145,34 +145,36 @@ SpmdInfo ReplicatedInferDynamic(
                                       const std::vector<DistMetaTensor>*>>&
         inputs) {
   std::vector<const DistMetaTensor*> nonnull_inputs;
-  int64_t ninputs = inputs.size();
+  int64_t ninputs = static_cast<int64_t>(inputs.size());
   SpmdInfo spmd_info;
 
-  auto build_tensor_dist_attr =
-      [&nonnull_inputs](const DistMetaTensor& dist_meta_tensor) {
-        int ndim = dist_meta_tensor.dims().size();
-        TensorDistAttr dist_attr_dst =
-            CopyTensorDistAttrForOutput(dist_meta_tensor.dist_attr());
-        // `ndim == -1` means input is nullptr
-        if (ndim >= 0) {
-          std::vector<int64_t> dst_dims_maping = GetReplicatedDimsmapping(ndim);
-          dist_attr_dst.set_dims_mapping(dst_dims_maping);
-          nonnull_inputs.push_back(&dist_meta_tensor);
-        }
-        return dist_attr_dst;
-      };
+  auto build_tensor_dist_attr = [&nonnull_inputs](
+                                    const DistMetaTensor& dist_meta_tensor) {
+    int ndim = dist_meta_tensor.dims().size();
+    TensorDistAttr dist_attr_dst =
+        CopyTensorDistAttrForOutput(dist_meta_tensor.dist_attr());
+    // `ndim == -1` means input is nullptr
+    if (ndim >= 0) {
+      std::vector<int64_t> dst_dims_mapping = GetReplicatedDimsMapping(ndim);
+      dist_attr_dst.set_dims_mapping(dst_dims_mapping);
+      nonnull_inputs.push_back(&dist_meta_tensor);
+    }
+    return dist_attr_dst;
+  };
 
   for (int64_t i = 0; i < ninputs; i++) {
     if (paddle::holds_alternative<const DistMetaTensor*>(inputs[i])) {
-      auto dist_meta_tensor_ptr = paddle::get<0>(inputs[i]);
-      auto& dist_meta_tensor = *dist_meta_tensor_ptr;
+      const auto* dist_meta_tensor_ptr =
+          PADDLE_GET_CONST(const DistMetaTensor*, inputs[i]);
+      const auto& dist_meta_tensor = *dist_meta_tensor_ptr;
       auto dist_attr_dst = build_tensor_dist_attr(dist_meta_tensor);
       VLOG(4) << "input " << i << ": dist attr: " << dist_attr_dst.to_string();
       spmd_info.first.emplace_back(dist_attr_dst);
     } else {
       std::vector<phi::distributed::TensorDistAttr> list_dist_attr;
-      auto dist_meta_tensors_ptr = paddle::get<1>(inputs[i]);
-      auto& dist_meta_tensors = *dist_meta_tensors_ptr;
+      const auto* dist_meta_tensors_ptr =
+          PADDLE_GET_CONST(const std::vector<DistMetaTensor>*, inputs[i]);
+      const auto& dist_meta_tensors = *dist_meta_tensors_ptr;
       for (const auto& dist_meta_tensor : dist_meta_tensors) {
         auto dist_attr_dst = build_tensor_dist_attr(dist_meta_tensor);
         VLOG(4) << "input " << i

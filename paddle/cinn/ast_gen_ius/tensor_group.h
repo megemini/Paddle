@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/container/flat_hash_map.h>
 
 #include <set>
 #include <string>
@@ -24,8 +23,7 @@
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/ir/ir_base.h"
 #include "paddle/cinn/ir/tensor.h"
-#include "paddle/cinn/poly/stage.h"
-
+#include "paddle/utils/flat_hash_map.h"
 namespace cinn {
 namespace ast_gen_ius {
 
@@ -85,7 +83,7 @@ class TensorGroup {
   /**
    * Get all tensors which the tensor with given name depends on.
    */
-  std::set<ir::Tensor> GetCrtlDepTensors(const std::string& tensor_name);
+  std::set<ir::Tensor> GetCtrlDepTensors(const std::string& tensor_name);
 
   /**
    * Get Union-Find set algorithm root tensor name which shares memory with the
@@ -103,11 +101,11 @@ class TensorGroup {
    * Allocate buffers for Tensors in TensorGroup, it handles the shared memory
    * using Union-Find set algorithm.
    */
-  absl::flat_hash_map<std::string, ir::Tensor> AllocateBuffers();
+  paddle::flat_hash_map<std::string, ir::Tensor> AllocateBuffers();
 
   /**
    * Returns tensors in topological order and remove those args
-   * Becuase the order is used for generating function body, we don't have to
+   * Because the order is used for generating function body, we don't have to
    * generate args
    */
   std::vector<ir::Tensor> GetGenFuncTopoOrder(
@@ -118,7 +116,7 @@ class TensorGroup {
   std::set<std::string> output_tensor_names_;
 
   /** collection of all tensors in this TensorGroup */
-  absl::flat_hash_map<std::string, ir::Tensor> name_to_tensor_;
+  paddle::flat_hash_map<std::string, ir::Tensor> name_to_tensor_;
 
   /** Stores vector of tensor names, which the key tensor depends on */
   std::unordered_map<std::string, std::unordered_set<std::string>> ctrl_dep_;
@@ -129,10 +127,6 @@ class TensorGroup {
    */
   std::unordered_map<std::string, std::string> share_memory_tensor_;
 };
-
-// TODO(zhhsplendid): remove stage_map need to change all fcompute CINNValuePack
-// we will change it in the next PR
-TensorGroup ConvertStageMapToTensorGroup(const poly::StageMap& stage_map);
 
 }  // namespace ast_gen_ius
 }  // namespace cinn

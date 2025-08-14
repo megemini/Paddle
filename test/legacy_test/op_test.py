@@ -45,7 +45,7 @@ test_dir = legacy_test_dir.parent  # test
 sys.path.append(str(legacy_test_dir.absolute()))
 sys.path.append(str(test_dir.absolute()))
 
-from utils import static_guard
+from utils import pir_executor_guard, static_guard
 from white_list import (
     check_shape_white_list,
     compile_vs_runtime_white_list,
@@ -96,7 +96,7 @@ def check_out_dtype(api_fn, in_specs, expect_dtypes, target_index=0, **configs):
         check_out_dtype(base.layers.pad_constant_like, [([2,3,2,3], 'float64'), ([1, 3, 1,3], )], ['float32', 'float64', 'int64'], target_index=1, pad_value=0.)
 
     """
-    with paddle_static_guard():
+    with paddle.pir_utils.OldIrGuard():
         for i, expect_dtype in enumerate(expect_dtypes):
             with paddle.static.program_guard(paddle.static.Program()):
                 input_t = []
@@ -114,7 +114,7 @@ def check_out_dtype(api_fn, in_specs, expect_dtypes, target_index=0, **configs):
                         )
                     input_t.append(
                         paddle.static.data(
-                            name='data_%s' % index, shape=shape, dtype=dtype
+                            name=f'data_{index}', shape=shape, dtype=dtype
                         )
                     )
 
@@ -123,9 +123,7 @@ def check_out_dtype(api_fn, in_specs, expect_dtypes, target_index=0, **configs):
 
                 if out_dtype != expect_dtype:
                     raise ValueError(
-                        "Expected out.dtype is {}, but got {} from {}.".format(
-                            expect_dtype, out_dtype, api_fn.__name__
-                        )
+                        f"Expected out.dtype is {expect_dtype}, but got {out_dtype} from {api_fn.__name__}."
                     )
 
 
@@ -166,19 +164,19 @@ def get_numeric_gradient(
     tensor_to_check = scope.find_var(input_to_check).get_tensor()
     tensor_size = product(tensor_to_check.shape())
     tensor_to_check_dtype = tensor_to_check._dtype()
-    if tensor_to_check_dtype == core.VarDesc.VarType.FP32:
+    if tensor_to_check_dtype == paddle.float32:
         tensor_to_check_dtype = np.float32
-    elif tensor_to_check_dtype == core.VarDesc.VarType.FP64:
+    elif tensor_to_check_dtype == paddle.float64:
         tensor_to_check_dtype = np.float64
-    elif tensor_to_check_dtype == core.VarDesc.VarType.FP16:
+    elif tensor_to_check_dtype == paddle.float16:
         tensor_to_check_dtype = np.float16
         # set delta as np.float16, will automatic convert to float32, float64
         delta = np.array(delta).astype(np.float16)
-    elif tensor_to_check_dtype == core.VarDesc.VarType.BF16:
+    elif tensor_to_check_dtype == paddle.bfloat16:
         tensor_to_check_dtype = np.float32
-    elif tensor_to_check_dtype == core.VarDesc.VarType.COMPLEX64:
+    elif tensor_to_check_dtype == paddle.complex64:
         tensor_to_check_dtype = np.complex64
-    elif tensor_to_check_dtype == core.VarDesc.VarType.COMPLEX128:
+    elif tensor_to_check_dtype == paddle.complex128:
         tensor_to_check_dtype = np.complex128
     else:
         raise ValueError(
@@ -196,7 +194,7 @@ def get_numeric_gradient(
             # numpy.dtype does not have bfloat16, thus we use numpy.uint16 to
             # store bfloat16 data, and need to be converted to float to check
             # the floating precision.
-            if tensor_to_check._dtype() == core.VarDesc.VarType.BF16:
+            if tensor_to_check._dtype() == paddle.bfloat16:
                 output_numpy = convert_uint16_to_float(output_numpy)
             sum.append(output_numpy.astype(tensor_to_check_dtype).mean())
         return tensor_to_check_dtype(np.array(sum).sum() / len(output_names))
@@ -208,7 +206,7 @@ def get_numeric_gradient(
             numpy_tensor = np.array(tensor).astype(np.float16)
             numpy_tensor = numpy_tensor.flatten()
             return numpy_tensor[i]
-        elif tensor_to_check._dtype() == core.VarDesc.VarType.BF16:
+        elif tensor_to_check._dtype() == paddle.bfloat16:
             numpy_tensor = np.array(tensor).astype(np.uint16)
             numpy_tensor = numpy_tensor.flatten()
             return struct.unpack(
@@ -225,7 +223,7 @@ def get_numeric_gradient(
             return tensor._get_complex128_element(i)
         else:
             raise TypeError(
-                "Unsupported test data type %s." % tensor_to_check_dtype
+                f"Unsupported test data type {tensor_to_check_dtype}."
             )
 
     def __set_elem__(tensor, i, e):
@@ -236,7 +234,7 @@ def get_numeric_gradient(
             numpy_tensor[i] = e
             numpy_tensor = numpy_tensor.reshape(shape)
             tensor.set(numpy_tensor, place)
-        elif tensor_to_check._dtype() == core.VarDesc.VarType.BF16:
+        elif tensor_to_check._dtype() == paddle.bfloat16:
             numpy_tensor = np.array(tensor).astype(np.uint16)
             shape = numpy_tensor.shape
             numpy_tensor = numpy_tensor.flatten()
@@ -253,7 +251,7 @@ def get_numeric_gradient(
             return tensor._set_complex128_element(i, e)
         else:
             raise TypeError(
-                "Unsupported test data type %s." % tensor_to_check_dtype
+                f"Unsupported test data type {tensor_to_check_dtype}."
             )
 
     # we only compute gradient of one element each time.
@@ -391,6 +389,58 @@ def convert_uint16_to_float(in_list):
     return np.reshape(out, in_list.shape)
 
 
+def get_places():
+    places = []
+    if (
+        os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+        in ['1', 'true', 'on']
+        or not core.is_compiled_with_cuda()
+    ):
+        places.append(base.CPUPlace())
+    if core.is_compiled_with_cuda():
+        places.append(base.CUDAPlace(0))
+    if is_custom_device():
+        dev_type = paddle.device.get_all_custom_device_type()[0]
+        places.append(base.CustomPlace(dev_type, 0))
+    return places
+
+
+def get_devices():
+    devices = []
+    if (
+        os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+        in ['1', 'true', 'on']
+        or not paddle.is_compiled_with_cuda()
+    ):
+        devices.append('cpu')
+    if paddle.is_compiled_with_cuda():
+        devices.append('gpu')
+    if is_custom_device():
+        dev_type = paddle.device.get_all_custom_device_type()[0]
+        devices.append(f'{dev_type}:0')
+    return devices
+
+
+def get_device_place():
+    if core.is_compiled_with_cuda():
+        return base.CUDAPlace(0)
+    custom_dev_types = paddle.device.get_all_custom_device_type()
+    if custom_dev_types and core.is_compiled_with_custom_device(
+        custom_dev_types[0]
+    ):
+        return base.CustomPlace(custom_dev_types[0], 0)
+    return base.CPUPlace()
+
+
+def is_custom_device():
+    custom_dev_types = paddle.device.get_all_custom_device_type()
+    if custom_dev_types and paddle.device.is_compiled_with_custom_device(
+        custom_dev_types[0]
+    ):
+        return True
+    return False
+
+
 @contextmanager
 def auto_parallel_test_guard(test_info_path, generated_test_file_path):
     test_info_file, generated_test_file = None, None
@@ -431,6 +481,10 @@ class OpTest(unittest.TestCase):
         cls.check_prim = False
         cls.check_prim_pir = False
         cls._check_cinn = False
+        cls.check_pir_onednn = False
+
+        # Todo(CZ): to be removed in future
+        core._clear_prim_vjp_skip_default_ops()
 
         np.random.seed(123)
         random.seed(124)
@@ -452,7 +506,7 @@ class OpTest(unittest.TestCase):
             all_op_kernels = core._get_all_register_op_kernels()
             grad_op = op_type + '_grad'
             if grad_op in all_op_kernels.keys():
-                if is_mkldnn_op_test():
+                if is_onednn_op_test():
                     grad_op_kernels = all_op_kernels[grad_op]
                     for grad_op_kernel in grad_op_kernels:
                         if 'MKLDNN' in grad_op_kernel:
@@ -464,8 +518,8 @@ class OpTest(unittest.TestCase):
         def is_xpu_op_test():
             return hasattr(cls, "use_xpu") and cls.use_xpu
 
-        def is_mkldnn_op_test():
-            return hasattr(cls, "use_mkldnn") and cls.use_mkldnn
+        def is_onednn_op_test():
+            return hasattr(cls, "use_onednn") and cls.use_onednn
 
         def is_rocm_op_test():
             return core.is_compiled_with_rocm()
@@ -499,34 +553,34 @@ class OpTest(unittest.TestCase):
                 and not hasattr(cls, "exist_check_grad")
             ):
                 raise AssertionError(
-                    "This test of %s op needs check_grad." % cls.op_type
+                    f"This test of {cls.op_type} op needs check_grad."
                 )
 
-            # check for op test with fp64 precision, but not check mkldnn op test for now
+            # check for op test with fp64 precision, but not check onednn op test for now
             if (
                 cls.dtype in [np.float32, np.float64]
                 and cls.op_type
                 not in op_accuracy_white_list.NO_FP64_CHECK_GRAD_OP_LIST
                 and not hasattr(cls, 'exist_fp64_check_grad')
                 and not is_xpu_op_test()
-                and not is_mkldnn_op_test()
+                and not is_onednn_op_test()
                 and not is_rocm_op_test()
                 and not is_custom_device_op_test()
                 and not cls.check_prim
                 and not cls.check_prim_pir
             ):
                 raise AssertionError(
-                    "This test of %s op needs check_grad with fp64 precision."
-                    % cls.op_type
+                    f"This test of {cls.op_type} op needs check_grad with fp64 precision."
                 )
 
             if (
                 not cls.input_shape_is_large
                 and cls.op_type
                 not in check_shape_white_list.NEED_TO_FIX_OP_LIST
+                and not is_xpu_op_test()
             ):
                 raise AssertionError(
-                    "Input's shape should be large than or equal to 100 for "
+                    "Number of element(s) of input should be large than or equal to 100 for "
                     + cls.op_type
                     + " Op."
                 )
@@ -545,13 +599,13 @@ class OpTest(unittest.TestCase):
                 hasattr(self, 'output_dtype') and self.output_dtype == np.uint16
             )
             or (
-                hasattr(self, 'mkldnn_data_type')
-                and self.mkldnn_data_type == "bfloat16"
-            )
-            or (
                 hasattr(self, 'attrs')
                 and 'mkldnn_data_type' in self.attrs
                 and self.attrs['mkldnn_data_type'] == 'bfloat16'
+            )
+            or (
+                hasattr(self, 'onednn_data_type')
+                and self.onednn_data_type == "bfloat16"
             )
         )
 
@@ -566,21 +620,23 @@ class OpTest(unittest.TestCase):
                 and self.output_dtype == np.float16
             )
             or (
-                hasattr(self, 'mkldnn_data_type')
-                and self.mkldnn_data_type == "float16"
-            )
-            or (
                 hasattr(self, 'attrs')
                 and 'mkldnn_data_type' in self.attrs
                 and self.attrs['mkldnn_data_type'] == 'float16'
             )
+            or (
+                hasattr(self, 'onednn_data_type')
+                and self.onednn_data_type == "float16"
+            )
         )
 
-    def is_mkldnn_op(self):
-        return (hasattr(self, "use_mkldnn") and self.use_mkldnn) or (
+    def is_onednn_op(self):
+        return (hasattr(self, "use_onednn") and self.use_onednn) or (
             hasattr(self, "attrs")
-            and "use_mkldnn" in self.attrs
-            and self.attrs["use_mkldnn"]
+            and (
+                ("use_mkldnn" in self.attrs and self.attrs["use_mkldnn"])
+                or ("use_onednn" in self.attrs and self.attrs["use_onednn"])
+            )
         )
 
     def is_xpu_op(self):
@@ -607,6 +663,27 @@ class OpTest(unittest.TestCase):
             self.is_fp16_compared_with_fp32()
             or self.is_bf16_compared_with_fp32()
         )
+
+    def is_0size_test(self):
+        def numel(shape):
+            numel = 1
+            for i in shape:
+                numel = numel * i
+            return numel
+
+        for name, item in self.inputs.items():
+            if isinstance(item, (list, tuple)):
+                for tup in item:
+                    if (
+                        len(tup) > 1
+                        and hasattr(tup[1], "shape")
+                        and numel(tup[1].shape) == 0
+                    ):
+                        return True
+            else:
+                if numel(item.shape) == 0:
+                    return True
+        return False
 
     def enable_cal_ref_output(self):
         self.is_calc_ref = True
@@ -708,7 +785,7 @@ class OpTest(unittest.TestCase):
         for var_name in input_vars:
             if isinstance(input_vars[var_name], list):
                 for name, np_value in self.inputs[var_name]:
-                    tensor = core.LoDTensor()
+                    tensor = core.DenseTensor()
                     if isinstance(np_value, tuple):
                         tensor.set(np_value[0], place)
                         dtype = np.array(np_value[1]).dtype
@@ -757,7 +834,7 @@ class OpTest(unittest.TestCase):
                             tensor.set(np_value, place)
                     feed_map[name] = tensor
             else:
-                tensor = core.LoDTensor()
+                tensor = core.DenseTensor()
                 if isinstance(self.inputs[var_name], tuple):
                     tensor.set(self.inputs[var_name][0], place)
                     if self.is_calc_ref:
@@ -821,8 +898,8 @@ class OpTest(unittest.TestCase):
         self.__class__.op_type = (
             self.op_type
         )  # for ci check, please not delete it for now
-        if self.is_mkldnn_op():
-            self.__class__.use_mkldnn = True
+        if self.is_onednn_op():
+            self.__class__.use_onednn = True
 
         if self.is_xpu_op():
             self.__class__.use_xpu = True
@@ -894,20 +971,20 @@ class OpTest(unittest.TestCase):
         if isinstance(value, tuple):
             data = value[0]
             lod = value[1]
-            v = base.dygraph.base.to_variable(value=data)
+            v = paddle.to_tensor(data)
             v.value().get_tensor().set_recursive_sequence_lengths(lod)
             return v
         else:
-            return base.dygraph.base.to_variable(value)
+            return paddle.to_tensor(value)
 
     def get_sequence_batch_size_1_input(self, lod=None, shape=None):
-        """Get LoD input data whose batch size is 1.
+        """Get LegacyLoD input data whose batch size is 1.
         All sequence related OP unittests should call this function to contain the case of batch size = 1.
         Args:
             lod (list[list of int], optional): Length-based LoD, length of lod[0] should be 1. Default: [[13]].
             shape (list, optional): Shape of input, shape[0] should be equals to lod[0][0]. Default: [13, 23].
         Returns:
-            tuple (ndarray, lod) : LoD input data whose batch size is 1.
+            tuple (ndarray, lod) : LegacyLoD input data whose batch size is 1.
         """
         if lod is None:
             lod = [[13]]
@@ -936,13 +1013,13 @@ class OpTest(unittest.TestCase):
         return False
 
     def get_sequence_instance_size_0_input(self, lod=None, shape=None):
-        """Get LoD input data whose instance size is 0.
+        """Get LegacyLoD input data whose instance size is 0.
         All sequence related OP unittests should call this function to contain the case of instance size is 0.
         Args:
             lod (list[list of int], optional): Length-based LoD, lod[0]'s size must at least eight, lod[0] must at least two zeros at the beginning and at least two zeros at the end, the middle position of lod[0] contains a single zero and multiple zero. Default: [[0, 0, 4, 0, 3, 0, 0, 5, 0, 0]].
             shape (list, optional): Shape of input, shape[0] should be equals to lod[0][0]. Default: [13, 23].
         Returns:
-            tuple (ndarray, lod): LoD input data whose instance size is 0.
+            tuple (ndarray, lod): LegacyLoD input data whose instance size is 0.
         """
         if lod is None:
             lod = [[0, 0, 4, 0, 3, 0, 0, 5, 0, 0]]
@@ -1001,7 +1078,7 @@ class OpTest(unittest.TestCase):
                     v = block.create_var(
                         name=name,
                         dtype=np.float32,
-                        type=core.VarDesc.VarType.LOD_TENSOR,
+                        type=core.VarDesc.VarType.DENSE_TENSOR,
                         persistable=False,
                         stop_gradient=False,
                     )
@@ -1009,7 +1086,7 @@ class OpTest(unittest.TestCase):
                     v = block.create_var(
                         name=name,
                         dtype=np_value_temp.dtype,
-                        type=core.VarDesc.VarType.LOD_TENSOR,
+                        type=core.VarDesc.VarType.DENSE_TENSOR,
                         persistable=False,
                         stop_gradient=False,
                     )
@@ -1027,7 +1104,7 @@ class OpTest(unittest.TestCase):
             if name not in np_list:
                 assert var_proto.intermediate, f"{name} not found"
                 v = block.create_var(
-                    dtype='float32', type=core.VarDesc.VarType.LOD_TENSOR
+                    dtype='float32', type=core.VarDesc.VarType.DENSE_TENSOR
                 )
                 var_dict[name].append(v)
                 if if_return_inputs_grad_dict:
@@ -1059,7 +1136,7 @@ class OpTest(unittest.TestCase):
                     name_temp = name
                 else:
                     nplist_value_temp = np_list[name]
-                    name_temp = unique_name.generate("%s_out" % (name))
+                    name_temp = unique_name.generate(f"{name}_out")
                 v = create_var(
                     nplist_value_temp,
                     name_temp,
@@ -1087,9 +1164,7 @@ class OpTest(unittest.TestCase):
             np_dyg = np.array(dygraph_outs[name])
             assert (
                 np_api.shape == np_dyg.shape
-            ), "Operator ({}) : Output ({}) shape mismatch, expect shape is {}, but actual shape is {}".format(
-                self.op_type, name, np_dyg.shape, np_api.shape
-            )
+            ), f"Operator ({self.op_type}) : Output ({name}) shape mismatch, expect shape is {np_dyg.shape}, but actual shape is {np_api.shape}"
             np.testing.assert_allclose(
                 np_api,
                 np_dyg,
@@ -1144,7 +1219,7 @@ class OpTest(unittest.TestCase):
             return result
 
         with base.dygraph.base.guard(place=place):
-            block = base.default_main_program().global_block()
+            block = base.framework.default_main_program().global_block()
             op_proto = OpProtoHolder.instance().get_op_proto(self.op_type)
             # prepare input variable
             dygraph_tensor_inputs = (
@@ -1184,15 +1259,15 @@ class OpTest(unittest.TestCase):
                 return None
             if not hasattr(self, "python_api"):
                 print(kernel_sig)
-            assert hasattr(self, "python_api"), (
-                "Detect there is KernelSignature for `%s` op, please set the `self.python_api` if you set check_dygraph = True"
-                % self.op_type
-            )
+            assert hasattr(
+                self, "python_api"
+            ), f"Detect there is KernelSignature for `{self.op_type}` op, please set the `self.python_api` if you set check_dygraph = True"
             args = OpTestUtils.prepare_python_api_arguments(
                 self.python_api,
                 dygraph_tensor_inputs,
                 attrs_outputs,
                 kernel_sig,
+                target_dtype=paddle.core.VarDesc.VarType,
             )
             """ we directly return the cal_python_api value because the value is already tensor.
             """
@@ -1210,7 +1285,7 @@ class OpTest(unittest.TestCase):
             self.op_type
         )  # for ci check, please not delete it for now
         with base.dygraph.base.guard(place=place):
-            block = base.default_main_program().global_block()
+            block = base.framework.default_main_program().global_block()
 
             op_proto = OpProtoHolder.instance().get_op_proto(self.op_type)
 
@@ -1248,7 +1323,7 @@ class OpTest(unittest.TestCase):
 
     def get_kernel_signature(self, place, egr_inps=None, egr_oups=None):
         with base.dygraph.base.guard(place=place):
-            block = base.default_main_program().global_block()
+            block = base.framework.default_main_program().global_block()
             op_proto = OpProtoHolder.instance().get_op_proto(self.op_type)
             # prepare input variable
             dygraph_tensor_inputs = (
@@ -1287,10 +1362,9 @@ class OpTest(unittest.TestCase):
                 return None
             if not hasattr(self, "python_api"):
                 print(kernel_sig)
-            assert hasattr(self, "python_api"), (
-                "Detect there is KernelSignature for `%s` op, please set the `self.python_api` if you set check_dygraph = True"
-                % self.op_type
-            )
+            assert hasattr(
+                self, "python_api"
+            ), f"Detect there is KernelSignature for `{self.op_type}` op, please set the `self.python_api` if you set check_dygraph = True"
             return kernel_sig
 
     def get_ir_input_attr_dict_and_feed(self, stop_gradient):
@@ -1362,88 +1436,87 @@ class OpTest(unittest.TestCase):
         # get kernel signature
         kernel_sig = self.get_kernel_signature(place)
         ir_program = paddle.static.Program()
-        with paddle.static.program_guard(ir_program):
-            with scope_guard(Scope()):
-                # prepare inps attributes feed
-                (
-                    static_inputs,
-                    attrs,
-                    input_dict,
-                    feed,
-                ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=True)
-                # prepare args
-                args = OpTestUtils.prepare_python_api_arguments(
-                    self.python_api,
-                    static_inputs,
-                    attrs,
-                    kernel_sig,
-                )
-                inputs_sig, attrs_sig, outputs_sig = kernel_sig
-                if hasattr(self, "python_out_sig"):
-                    outputs_sig = self.python_out_sig
-                args = OpTestUtils.assumption_assert_and_transform(
-                    args, len(inputs_sig)
-                )
-                ret_tuple = self.python_api(*args)
-                fetch_list = getattr(self, "fetch_list", [])
-                # if the fetch_list is customized by user, we use it directly.
-                # if not, fill the fetch_list by the user configured outputs in test.
-                # filter ret_tuple
-                ret_to_check = []
-                if len(fetch_list) == 0:
-                    if isinstance(ret_tuple, (tuple, list)):
-                        assert len(ret_tuple) == len(outputs_sig)
-                        for var, sig_name in zip(ret_tuple, outputs_sig):
-                            if no_check_set is not None and var in no_check_set:
-                                continue
-                            if not self._need_fetch(sig_name):
-                                continue
-                            if isinstance(var, list):
-                                ret_to_check.append(var)
-                                for v in var:
-                                    fetch_list.append(v)
-                            else:
-                                ret_to_check.append(var)
-                                fetch_list.append(var)
-                    elif isinstance(
-                        ret_tuple, paddle.base.libpaddle.pir.OpResult
-                    ):
-                        fetch_list.append(ret_tuple)
-                        ret_to_check = ret_tuple
-                    elif ret_tuple is None:
-                        pass
-                    else:
-                        raise ValueError(
-                            "output of python api should be OpResult or list of OpResult or tuple of OpResult"
+        with (
+            paddle.static.program_guard(ir_program),
+            scope_guard(Scope()),
+        ):
+            # prepare inps attributes feed
+            (
+                static_inputs,
+                attrs,
+                input_dict,
+                feed,
+            ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=True)
+            # prepare args
+            args = OpTestUtils.prepare_python_api_arguments(
+                self.python_api,
+                static_inputs,
+                attrs,
+                kernel_sig,
+                target_dtype=paddle.pir.core.DataType,
+            )
+            inputs_sig, attrs_sig, outputs_sig = kernel_sig
+            if hasattr(self, "python_out_sig"):
+                outputs_sig = self.python_out_sig
+            args = OpTestUtils.assumption_assert_and_transform(
+                args, len(inputs_sig)
+            )
+            ret_tuple = self.python_api(*args)
+            fetch_list = getattr(self, "fetch_list", [])
+            # if the fetch_list is customized by user, we use it directly.
+            # if not, fill the fetch_list by the user configured outputs in test.
+            # filter ret_tuple
+            ret_to_check = []
+            if len(fetch_list) == 0:
+                if isinstance(ret_tuple, (tuple, list)):
+                    assert len(ret_tuple) == len(outputs_sig)
+                    for var, sig_name in zip(ret_tuple, outputs_sig):
+                        if no_check_set is not None and var in no_check_set:
+                            continue
+                        if not self._need_fetch(sig_name):
+                            continue
+                        if isinstance(var, list):
+                            ret_to_check.append(var)
+                            for v in var:
+                                fetch_list.append(v)
+                        else:
+                            ret_to_check.append(var)
+                            fetch_list.append(var)
+                elif isinstance(ret_tuple, paddle.base.libpaddle.pir.Value):
+                    fetch_list.append(ret_tuple)
+                    ret_to_check = ret_tuple
+                elif ret_tuple is None:
+                    pass
+                else:
+                    raise ValueError(
+                        "output of python api should be Value or list of Value or tuple of Value"
+                    )
+
+            # executor run
+            executor = Executor(place)
+            outs = executor.run(ir_program, feed=feed, fetch_list=[fetch_list])
+            outputs_sig = [
+                sig_name
+                for sig_name in outputs_sig
+                if self._need_fetch(sig_name)
+            ]
+
+            if paddle.utils.is_sequence(
+                ret_to_check
+            ) and paddle.utils.is_sequence(outs):
+                outs = paddle.utils.pack_sequence_as(ret_to_check, outs)
+
+            result = construct_output_dict_by_kernel_sig(outs, outputs_sig)
+            if hasattr(self, "python_out_sig_sub_name"):
+                for key in self.python_out_sig_sub_name.keys():
+                    result[key][0] = {
+                        a: [b]
+                        for a, b in zip(
+                            self.python_out_sig_sub_name[key],
+                            result[key][0],
                         )
-
-                # executor run
-                executor = Executor(place)
-                outs = executor.run(
-                    ir_program, feed=feed, fetch_list=[fetch_list]
-                )
-                outputs_sig = [
-                    sig_name
-                    for sig_name in outputs_sig
-                    if self._need_fetch(sig_name)
-                ]
-
-                if paddle.utils.is_sequence(
-                    ret_to_check
-                ) and paddle.utils.is_sequence(outs):
-                    outs = paddle.utils.pack_sequence_as(ret_to_check, outs)
-
-                result = construct_output_dict_by_kernel_sig(outs, outputs_sig)
-                if hasattr(self, "python_out_sig_sub_name"):
-                    for key in self.python_out_sig_sub_name.keys():
-                        result[key][0] = {
-                            a: [b]
-                            for a, b in zip(
-                                self.python_out_sig_sub_name[key],
-                                result[key][0],
-                            )
-                        }
-                return result
+                    }
+            return result
 
     def _check_ir_output(self, place, program, feed_map, fetch_list, outs):
         if os.getenv("FLAGS_PIR_OPTEST") is None:
@@ -1489,9 +1562,13 @@ class OpTest(unittest.TestCase):
 
             check_method = np.testing.assert_array_equal
             if os.getenv("FLAGS_PIR_OPTEST_RELAX_CHECK", None) == "True":
-                check_method = lambda x, y, z: np.testing.assert_allclose(
-                    x, y, err_msg=z, atol=1e-6, rtol=1e-6
-                )
+
+                def relaxed_check(x, y, err_msg=""):
+                    np.testing.assert_allclose(
+                        x, y, err_msg=err_msg, atol=1e-6, rtol=1e-6
+                    )
+
+                check_method = relaxed_check
             if os.getenv("FLAGS_PIR_NO_CHECK", None) == "True":
                 check_method = lambda x, y, err_msg: None
 
@@ -1524,7 +1601,11 @@ class OpTest(unittest.TestCase):
         for_inplace_test=None,
         check_cinn=False,
     ):
-        with static_guard():
+        with paddle.pir_utils.OldIrGuard():
+            if hasattr(self, "attrs"):
+                for k, v in self.attrs.items():
+                    if isinstance(v, paddle.base.core.DataType):
+                        self.attrs[k] = paddle.pir.core.datatype_to_vartype[v]
             program = Program()
             block = program.global_block()
             op = self._append_ops(block)
@@ -1589,6 +1670,7 @@ class OpTest(unittest.TestCase):
                 program = compiled_prog
 
             executor = Executor(place)
+
             outs = executor.run(
                 program,
                 feed=feed_map,
@@ -1604,6 +1686,124 @@ class OpTest(unittest.TestCase):
             return outs, fetch_list, feed_map, original_program, op.desc
         else:
             return outs, fetch_list
+
+    def _compare_symbol(self, program, outs):
+        i = 0
+        # check that all ops have defined the InferSymbolicShapeInterface
+        if paddle.base.libpaddle.pir.all_ops_defined_symbol_infer(program):
+            # compare expect & actual
+            shape_analysis = (
+                paddle.base.libpaddle.pir.get_shape_constraint_ir_analysis(
+                    program
+                )
+            )
+            for block in program.blocks:
+                for op in block.ops:
+                    if op.name() == "pd_op.fetch":
+                        for j, var in enumerate(op.results()):
+                            if (
+                                var.is_dense_tensor_type()
+                                or var.is_selected_row_type()
+                            ):
+                                shape_or_data = (
+                                    shape_analysis.get_shape_or_data_for_var(
+                                        var
+                                    )
+                                )
+                                expect_shape = outs[i].shape
+                                if np.issubdtype(outs[i].dtype, np.integer):
+                                    expect_data = outs[i].flatten().tolist()
+                                else:
+                                    expect_data = []
+                                i += 1
+                                if not shape_or_data.is_equal(
+                                    expect_shape, expect_data
+                                ):
+                                    raise AssertionError(
+                                        f"The shape or data of Operator {self.op_type}'s result_value[{j}] is different from expected."
+                                    )
+        else:
+            # TODO(gongshaotian): raise error
+            pass
+
+    def _infer_and_compare_symbol(self, place):
+        """Don't calculate the program, only infer the shape of var"""
+
+        kernel_sig = self.get_kernel_signature(place)
+        program = paddle.static.Program()
+        with paddle.static.program_guard(program):
+            scope = Scope()
+            with scope_guard(scope):
+                # prepare inps attributes feed
+                (
+                    static_inputs,
+                    attrs,
+                    input_dict,
+                    feed,
+                ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=True)
+                # prepare args
+                args = OpTestUtils.prepare_python_api_arguments(
+                    self.python_api,
+                    static_inputs,
+                    attrs,
+                    kernel_sig,
+                    target_dtype=paddle.pir.core.DataType,
+                )
+                inputs_sig, attrs_sig, outputs_sig = kernel_sig
+                if hasattr(self, "python_out_sig"):
+                    outputs_sig = self.python_out_sig
+                args = OpTestUtils.assumption_assert_and_transform(
+                    args, len(inputs_sig)
+                )
+                # add op to program
+                ret_tuple = self.python_api(*args)
+                fetch_list = getattr(self, "fetch_list", [])
+                # if the fetch_list is customized by user, we use it directly.
+                # if not, fill the fetch_list by the user configured outputs in test.
+                # filter ret_tuple
+                ret_to_check = []
+                if len(fetch_list) == 0:
+                    if isinstance(ret_tuple, (tuple, list)):
+                        assert len(ret_tuple) == len(outputs_sig)
+                        for var, sig_name in zip(ret_tuple, outputs_sig):
+                            if not self._need_fetch(sig_name):
+                                continue
+                            if isinstance(var, list):
+                                ret_to_check.append(var)
+                                for v in var:
+                                    fetch_list.append(v)
+                            else:
+                                ret_to_check.append(var)
+                                fetch_list.append(var)
+                    elif isinstance(ret_tuple, paddle.base.libpaddle.pir.Value):
+                        fetch_list.append(ret_tuple)
+                        ret_to_check = ret_tuple
+                    elif ret_tuple is None:
+                        pass
+                    else:
+                        raise ValueError(
+                            "output of python api should be Value or list of Value or tuple of Value"
+                        )
+
+                # executor run
+                executor = Executor(place)
+                outs = executor.run(program, feed=feed, fetch_list=[fetch_list])
+                # get fetch program
+                fetch_list = executor._check_fetch_list([fetch_list])
+                fetch_program, _, _ = (
+                    executor._executor_cache.get_pir_program_and_executor(
+                        program=program,
+                        feed=feed,
+                        fetch_list=fetch_list,
+                        feed_var_name='feed',
+                        fetch_var_name='fetch',
+                        place=place,
+                        scope=scope,
+                        plan=None,
+                    )
+                )
+
+                self._compare_symbol(fetch_program, outs)
 
     def _compare_expect_and_actual_outputs(
         self, place, fetch_list, expect_outs, actual_outs, inplace_atol=None
@@ -1630,14 +1830,12 @@ class OpTest(unittest.TestCase):
             actual_out = np.array(actual_outs[i])
             assert (
                 actual_out.shape == expect_out.shape
-            ), "Operator ({}) : Output ({}) shape mismatch, expect shape is {}, but actual shape is {}".format(
-                self.op_type, name, expect_out.shape, actual_out.shape
-            )
+            ), f"Operator ({self.op_type}) : Output ({name}) shape mismatch, expect shape is {expect_out.shape}, but actual shape is {actual_out.shape}"
             if inplace_atol is not None:
                 np.testing.assert_allclose(
                     expect_out,
                     actual_out,
-                    rtol=1e-05,
+                    rtol=1e-03 if self.dtype == np.uint16 else 1e-5,
                     atol=inplace_atol,
                     err_msg='Operator ('
                     + self.op_type
@@ -1686,37 +1884,38 @@ class OpTest(unittest.TestCase):
         Returns:
             grad_program (program): The program which contains the grad_op.
         """
-        grad_program = Program()
-        grad_block = grad_program.global_block()
-        new_op_desc = grad_block.desc.append_op()
-        new_op_desc.copy_from(grad_op_desc)
-        grad_program._sync_with_cpp()
+        with paddle.pir_utils.OldIrGuard():
+            grad_program = Program()
+            grad_block = grad_program.global_block()
+            new_op_desc = grad_block.desc.append_op()
+            new_op_desc.copy_from(grad_op_desc)
+            grad_program._sync_with_cpp()
 
-        # Create grad vars based on fwd vars (shape and dtype)
-        for arg in (
-            grad_op_desc.input_arg_names() + grad_op_desc.output_arg_names()
-        ):
-            fwd_var_name = op_grad_to_var.get(arg, None)
-            if fwd_var_name is None:
-                fwd_var_name = arg
-            fwd_var = fwd_program.global_block().vars.get(fwd_var_name)
-            assert fwd_var is not None, f"{fwd_var_name} cannot be found"
-            grad_var = grad_block.create_var(
-                name=arg,
-                dtype=fwd_var.dtype,
-                shape=fwd_var.shape,
-                type=fwd_var.type,
-                persistable=False,
-            )
+            # Create grad vars based on fwd vars (shape and dtype)
+            for arg in (
+                grad_op_desc.input_arg_names() + grad_op_desc.output_arg_names()
+            ):
+                fwd_var_name = op_grad_to_var.get(arg, None)
+                if fwd_var_name is None:
+                    fwd_var_name = arg
+                fwd_var = fwd_program.global_block().vars.get(fwd_var_name)
+                assert fwd_var is not None, f"{fwd_var_name} cannot be found"
+                grad_var = grad_block.create_var(
+                    name=arg,
+                    dtype=fwd_var.dtype,
+                    shape=fwd_var.shape,
+                    type=fwd_var.type,
+                    persistable=False,
+                )
 
-            # Some variables' tensors hold no buffer (tensor's _holder is NULL), like XShape in reshape2 op,
-            # and the shapes of those variables contain 0 (eg. Xshape.shape = [0, 2, 5]).
-            # Set persistable for those variables in order to get them from global_scope for inplace grad test directly other than feed them,
-            # since feed op calls check_memory_size() which fails when tensor's holder_ is NULL.
-            if 0 in grad_var.shape:
-                grad_var.persistable = True
-        grad_program._sync_with_cpp()
-        return grad_program
+                # Some variables' tensors hold no buffer (tensor's _holder is NULL), like XShape in reshape2 op,
+                # and the shapes of those variables contain 0 (eg. Xshape.shape = [0, 2, 5]).
+                # Set persistable for those variables in order to get them from global_scope for inplace grad test directly other than feed them,
+                # since feed op calls check_memory_size() which fails when tensor's holder_ is NULL.
+                if 0 in grad_var.shape:
+                    grad_var.persistable = True
+            grad_program._sync_with_cpp()
+            return grad_program
 
     def _construct_grad_feed_map_from_forward(
         self, place, fwd_res, grad_op_desc, op_grad_to_var
@@ -1959,7 +2158,14 @@ class OpTest(unittest.TestCase):
         if getattr(self, "no_need_check_inplace", False):
             return
 
-        if os.getenv("FLAGS_enable_pir_in_executor"):
+        if (
+            os.getenv("FLAGS_enable_pir_in_executor")
+            or os.getenv("FLAGS_enable_pir_api")
+            or get_flags("FLAGS_enable_pir_in_executor")[
+                "FLAGS_enable_pir_in_executor"
+            ]
+            or get_flags("FLAGS_enable_pir_api")["FLAGS_enable_pir_api"]
+        ):
             return
 
         has_infer_inplace = base.core.has_infer_inplace(self.op_type)
@@ -1990,11 +2196,14 @@ class OpTest(unittest.TestCase):
             else:
                 # TODO(zhiqiu): enhance inplace_grad test for ops (sum and activation) using mkldnn
                 # skip op that use_mkldnn currently
-                flags_use_mkldnn = base.core.globals()["FLAGS_use_mkldnn"]
+                flags_use_onednn = base.core.globals()["FLAGS_use_onednn"]
                 attrs_use_mkldnn = hasattr(self, 'attrs') and bool(
                     self.attrs.get('use_mkldnn', False)
                 )
-                if flags_use_mkldnn or attrs_use_mkldnn:
+                attrs_use_onednn = hasattr(self, 'attrs') and bool(
+                    self.attrs.get('use_onednn', False)
+                )
+                if flags_use_onednn or attrs_use_mkldnn or attrs_use_onednn:
                     warnings.warn(
                         "check inplace_grad for ops using mkldnn is not supported"
                     )
@@ -2024,11 +2233,13 @@ class OpTest(unittest.TestCase):
         check_cinn=False,
         check_pir=False,
         check_auto_parallel=False,
+        check_pir_onednn=False,
+        check_symbol_infer=True,
     ):
         core._set_prim_all_enabled(False)
         core.set_prim_eager_enabled(False)
-        if not self.is_mkldnn_op():
-            set_flags({"FLAGS_use_mkldnn": False})
+        if not self.is_onednn_op():
+            set_flags({"FLAGS_use_onednn": False})
 
         if hasattr(self, "use_custom_device") and self.use_custom_device:
             check_dygraph = False
@@ -2133,9 +2344,7 @@ class OpTest(unittest.TestCase):
                 expect_np = np.array(expect_np)
                 assert (
                     actual_np.shape == expect_np.shape
-                ), "Operator ({}) : Output ({}) shape mismatch, expect shape is {}, but actual shape is {}".format(
-                    self.op_type, name, expect_np.shape, actual_np.shape
-                )
+                ), f"Operator ({self.op_type}) : Output ({name}) shape mismatch, expect shape is {expect_np.shape}, but actual shape is {actual_np.shape}"
                 np.testing.assert_allclose(
                     actual_np,
                     expect_np,
@@ -2154,10 +2363,6 @@ class OpTest(unittest.TestCase):
                     ),
                 )
 
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                raise NotImplementedError("base class, not implement!")
-
             def compare_single_output_with_expect(self, name, expect):
                 actual, actual_np = self.find_actual_value(name)
                 # expect_np = expect[0] if isinstance(expect, tuple) else expect
@@ -2174,8 +2379,6 @@ class OpTest(unittest.TestCase):
                 )
                 # modify there for fp32 check
                 self._compare_numpy(name, actual_np, expect_np)
-                if isinstance(expect, (tuple, list)):
-                    self._compare_list(name, actual, expect)
 
             def compare_outputs_with_expects(self):
                 for out_name, out_dup in Operator.get_op_outputs(self.op_type):
@@ -2261,14 +2464,6 @@ class OpTest(unittest.TestCase):
                     atol = max(atol, 0.03)
                 return actual_np, expect_np
 
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                self.op_test.assertListEqual(
-                    actual.recursive_sequence_lengths(),
-                    expect[1],
-                    "Output (" + name + ") has different lod at " + str(place),
-                )
-
         class DygraphChecker(Checker):
             def init(self):
                 self.checker_name = "dygraph checker"
@@ -2302,9 +2497,7 @@ class OpTest(unittest.TestCase):
                 expect_np = np.array(expect_np)
                 assert (
                     actual_np.shape == expect_np.shape
-                ), "Operator ({}) : Output ({}) shape mismatch, expect shape is {}, but actual shape is {}".format(
-                    self.op_type, name, expect_np.shape, actual_np.shape
-                )
+                ), f"Operator ({self.op_type}) : Output ({name}) shape mismatch, expect shape is {expect_np.shape}, but actual shape is {actual_np.shape}"
                 np.testing.assert_allclose(
                     actual_np,
                     expect_np,
@@ -2357,23 +2550,6 @@ class OpTest(unittest.TestCase):
                     )
                     return imperative_expect, imperative_expect_t
 
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                with base.dygraph.base.guard(place=place):
-                    self.op_test.assertListEqual(
-                        actual.value()
-                        .get_tensor()
-                        .recursive_sequence_lengths(),
-                        expect[1],
-                        "Operator ("
-                        + self.op_type
-                        + ") Output ("
-                        + name
-                        + ") has different lod at "
-                        + str(place)
-                        + " in dygraph mode",
-                    )
-
             def _is_skip_name(self, name):
                 # if in final state and kernel signature don't have name, then skip it.
                 if (
@@ -2415,9 +2591,7 @@ class OpTest(unittest.TestCase):
                 expect_np = np.array(expect_np)
                 assert (
                     actual_np.shape == expect_np.shape
-                ), "Operator ({}) : Output ({}) shape mismatch, expect shape is {}, but actual shape is {}".format(
-                    self.op_type, name, expect_np.shape, actual_np.shape
-                )
+                ), f"Operator ({self.op_type}) : Output ({name}) shape mismatch, expect shape is {expect_np.shape}, but actual shape is {actual_np.shape}"
                 np.testing.assert_allclose(
                     actual_np,
                     expect_np,
@@ -2500,23 +2674,6 @@ class OpTest(unittest.TestCase):
                     expect_t = np.array(expect)
                     return expect, expect_t
 
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                with paddle.pir.core.program_guard(place=place):
-                    self.op_test.assertListEqual(
-                        actual.value()
-                        .get_tensor()
-                        .recursive_sequence_lengths(),
-                        expect[1],
-                        "Operator ("
-                        + self.op_type
-                        + ") Output ("
-                        + name
-                        + ") has different lod at "
-                        + str(place)
-                        + " in dygraph mode",
-                    )
-
             def _is_skip_name(self, name):
                 # if in final state and kernel signature don't have name, then skip it.
                 if (
@@ -2526,6 +2683,20 @@ class OpTest(unittest.TestCase):
                 ):
                     return True
                 return super()._is_skip_name(name)
+
+        class SymbolInferChecker(Checker):
+            def check(self):
+                """return None means ok, raise Error means failed."""
+                self.init()
+                self.infer_and_compare_symbol()
+
+            def init(self):
+                self.checker_name = "symbol infer checker"
+
+            def infer_and_compare_symbol(self):
+                """infer symbol and compare it with actual shape and data"""
+                self.is_python_api_test = True
+                self.op_test._infer_and_compare_symbol(place)
 
         # set some flags by the combination of arguments.
         if self.is_float16_op():
@@ -2546,21 +2717,21 @@ class OpTest(unittest.TestCase):
             atol = 0
 
         if self.is_bfloat16_op():
-            if self.is_mkldnn_op():
+            if self.is_onednn_op():
                 check_dygraph = False
 
                 if (
                     hasattr(self, 'force_fp32_output')
                     and self.force_fp32_output
                 ):
-                    atol = 1e-2 if atol < 1e-2 else atol
+                    atol = max(atol, 0.01)
                 else:
-                    atol = 2 if atol < 2 else atol
+                    atol = max(atol, 2)
             else:
-                atol = 1e-2 if atol < 1e-2 else atol
+                atol = max(atol, 0.01)
 
         if self.is_float16_op():
-            atol = 1e-3 if atol < 1e-3 else atol
+            atol = max(atol, 0.001)
 
         if no_check_set is not None:
             if (
@@ -2568,15 +2739,16 @@ class OpTest(unittest.TestCase):
                 not in no_check_set_white_list.no_check_set_white_list
             ):
                 raise AssertionError(
-                    "no_check_set of op %s must be set to None." % self.op_type
+                    f"no_check_set of op {self.op_type} must be set to None."
                 )
 
         if check_prim:
-            prim_checker = PrimForwardChecker(self, place)
-            prim_checker.check()
-            # Support operators which are not in the NO_FP64_CHECK_GRAD_OP_LIST list can be test prim with fp32
-            self.__class__.check_prim = True
-            self.__class__.op_type = self.op_type
+            with paddle.pir_utils.OldIrGuard():
+                prim_checker = PrimForwardChecker(self, place)
+                prim_checker.check()
+                # Support operators which are not in the NO_FP64_CHECK_GRAD_OP_LIST list can be test prim with fp32
+                self.__class__.check_prim = True
+                self.__class__.op_type = self.op_type
 
         if check_prim_pir:
             with paddle.pir_utils.IrGuard():
@@ -2606,15 +2778,15 @@ class OpTest(unittest.TestCase):
                     )
                     python_api_info = {
                         "api_name": self.python_api.__name__,
-                        "api_module": inspect.getmodule(
-                            self.python_api
-                        ).__name__
-                        if inspect.getmodule(
-                            self.python_api
-                        ).__name__.startswith("paddle")
-                        else pathlib.Path(
-                            inspect.getmodule(self.python_api).__file__
-                        ).stem,
+                        "api_module": (
+                            inspect.getmodule(self.python_api).__name__
+                            if inspect.getmodule(
+                                self.python_api
+                            ).__name__.startswith("paddle")
+                            else pathlib.Path(
+                                inspect.getmodule(self.python_api).__file__
+                            ).stem
+                        ),
                     }
                     # code gen for auto parallel forward test
                     gen_auto_parallel_test_file(
@@ -2627,15 +2799,23 @@ class OpTest(unittest.TestCase):
                     start_command = get_subprocess_command(
                         runtime_envs["CUDA_VISIBLE_DEVICES"],
                         generated_forward_test_path,
-                        log_dir=self.log_dir
-                        if hasattr(self, "log_dir")
-                        else None,
+                        log_dir=(
+                            self.log_dir if hasattr(self, "log_dir") else None
+                        ),
                     )
                     run_subprocess(start_command, runtime_envs, timeout=120)
 
         static_checker = StaticChecker(self, self.outputs)
         static_checker.check()
         outs, fetch_list = static_checker.outputs, static_checker.fetch_list
+
+        if check_pir_onednn and isinstance(
+            place, paddle.base.libpaddle.CPUPlace
+        ):
+            with pir_executor_guard():
+                pir_onednn_static_checker = StaticChecker(self, self.outputs)
+                pir_onednn_static_checker.check()
+
         if check_dygraph:
             dygraph_checker = DygraphChecker(self, self.outputs)
             dygraph_checker.check()
@@ -2649,6 +2829,15 @@ class OpTest(unittest.TestCase):
                 with paddle.pir_utils.IrGuard():
                     pir_checker = PirChecker(self, self.outputs)
                     pir_checker.check()
+
+        if check_pir and check_symbol_infer:
+            if (
+                type(place) is paddle.base.libpaddle.CPUPlace
+                or type(place) is paddle.base.libpaddle.CUDAPlace
+            ):
+                with paddle.pir_utils.IrGuard():
+                    symbol_checker = SymbolInferChecker(self, self.outputs)
+                    symbol_checker.check()
 
         # Note(zhiqiu): inplace_atol should be only set when op doesn't ensure
         # computational consistency.
@@ -2700,17 +2889,17 @@ class OpTest(unittest.TestCase):
                     # The output is dispensable or intermediate.
                     break
                 out = fetch_outs[i]
-                if isinstance(out, core.LoDTensor):
+                if isinstance(out, core.DenseTensor):
                     lod_level_runtime = len(out.lod())
                 else:
-                    if isinstance(out, core.LoDTensorArray):
+                    if isinstance(out, core.DenseTensorArray):
                         warnings.warn(
-                            "The check of LoDTensorArray's lod_level is not implemented now!"
+                            "The check of DenseTensorArray's lod_level is not implemented now!"
                         )
                     lod_level_runtime = 0
 
                 var = self.program.global_block().var(var_name)
-                if var.type == core.VarDesc.VarType.LOD_TENSOR:
+                if var.type == core.VarDesc.VarType.DENSE_TENSOR:
                     lod_level_compile = var.lod_level
                 else:
                     lod_level_compile = 0
@@ -2736,16 +2925,45 @@ class OpTest(unittest.TestCase):
                     return [place]
                 else:
                     return []
+            elif is_custom_device():
+                dev_type = paddle.device.get_all_custom_device_type()[0]
+                place = core.CustomPlace(dev_type, 0)
+                if core.is_float16_supported(place):
+                    return [place]
+                else:
+                    return []
             else:
                 return []
-        places = [base.CPUPlace()]
+        places = []
         cpu_only = self._cpu_only if hasattr(self, '_cpu_only') else False
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in [
+                '1',
+                'true',
+                'on',
+            ]
+            or not (
+                core.is_compiled_with_cuda()
+                and core.op_support_gpu(self.op_type)
+                and not cpu_only
+            )
+            or self.op_type
+            in [
+                'gaussian_random',
+                'lrn',
+            ]
+        ):
+            places.append(base.CPUPlace())
         if (
             core.is_compiled_with_cuda()
             and core.op_support_gpu(self.op_type)
             and not cpu_only
         ):
             places.append(core.CUDAPlace(0))
+        if is_custom_device():
+            dev_type = paddle.device.get_all_custom_device_type()[0]
+            places.append(core.CustomPlace(dev_type, 0))
         return places
 
     def check_output(
@@ -2762,10 +2980,12 @@ class OpTest(unittest.TestCase):
         only_check_prim=False,
         check_pir=False,
         check_auto_parallel=False,
+        check_pir_onednn=False,
+        check_symbol_infer=True,
     ):
         self.__class__.op_type = self.op_type
-        if self.is_mkldnn_op():
-            self.__class__.use_mkldnn = True
+        if self.is_onednn_op():
+            self.__class__.use_onednn = True
 
         if self.is_xpu_op():
             self.__class__.use_xpu = True
@@ -2789,6 +3009,8 @@ class OpTest(unittest.TestCase):
                 check_cinn=check_cinn,
                 check_pir=check_pir,
                 check_auto_parallel=check_auto_parallel,
+                check_pir_onednn=check_pir_onednn,
+                check_symbol_infer=check_symbol_infer,
             )
             if not res and only_check_prim:
                 continue
@@ -2849,9 +3071,7 @@ class OpTest(unittest.TestCase):
         for a, b, name in zip(numeric_grads, analytic_grads, names):
             assert tuple(a.shape) == tuple(
                 b.shape
-            ), "Operator ({}) : Output ({}) gradient shape mismatch, expect shape is {}, but actual shape is {}".format(
-                self.op_type, name, a.shape, b.shape
-            )
+            ), f"Operator ({self.op_type}) : Output ({name}) gradient shape mismatch, expect shape is {a.shape}, but actual shape is {b.shape}"
             # Used by bfloat16 for now to solve precision problem
             if self.is_bfloat16_op():
                 if a.size == 0:
@@ -2863,16 +3083,13 @@ class OpTest(unittest.TestCase):
                     atol=atol,
                     equal_nan=False,
                     err_msg=(
-                        "Operator {} error, {} variable {} (shape: {}, dtype: {}) max gradient diff over limit"
-                    ).format(
-                        self.op_type,
-                        msg_prefix,
-                        name,
-                        str(a.shape),
-                        self.dtype,
+                        f"Operator {self.op_type} error, {msg_prefix} variable {name} (shape: {a.shape}, dtype: {self.dtype}) max gradient diff over limit"
                     ),
                 )
             else:
+                if a.size == 0:
+                    self.assertTrue(b.size == 0)
+                    return
                 # It asserts np.abs(a - b) / np.abs(a) < max_relative_error, in which
                 # max_relative_error is 1e-7. According to the value of np.abs(a), we
                 # change np.abs(a) to achieve dynamic threshold. For example, if
@@ -2923,19 +3140,9 @@ class OpTest(unittest.TestCase):
                 def err_msg():
                     offset = np.argmax(diff_mat > max_relative_error)
                     return (
-                        "Operator %s error, %s variable %s (shape: %s, dtype: %s) max gradient diff %e over limit %e, "
-                        "the first error element is %d, expected %e, but got %e."
-                    ) % (
-                        self.op_type,
-                        msg_prefix,
-                        name,
-                        str(a.shape),
-                        self.dtype,
-                        max_diff,
-                        max_relative_error,
-                        offset,
-                        a.flatten()[offset],
-                        b.flatten()[offset],
+                        f"Operator {self.op_type} error, {msg_prefix} variable {name} (shape: {a.shape!s}, dtype: {self.dtype}) "
+                        f"max gradient diff {max_diff:e} over limit {max_relative_error:e}, "
+                        f"the first error element is {offset}, expected {a.flatten()[offset].item():e}, but got {b.flatten()[offset].item():e}."
                     )
 
                 self.assertLessEqual(max_diff, max_relative_error, err_msg())
@@ -2974,6 +3181,7 @@ class OpTest(unittest.TestCase):
         check_cinn=False,
         check_pir=False,
         check_auto_parallel=False,
+        check_pir_onednn=False,
     ):
         if hasattr(self, "use_custom_device") and self.use_custom_device:
             check_dygraph = False
@@ -2999,202 +3207,27 @@ class OpTest(unittest.TestCase):
                 check_cinn=check_cinn,
                 check_pir=check_pir,
                 check_auto_parallel=check_auto_parallel,
+                check_pir_onednn=check_pir_onednn,
             )
 
-    def check_grad_with_place(
+    def check_grad_with_place_for_static(
         self,
-        place,
+        user_defined_grads,
         inputs_to_check,
+        place,
         output_names,
-        no_grad_set=None,
-        numeric_grad_delta=0.005,
-        in_place=False,
-        max_relative_error=0.005,
-        user_defined_grads=None,
-        user_defined_grad_outputs=None,
-        check_dygraph=True,
-        check_prim=False,
-        check_prim_pir=False,
-        only_check_prim=False,
-        numeric_place=None,
-        atol=1e-5,
-        check_cinn=False,
-        check_pir=False,
-        check_auto_parallel=False,
+        no_grad_set,
+        user_defined_grad_outputs,
+        numeric_place,
+        numeric_grad_delta,
+        in_place,
+        check_cinn,
+        max_relative_error,
+        atol,
     ):
-        if hasattr(self, "use_custom_device") and self.use_custom_device:
-            check_dygraph = False
-
-        if not self.is_mkldnn_op():
-            set_flags({"FLAGS_use_mkldnn": False})
-
-        core._set_prim_all_enabled(False)
-        core.set_prim_eager_enabled(False)
-        if check_prim:
-            self._check_grad_helper()
-            prim_grad_checker = PrimGradChecker(
-                self,
-                place,
-                inputs_to_check,
-                output_names,
-                no_grad_set,
-                user_defined_grad_outputs,
-            )
-            prim_grad_checker.check()
-            # Support operators which are not in the NO_FP64_CHECK_GRAD_OP_LIST list can be test prim with fp32
-            self.__class__.check_prim = True
-
-        if check_prim_pir:
-            with paddle.pir_utils.IrGuard():
-                self._check_grad_helper()
-                prim_grad_checker = PrimGradChecker(
-                    self,
-                    place,
-                    inputs_to_check,
-                    output_names,
-                    no_grad_set,
-                    user_defined_grad_outputs,
-                )
-                prim_grad_checker.check()
-                # Support operators which are not in the NO_FP64_CHECK_GRAD_OP_LIST list can be test prim with fp32
-                self.__class__.check_prim_pir = True
-
-        if only_check_prim:
-            return
-
-        if check_auto_parallel:
-            if is_ban_auto_parallel_test(place):
-                pass
-            else:
-                (
-                    grad_test_info_path,
-                    generated_grad_test_path,
-                ) = get_test_info_and_generated_test_path(
-                    self.__class__.__name__, self.op_type, backward=True
-                )
-                with auto_parallel_test_guard(
-                    grad_test_info_path, generated_grad_test_path
-                ):
-                    backward_extra_test_info = {}
-                    backward_extra_test_info[
-                        "inputs_to_check"
-                    ] = inputs_to_check
-                    backward_extra_test_info["output_names"] = output_names
-                    backward_extra_test_info["no_grad_set"] = no_grad_set
-                    backward_extra_test_info[
-                        "user_defined_grad_outputs"
-                    ] = user_defined_grad_outputs
-                    dump_test_info(
-                        self,
-                        place,
-                        grad_test_info_path,
-                        backward=True,
-                        backward_extra_test_info=backward_extra_test_info,
-                    )
-                    python_api_info = {
-                        "api_name": self.python_api.__name__,
-                        "api_module": inspect.getmodule(
-                            self.python_api
-                        ).__name__
-                        if inspect.getmodule(
-                            self.python_api
-                        ).__name__.startswith("paddle")
-                        else pathlib.Path(
-                            inspect.getmodule(self.python_api).__file__
-                        ).stem,
-                    }
-                    # code gen for auto parallel grad test
-                    gen_auto_parallel_test_file(
-                        check_grad=False,
-                        test_info_path=grad_test_info_path,
-                        test_file_path=generated_grad_test_path,
-                        python_api_info=python_api_info,
-                    )
-                    runtime_envs = get_subprocess_runtime_envs(place)
-                    start_command = get_subprocess_command(
-                        runtime_envs["CUDA_VISIBLE_DEVICES"],
-                        generated_grad_test_path,
-                        log_dir=self.log_dir
-                        if hasattr(self, "log_dir")
-                        else None,
-                    )
-                    run_subprocess(start_command, runtime_envs, timeout=120)
-        self.scope = core.Scope()
-        op_inputs = self.inputs if hasattr(self, "inputs") else {}
-        op_outputs = self.outputs if hasattr(self, "outputs") else {}
-        op_attrs = self.attrs if hasattr(self, "attrs") else {}
-        self._check_grad_helper()
-        if self.is_bfloat16_op():
-            if self.is_mkldnn_op():
-                check_dygraph = False
-            atol = 1e-2 if atol < 1e-2 else atol
-
-        if self.is_float16_op():
-            atol = 1e-3 if atol < 1e-3 else atol
-
         if (
-            self.dtype == np.float64
-            and self.op_type
-            not in op_threshold_white_list.NEED_FIX_FP64_CHECK_GRAD_THRESHOLD_OP_LIST
-        ):
-            numeric_grad_delta = 1e-5
-            max_relative_error = 1e-7
-
-        cache_list = None
-        if hasattr(self, "cache_name_list"):
-            cache_list = self.cache_name_list
-
-        # oneDNN numeric gradient should use CPU kernel
-        use_onednn = False
-        if "use_mkldnn" in op_attrs and op_attrs["use_mkldnn"]:
-            op_attrs["use_mkldnn"] = False
-            use_onednn = True
-        self.op = create_op(
-            self.scope,
-            self.op_type,
-            op_inputs,
-            op_outputs,
-            op_attrs,
-            cache_list=cache_list,
-        )
-
-        if use_onednn:
-            op_attrs["use_mkldnn"] = True
-
-        if no_grad_set is None:
-            no_grad_set = set()
-        else:
-            if (
-                (self.op_type not in no_grad_set_white_list.NEED_TO_FIX_OP_LIST)
-                and (
-                    self.op_type not in no_grad_set_white_list.NOT_CHECK_OP_LIST
-                )
-                and (not self.is_bfloat16_op())
-            ):
-                raise AssertionError(
-                    "no_grad_set must be None, op_type is "
-                    + self.op_type
-                    + " Op."
-                )
-
-        for input_to_check in inputs_to_check:
-            set_input(self.scope, self.op, self.inputs, place)
-            tensor_to_check = self.scope.find_var(input_to_check).get_tensor()
-            tensor_size = functools.reduce(
-                lambda a, b: a * b, tensor_to_check.shape(), 1
-            )
-            tensor_ndim = len(tensor_to_check.shape())
-            # for 0D Tensor, it's additional case for OP, so not raise error
-            if tensor_ndim > 0 and tensor_size < 100:
-                self.__class__.input_shape_is_large = False
-
-        if type(output_names) is not list:
-            output_names = [output_names]
-
-        if numeric_place is None:
-            numeric_place = place
-
-        if user_defined_grads is None and self.is_compared_with_fp32():
+            user_defined_grads is None and self.is_compared_with_fp32()
+        ) or self.is_0size_test():
             self.enable_cal_ref_output()
             numeric_grads = self._get_gradient(
                 inputs_to_check,
@@ -3234,9 +3267,7 @@ class OpTest(unittest.TestCase):
         for grad in analytic_grads:
             if grad.dtype == np.uint16:
                 grad = convert_uint16_to_float(grad)
-                max_relative_error = (
-                    0.01 if max_relative_error < 0.01 else max_relative_error
-                )
+                max_relative_error = max(max_relative_error, 0.01)
             fp32_analytic_grads.append(grad)
         analytic_grads = fp32_analytic_grads
 
@@ -3244,24 +3275,275 @@ class OpTest(unittest.TestCase):
         for grad in numeric_grads:
             if grad.dtype == np.uint16:
                 grad = convert_uint16_to_float(grad)
-                max_relative_error = (
-                    0.01 if max_relative_error < 0.01 else max_relative_error
-                )
+                max_relative_error = max(max_relative_error, 0.01)
             fp32_numeric_grads.append(grad)
         numeric_grads = fp32_numeric_grads
 
         if self.is_float16_op():
-            max_relative_error = (
-                0.001 if max_relative_error < 0.001 else max_relative_error
-            )
+            max_relative_error = max(max_relative_error, 0.001)
         self._assert_is_close(
             numeric_grads,
             analytic_grads,
             inputs_to_check,
             max_relative_error,
-            "Gradient Check On %s" % str(place),
+            f"Gradient Check On {place}",
             atol=atol,
         )
+
+        return numeric_grads
+
+    def check_grad_with_place(
+        self,
+        place,
+        inputs_to_check,
+        output_names,
+        no_grad_set=None,
+        numeric_grad_delta=0.005,
+        in_place=False,
+        max_relative_error=0.005,
+        user_defined_grads=None,
+        user_defined_grad_outputs=None,
+        check_dygraph=True,
+        check_prim=False,
+        check_prim_pir=False,
+        only_check_prim=False,
+        numeric_place=None,
+        atol=1e-5,
+        check_cinn=False,
+        check_pir=False,
+        check_auto_parallel=False,
+        check_pir_onednn=False,
+    ):
+        if hasattr(self, "use_custom_device") and self.use_custom_device:
+            check_dygraph = False
+
+        if not self.is_onednn_op():
+            set_flags({"FLAGS_use_onednn": False})
+
+        core._set_prim_all_enabled(False)
+        core.set_prim_eager_enabled(False)
+        if check_prim:
+            with paddle.pir_utils.OldIrGuard():
+                self._check_grad_helper()
+                prim_grad_checker = PrimGradChecker(
+                    self,
+                    place,
+                    inputs_to_check,
+                    output_names,
+                    no_grad_set,
+                    user_defined_grad_outputs,
+                )
+                prim_grad_checker.check()
+                # Support operators which are not in the NO_FP64_CHECK_GRAD_OP_LIST list can be test prim with fp32
+                self.__class__.check_prim = True
+
+        if check_prim_pir:
+            with paddle.pir_utils.IrGuard():
+                self._check_grad_helper()
+                prim_grad_checker = PrimGradChecker(
+                    self,
+                    place,
+                    inputs_to_check,
+                    output_names,
+                    no_grad_set,
+                    user_defined_grad_outputs,
+                )
+                prim_grad_checker.check()
+                # Support operators which are not in the NO_FP64_CHECK_GRAD_OP_LIST list can be test prim with fp32
+                self.__class__.check_prim_pir = True
+
+        if only_check_prim:
+            return
+
+        if check_auto_parallel:
+            if is_ban_auto_parallel_test(place):
+                pass
+            else:
+                (
+                    grad_test_info_path,
+                    generated_grad_test_path,
+                ) = get_test_info_and_generated_test_path(
+                    self.__class__.__name__, self.op_type, backward=True
+                )
+                with auto_parallel_test_guard(
+                    grad_test_info_path, generated_grad_test_path
+                ):
+                    backward_extra_test_info = {}
+                    backward_extra_test_info["inputs_to_check"] = (
+                        inputs_to_check
+                    )
+                    backward_extra_test_info["output_names"] = output_names
+                    backward_extra_test_info["no_grad_set"] = no_grad_set
+                    backward_extra_test_info["user_defined_grad_outputs"] = (
+                        user_defined_grad_outputs
+                    )
+                    dump_test_info(
+                        self,
+                        place,
+                        grad_test_info_path,
+                        backward=True,
+                        backward_extra_test_info=backward_extra_test_info,
+                    )
+                    python_api_info = {
+                        "api_name": self.python_api.__name__,
+                        "api_module": (
+                            inspect.getmodule(self.python_api).__name__
+                            if inspect.getmodule(
+                                self.python_api
+                            ).__name__.startswith("paddle")
+                            else pathlib.Path(
+                                inspect.getmodule(self.python_api).__file__
+                            ).stem
+                        ),
+                    }
+                    # code gen for auto parallel grad test
+                    gen_auto_parallel_test_file(
+                        check_grad=False,
+                        test_info_path=grad_test_info_path,
+                        test_file_path=generated_grad_test_path,
+                        python_api_info=python_api_info,
+                    )
+                    runtime_envs = get_subprocess_runtime_envs(place)
+
+                    num_devices = len(
+                        runtime_envs["CUDA_VISIBLE_DEVICES"].split(",")
+                    )
+                    if num_devices > paddle.device.cuda.device_count():
+                        self.skipTest("number of GPUs is not enough")
+
+                    start_command = get_subprocess_command(
+                        runtime_envs["CUDA_VISIBLE_DEVICES"],
+                        generated_grad_test_path,
+                        log_dir=(
+                            self.log_dir if hasattr(self, "log_dir") else None
+                        ),
+                    )
+                    run_subprocess(start_command, runtime_envs, timeout=120)
+
+        self.scope = core.Scope()
+        op_inputs = self.inputs if hasattr(self, "inputs") else {}
+        op_outputs = self.outputs if hasattr(self, "outputs") else {}
+        op_attrs = self.attrs if hasattr(self, "attrs") else {}
+        self._check_grad_helper()
+        if self.is_bfloat16_op():
+            if self.is_onednn_op():
+                check_dygraph = False
+            atol = max(atol, 0.01)
+
+        if self.is_float16_op():
+            atol = max(atol, 0.001)
+
+        if (
+            self.dtype == np.float64
+            and self.op_type
+            not in op_threshold_white_list.NEED_FIX_FP64_CHECK_GRAD_THRESHOLD_OP_LIST
+        ):
+            numeric_grad_delta = 1e-5
+            max_relative_error = 1e-7
+
+        cache_list = None
+        if hasattr(self, "cache_name_list"):
+            cache_list = self.cache_name_list
+
+        # oneDNN numeric gradient should use CPU kernel
+        use_mkldnn = False
+        if op_attrs.get("use_mkldnn"):
+            op_attrs["use_mkldnn"] = False
+            use_mkldnn = True
+        use_onednn = False
+        if op_attrs.get("use_onednn"):
+            op_attrs["use_onednn"] = False
+            use_onednn = True
+        if hasattr(self, "attrs"):
+            for k, v in self.attrs.items():
+                if isinstance(v, paddle.base.core.DataType):
+                    self.attrs[k] = paddle.pir.core.datatype_to_vartype[v]
+
+        self.op = create_op(
+            self.scope,
+            self.op_type,
+            op_inputs,
+            op_outputs,
+            op_attrs,
+            cache_list=cache_list,
+        )
+
+        if use_mkldnn:
+            op_attrs["use_mkldnn"] = True
+        if use_onednn:
+            op_attrs["use_onednn"] = True
+
+        if no_grad_set is None:
+            no_grad_set = set()
+        else:
+            if (
+                (self.op_type not in no_grad_set_white_list.NEED_TO_FIX_OP_LIST)
+                and (
+                    self.op_type not in no_grad_set_white_list.NOT_CHECK_OP_LIST
+                )
+                and (not self.is_bfloat16_op())
+            ):
+                raise AssertionError(
+                    "no_grad_set must be None, op_type is "
+                    + self.op_type
+                    + " Op."
+                )
+
+        for input_to_check in inputs_to_check:
+            set_input(self.scope, self.op, self.inputs, place)
+            tensor_to_check = self.scope.find_var(input_to_check).get_tensor()
+            tensor_size = functools.reduce(
+                lambda a, b: a * b, tensor_to_check.shape(), 1
+            )
+            tensor_ndim = len(tensor_to_check.shape())
+            # for 0D Tensor, it's additional case for OP, so not raise error
+            if (
+                tensor_ndim > 0
+                and tensor_size < 100
+                and not self.is_0size_test()
+            ):
+                self.__class__.input_shape_is_large = False
+
+        if type(output_names) is not list:
+            output_names = [output_names]
+
+        if numeric_place is None:
+            numeric_place = place
+
+        with paddle.pir_utils.OldIrGuard():
+            numeric_grads = self.check_grad_with_place_for_static(
+                user_defined_grads,
+                inputs_to_check,
+                place,
+                output_names,
+                no_grad_set,
+                user_defined_grad_outputs,
+                numeric_place,
+                numeric_grad_delta,
+                in_place,
+                check_cinn,
+                max_relative_error,
+                atol,
+            )
+
+        if check_pir_onednn and isinstance(
+            place, paddle.base.libpaddle.CPUPlace
+        ):
+            with pir_executor_guard():
+                self.check_grad_with_place_for_static(
+                    user_defined_grads,
+                    inputs_to_check,
+                    place,
+                    output_names,
+                    no_grad_set,
+                    user_defined_grad_outputs,
+                    numeric_place,
+                    numeric_grad_delta,
+                    in_place,
+                    check_cinn,
+                    max_relative_error,
+                    atol,
+                )
 
         if check_dygraph:
             with base.dygraph.base.guard(place):
@@ -3277,11 +3559,7 @@ class OpTest(unittest.TestCase):
                 for grad in dygraph_dygraph_grad:
                     if grad.dtype == np.uint16:
                         grad = convert_uint16_to_float(grad)
-                        max_relative_error = (
-                            0.03
-                            if max_relative_error < 0.03
-                            else max_relative_error
-                        )
+                        max_relative_error = max(max_relative_error, 0.03)
                     fp32_grads.append(grad)
                 dygraph_dygraph_grad = fp32_grads
                 self._assert_is_close(
@@ -3289,7 +3567,7 @@ class OpTest(unittest.TestCase):
                     dygraph_dygraph_grad,
                     inputs_to_check,
                     max_relative_error,
-                    "Gradient Check On %s" % str(place),
+                    f"Gradient Check On {place}",
                     atol=atol,
                 )
 
@@ -3311,25 +3589,17 @@ class OpTest(unittest.TestCase):
                 for grad in pir_grad:
                     if grad.dtype == np.uint16:
                         grad = convert_uint16_to_float(grad)
-                        max_relative_error = (
-                            0.01
-                            if max_relative_error < 0.01
-                            else max_relative_error
-                        )
+                        max_relative_error = max(max_relative_error, 0.01)
                     fp32_analytic_grads.append(grad)
                 pir_grad = fp32_analytic_grads
                 if self.is_float16_op():
-                    max_relative_error = (
-                        0.01
-                        if max_relative_error < 0.01
-                        else max_relative_error
-                    )
+                    max_relative_error = max(max_relative_error, 0.01)
                 self._assert_is_close(
                     numeric_grads,
                     pir_grad,
                     inputs_to_check,
                     max_relative_error,
-                    "Gradient Check On %s" % str(place),
+                    f"Gradient Check On {place}",
                     atol=atol,
                 )
 
@@ -3361,7 +3631,7 @@ class OpTest(unittest.TestCase):
             check_dygraph = False
 
         with base.dygraph.base.guard(place=place):
-            block = base.default_main_program().global_block()
+            block = base.framework.default_main_program().global_block()
 
             op_proto = OpProtoHolder.instance().get_op_proto(self.op_type)
 
@@ -3403,11 +3673,11 @@ class OpTest(unittest.TestCase):
                 for cast_input in cast_inputs:
                     if isinstance(cast_input, paddle.Tensor):
                         cast_outputs.append(
-                            paddle.cast(cast_input, core.VarDesc.VarType.FP32)
+                            paddle.cast(cast_input, paddle.float32)
                         )
                     else:
                         raise TypeError(
-                            "Unsupported test data type %s." % type(cast_input)
+                            f"Unsupported test data type {type(cast_input)}."
                         )
 
                 outputs = {}
@@ -3458,7 +3728,7 @@ class OpTest(unittest.TestCase):
 
     @staticmethod
     def _numpy_to_lod_tensor(np_value, lod, place):
-        tensor = core.LoDTensor()
+        tensor = core.DenseTensor()
         tensor.set(np_value, place)
         if lod is not None:
             tensor.set_recursive_sequence_lengths(lod)
@@ -3537,12 +3807,25 @@ class OpTest(unittest.TestCase):
 
             check_method = np.testing.assert_array_equal
             if os.getenv("FLAGS_PIR_OPTEST_RELAX_CHECK", None) == "True":
-                check_method = lambda x, y, z: np.testing.assert_allclose(
-                    x, y, err_msg=z, atol=1e-6, rtol=1e-6
-                )
+
+                def relaxed_check_method(x, y, err_msg):
+                    atol = 1e-6
+                    rtol = 1e-6
+                    if x.dtype == np.float16:
+                        atol = 1e-5
+                        rtol = 1e-3
+                    np.testing.assert_allclose(
+                        x, y, err_msg=err_msg, atol=atol, rtol=rtol
+                    )
+
+                check_method = relaxed_check_method
 
             if os.getenv("FLAGS_PIR_NO_CHECK", None) == "True":
-                check_method = lambda x, y, err_msg: None
+
+                def no_check_method(x, y, err_msg):
+                    pass
+
+                check_method = no_check_method
 
             for i in range(len(new_gradients)):
                 check_method(
@@ -3573,7 +3856,7 @@ class OpTest(unittest.TestCase):
         parallel=False,
         check_cinn=False,
     ):
-        with static_guard():
+        with paddle.pir_utils.OldIrGuard():
             prog = Program()
             scope = core.Scope()
             ir_scope = core.Scope()
@@ -3729,135 +4012,131 @@ class OpTest(unittest.TestCase):
         # get kernel signature
         kernel_sig = self.get_kernel_signature(place)
         ir_program = paddle.static.Program()
-        with paddle.static.program_guard(ir_program):
-            with scope_guard(Scope()):
-                # prepare inps attributes feed
-                (
-                    static_inputs,
-                    attrs,
-                    inputs_dict,
-                    feed,
-                ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=False)
-                # prepare args
-                args = OpTestUtils.prepare_python_api_arguments(
-                    self.python_api,
-                    static_inputs,
-                    attrs,
-                    kernel_sig,
-                )
-                inputs_sig, attrs_sig, outputs_sig = kernel_sig
-                args = OpTestUtils.assumption_assert_and_transform(
-                    args, len(inputs_sig)
-                )
-                grad_outputs = []
-                if user_defined_grad_outputs is not None:
-                    # user_defined_grad_outputs here are numpy arrays
-                    if not isinstance(user_defined_grad_outputs, list):
-                        user_defined_grad_outputs = [user_defined_grad_outputs]
-                    for grad_out_value, idx in zip(
-                        user_defined_grad_outputs,
-                        range(len(user_defined_grad_outputs)),
-                    ):
-                        grad_val = paddle.static.data(
-                            name='val_grad_%s' % idx,
-                            shape=grad_out_value.shape,
-                            dtype=grad_out_value.dtype,
+        with (
+            paddle.static.program_guard(ir_program),
+            scope_guard(Scope()),
+        ):
+            # prepare inps attributes feed
+            (
+                static_inputs,
+                attrs,
+                inputs_dict,
+                feed,
+            ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=False)
+            # prepare args
+            args = OpTestUtils.prepare_python_api_arguments(
+                self.python_api,
+                static_inputs,
+                attrs,
+                kernel_sig,
+                target_dtype=paddle.pir.core.DataType,
+            )
+            inputs_sig, attrs_sig, outputs_sig = kernel_sig
+            args = OpTestUtils.assumption_assert_and_transform(
+                args, len(inputs_sig)
+            )
+            grad_outputs = []
+            if user_defined_grad_outputs is not None:
+                # user_defined_grad_outputs here are numpy arrays
+                if not isinstance(user_defined_grad_outputs, list):
+                    user_defined_grad_outputs = [user_defined_grad_outputs]
+                for grad_out_value, idx in zip(
+                    user_defined_grad_outputs,
+                    range(len(user_defined_grad_outputs)),
+                ):
+                    grad_val = paddle.static.data(
+                        name=f'val_grad_{idx}',
+                        shape=grad_out_value.shape,
+                        dtype=grad_out_value.dtype,
+                    )
+                    grad_outputs.append(grad_val)
+                    feed.update({f'val_grad_{idx}': grad_out_value})
+                # delete the inputs which no need to calculate grad
+                for no_grad_val in no_grad_set:
+                    del static_inputs[no_grad_val]
+
+            ret_tuple = self.python_api(*args)
+            outputs = construct_output_dict_by_kernel_sig(
+                ret_tuple, outputs_sig
+            )
+            if hasattr(self, "python_out_sig_sub_name"):
+                for key in self.python_out_sig_sub_name.keys():
+                    outputs[key][0] = {
+                        a: [b]
+                        for a, b in zip(
+                            self.python_out_sig_sub_name[key],
+                            outputs[key][0],
                         )
-                        grad_outputs.append(grad_val)
-                        feed.update({'val_grad_%s' % idx: grad_out_value})
-                    # delete the inputs which no need to calculate grad
-                    for no_grad_val in no_grad_set:
-                        del static_inputs[no_grad_val]
+                    }
+            fetch_list = getattr(self, "fetch_list", [])
 
-                ret_tuple = self.python_api(*args)
-                outputs = construct_output_dict_by_kernel_sig(
-                    ret_tuple, outputs_sig
-                )
-                if hasattr(self, "python_out_sig_sub_name"):
-                    for key in self.python_out_sig_sub_name.keys():
-                        outputs[key][0] = {
-                            a: [b]
-                            for a, b in zip(
-                                self.python_out_sig_sub_name[key],
-                                outputs[key][0],
-                            )
-                        }
-                fetch_list = getattr(self, "fetch_list", [])
-
-                # cast outputs
-                if self.dtype == np.uint16:
-                    cast_inputs = []
-                    for output_name in output_names:
-                        cast_input = self._find_var_in_pir(outputs, output_name)
-                        cast_inputs = cast_inputs + cast_input
-                    cast_outputs = []
-                    for cast_input in cast_inputs:
-                        if isinstance(
-                            cast_input, paddle.base.libpaddle.pir.OpResult
-                        ):
-                            cast_outputs.append(
-                                paddle.cast(
-                                    cast_input,
-                                    paddle.base.core.DataType.FLOAT32,
-                                )
-                            )
-                        else:
-                            raise TypeError(
-                                "Unsupported test data type %s."
-                                % type(cast_input)
-                            )
-
-                    outputs = {}
-                    for i in range(len(output_names)):
-                        outputs.update({output_names[i]: [cast_outputs[i]]})
-
-                outputs_valid = {}
+            # cast outputs
+            if self.dtype == np.uint16:
+                cast_inputs = []
                 for output_name in output_names:
-                    outputs_valid[output_name] = self._find_var_in_pir(
-                        outputs, output_name
-                    )
-                loss_inputs = []
-                for input_name in inputs_to_check:
-                    loss_inputs.append(inputs_dict[input_name])
-
-                if user_defined_grad_outputs is None:
-                    if len(outputs_valid) == 1:
-                        for outputs_valid_key in outputs_valid:
-                            loss = paddle.mean(
-                                outputs_valid[outputs_valid_key][0]
+                    cast_input = self._find_var_in_pir(outputs, output_name)
+                    cast_inputs = cast_inputs + cast_input
+                cast_outputs = []
+                for cast_input in cast_inputs:
+                    if isinstance(cast_input, paddle.base.libpaddle.pir.Value):
+                        cast_outputs.append(
+                            paddle.cast(
+                                cast_input,
+                                paddle.base.core.DataType.FLOAT32,
                             )
+                        )
                     else:
-                        avg_sum = []
-                        for cur_loss in outputs_valid:
-                            cur_avg_loss = paddle.mean(
-                                outputs_valid[cur_loss][0]
-                            )
-                            avg_sum.append(cur_avg_loss)
-                        loss_sum = paddle.add_n(avg_sum)
-                        loss = paddle.scale(
-                            loss_sum, scale=1.0 / float(len(avg_sum))
+                        raise TypeError(
+                            f"Unsupported test data type {type(cast_input)}."
                         )
 
-                    grad_inputs = ir_grad(
-                        outputs=paddle.utils.flatten(loss),
-                        inputs=paddle.utils.flatten(loss_inputs),
-                        grad_outputs=None,
-                    )
-                else:
-                    grad_inputs = ir_grad(
-                        outputs=paddle.utils.flatten(outputs),
-                        inputs=paddle.utils.flatten(static_inputs),
-                        grad_outputs=grad_outputs,
-                    )
-                fetch_list = list(grad_inputs)
-                # executor run
-                executor = paddle.static.Executor(place)
-                outs = executor.run(
-                    ir_program,
-                    feed=feed,
-                    fetch_list=fetch_list,
+                outputs = {}
+                for i in range(len(output_names)):
+                    outputs.update({output_names[i]: [cast_outputs[i]]})
+
+            outputs_valid = {}
+            for output_name in output_names:
+                outputs_valid[output_name] = self._find_var_in_pir(
+                    outputs, output_name
                 )
-                return outs
+            loss_inputs = []
+            for input_name in inputs_to_check:
+                loss_inputs.append(inputs_dict[input_name])
+
+            if user_defined_grad_outputs is None:
+                if len(outputs_valid) == 1:
+                    for outputs_valid_key in outputs_valid:
+                        loss = paddle.mean(outputs_valid[outputs_valid_key][0])
+                else:
+                    avg_sum = []
+                    for cur_loss in outputs_valid:
+                        cur_avg_loss = paddle.mean(outputs_valid[cur_loss][0])
+                        avg_sum.append(cur_avg_loss)
+                    loss_sum = paddle.add_n(avg_sum)
+                    loss = paddle.scale(
+                        loss_sum, scale=1.0 / float(len(avg_sum))
+                    )
+
+                grad_inputs = ir_grad(
+                    outputs=paddle.utils.flatten(loss),
+                    inputs=paddle.utils.flatten(loss_inputs),
+                    grad_outputs=None,
+                )
+            else:
+                grad_inputs = ir_grad(
+                    outputs=paddle.utils.flatten(outputs),
+                    inputs=paddle.utils.flatten(static_inputs),
+                    grad_outputs=grad_outputs,
+                )
+            fetch_list = list(grad_inputs)
+            # executor run
+            executor = paddle.static.Executor(place)
+            outs = executor.run(
+                ir_program,
+                feed=feed,
+                fetch_list=fetch_list,
+            )
+            return outs
 
 
 class OpTestTool:

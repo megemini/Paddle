@@ -14,14 +14,14 @@
 
 #pragma once
 
-#include <absl/strings/string_view.h>
-#include <absl/types/any.h>
-#include <absl/types/variant.h>
 #include <glog/logging.h>
+#include <any>
+#include <string_view>
 
 #include <map>
 #include <mutex>  // NOLINT
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "paddle/cinn/common/macros.h"
@@ -38,6 +38,14 @@ class RuntimeSymbols {
   RuntimeSymbols(RuntimeSymbols &&rhs) {
     symbols_ = std::move(rhs.symbols_);
     scalar_holder_ = std::move(rhs.scalar_holder_);
+  }
+
+  RuntimeSymbols &operator=(RuntimeSymbols &&rhs) noexcept {
+    if (this != &rhs) {
+      symbols_ = std::move(rhs.symbols_);
+      scalar_holder_ = std::move(rhs.scalar_holder_);
+    }
+    return *this;
   }
 
   /**
@@ -71,9 +79,9 @@ class RuntimeSymbols {
   /**
    * Lookup a symbol from the registry.
    * @param name Name of the symbol.
-   * @return The address if existes, or nullptr will return.
+   * @return The address if exists, or nullptr will return.
    */
-  void *Lookup(absl::string_view name) const;
+  void *Lookup(std::string_view name) const;
 
   /**
    * Get all the symbols.

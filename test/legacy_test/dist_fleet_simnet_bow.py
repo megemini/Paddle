@@ -37,8 +37,7 @@ margin = 0.1
 sample_rate = 1
 
 # Fix seed for test
-base.default_startup_program().random_seed = 1
-base.default_main_program().random_seed = 1
+paddle.seed(2023)
 
 
 def fake_simnet_reader():
@@ -93,26 +92,20 @@ def train_network(
     is_pyreader=False,
 ):
     # query
-    q = paddle.static.data(
-        name="query_ids", shape=[-1, 1], dtype="int64", lod_level=1
-    )
+    q = paddle.static.data(name="query_ids", shape=[-1, 1], dtype="int64")
     # label data
     label = paddle.static.data(name="label", shape=[-1, 1], dtype="int64")
     # pt
-    pt = paddle.static.data(
-        name="pos_title_ids", shape=[-1, 1], dtype="int64", lod_level=1
-    )
+    pt = paddle.static.data(name="pos_title_ids", shape=[-1, 1], dtype="int64")
     # nt
-    nt = paddle.static.data(
-        name="neg_title_ids", shape=[-1, 1], dtype="int64", lod_level=1
-    )
+    nt = paddle.static.data(name="neg_title_ids", shape=[-1, 1], dtype="int64")
 
-    datas = [q, label, pt, nt]
+    data = [q, label, pt, nt]
 
     reader = None
     if is_pyreader:
         reader = base.io.PyReader(
-            feed_list=datas,
+            feed_list=data,
             capacity=64,
             iterable=False,
             use_double_buffer=False,

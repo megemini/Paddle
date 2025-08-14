@@ -126,10 +126,10 @@ class TestMnist(unittest.TestCase):
         y = np.random.randint(10, size=[1, 1], dtype="int64")
         with base.dygraph.guard(base.CUDAPlace(0)):
             model = MNIST(dtype="float32")
-            x = base.dygraph.to_variable(x)
-            y = base.dygraph.to_variable(y)
+            x = paddle.to_tensor(x)
+            y = paddle.to_tensor(y)
 
-            # using amp.auto_cast because paddle.nn.Conv2D doesn't suppport setting dtype
+            # using amp.auto_cast because paddle.nn.Conv2D doesn't support setting dtype
             with paddle.amp.auto_cast(dtype='float16'):
                 loss = model(x, y)
             print(loss.numpy())

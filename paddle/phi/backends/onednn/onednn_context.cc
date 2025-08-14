@@ -27,7 +27,7 @@ namespace phi {
 
 OneDNNContextThreadLocals::Body::Body()
     : cur_engine(dnnl::engine::kind::cpu, 0), cur_stream(cur_engine) {
-  cur_mkldnn_session_id = kMKLDNNSessionID_Default;
+  cur_onednn_session_id = kONEDNNSessionID_Default;
   cur_input_shape_str = "";
   cur_input_shape_cache_capacity = 1;
   cur_paddle_data_layout = DataLayout::kNCHW;
@@ -40,7 +40,7 @@ OneDNNContextThreadLocals::Body::Body()
 // and other is to start inference
 // TODO(jczaja): Ideally it would be good to clear only part of cache
 // related to thread that is to be terminated
-OneDNNContextThreadLocals::Body::~Body() {
+OneDNNContextThreadLocals::Body::~Body() {  // NOLINT
   auto cpu_place = phi::CPUPlace();
   // TODO(YuanRisheng): we need remove the dependency on fluid device context
   // here
@@ -49,11 +49,11 @@ OneDNNContextThreadLocals::Body::~Body() {
   dev_ctx->ResetBlobMap(exec_ptr_);
 }
 
-void OneDNNContextThreadLocals::Body::set_cur_mkldnn_session_id(size_t sid) {
-  cur_mkldnn_session_id = sid;
+void OneDNNContextThreadLocals::Body::set_cur_onednn_session_id(size_t sid) {
+  cur_onednn_session_id = sid;
 }
-size_t OneDNNContextThreadLocals::Body::get_cur_mkldnn_session_id() {
-  return cur_mkldnn_session_id;
+size_t OneDNNContextThreadLocals::Body::get_cur_onednn_session_id() {
+  return cur_onednn_session_id;
 }
 
 void OneDNNContextThreadLocals::Body::set_cur_input_shape_str(
@@ -128,7 +128,7 @@ struct OneDNNContext::Impl {
               << block_next_cache_clearing_;
       PADDLE_ENFORCE_GE(block_next_cache_clearing_,
                         0,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "Cache clearing mark should be non-negative "
                             ". But received %d.",
                             block_next_cache_clearing_));
@@ -139,7 +139,7 @@ struct OneDNNContext::Impl {
   void LinkEntryWithExecutor(BlobPtr_t<KeyBlob> pblob,
                              KeyBlob::iterator it) const {
     // Take current input shape from TLS
-    // Take current executor addess from TLS
+    // Take current executor address from TLS
     // and for this executor's items add the one defined with arguments
     auto key_it =
         p_exec_items_
@@ -170,11 +170,12 @@ struct OneDNNContext::Impl {
   size_t GetShapeBlobSize() const {
     std::lock_guard<decltype(*p_mutex_)> lock(*p_mutex_);
     BlobMap* pMap = p_blobmap_.get();
-    auto map_it = pMap->find(OneDNNContext::tls().cur_mkldnn_session_id);
+    auto map_it =
+        pMap->find(OneDNNContext::tls().cur_onednn_session_id);  // NOLINT
     if (map_it == pMap->end()) {
-      PADDLE_THROW(phi::errors::NotFound(
-          "OneDNNContext don't find cur_mkldnn_session_id: %d.",
-          OneDNNContext::tls().cur_mkldnn_session_id));
+      PADDLE_THROW(common::errors::NotFound(
+          "OneDNNContext don't find cur_onednn_session_id: %d.",
+          OneDNNContext::tls().cur_onednn_session_id));
     }
     return map_it->second->size();
   }
@@ -184,11 +185,11 @@ struct OneDNNContext::Impl {
     BlobPtr_t<ShapeBlob> sBlob = nullptr;
     BlobPtr_t<KeyBlob> pBlob = nullptr;
 
-    int sid = OneDNNContext::tls().get_cur_mkldnn_session_id();
+    int sid = OneDNNContext::tls().get_cur_onednn_session_id();  // NOLINT
 
     std::lock_guard<decltype(*p_mutex_)> lock(*p_mutex_);
 
-    // Find ShapeBlob for current mkldnn session id.
+    // Find ShapeBlob for current onednn session id.
     auto map_it = pMap->find(sid);
 
     if (map_it == pMap->end()) {
@@ -207,7 +208,7 @@ struct OneDNNContext::Impl {
       // In cache clearing mode, cur_input_shape_cache_capacity defines
       // max pblob capacity
       if ((static_cast<size_t>(sid) ==
-           OneDNNContextThreadLocals::kMKLDNNSessionID_CacheClearing) &&
+           OneDNNContextThreadLocals::kONEDNNSessionID_CacheClearing) &&
           !sBlob->empty() &&
           (sBlob->size() >=
            static_cast<size_t>(
@@ -254,11 +255,11 @@ struct OneDNNContext::Impl {
     BlobPtr_t<ShapeBlob> sBlob = nullptr;
     BlobPtr_t<KeyBlob> pBlob = nullptr;
 
-    int sid = OneDNNContext::tls().get_cur_mkldnn_session_id();
+    int sid = OneDNNContext::tls().get_cur_onednn_session_id();  // NOLINT
 
     std::lock_guard<decltype(*p_mutex_)> lock(*p_mutex_);
 
-    // Find ShapeBlob for current mkldnn session id firstly
+    // Find ShapeBlob for current onednn session id firstly
     auto map_it = pMap->find(sid);
     // (jczaja): After first iteration of model's execution we
     // should have all elements cached (mostly) so failures are unlikely (less
@@ -296,10 +297,10 @@ struct OneDNNContext::Impl {
   }
   const Attribute& GetDnnAttr(const std::string& attr_name) const {
     auto iter = dnn_attrs_.find(attr_name);
-    PADDLE_ENFORCE_NE(
-        iter,
-        dnn_attrs_.end(),
-        phi::errors::NotFound("Attribute `%s` is not found in OneDNNContext."));
+    PADDLE_ENFORCE_NE(iter,
+                      dnn_attrs_.end(),
+                      common::errors::NotFound(
+                          "Attribute `%s` is not found in OneDNNContext."));
     return iter->second;
   }
 
@@ -318,7 +319,7 @@ struct OneDNNContext::Impl {
     PADDLE_ENFORCE_NE(
         iter,
         dnn_inputs_.end(),
-        phi::errors::NotFound(
+        common::errors::NotFound(
             "Input DenseTensor `%s` is not found in OneDNNContext."));
     return iter->second;
   }
@@ -340,7 +341,7 @@ struct OneDNNContext::Impl {
     auto it = inputs_name_.find(input);
     PADDLE_ENFORCE_NE(it,
                       inputs_name_.end(),
-                      phi::errors::NotFound(
+                      common::errors::NotFound(
                           "OneDnnContext does not have the input %s.", input));
     return it->second;
   }
@@ -351,8 +352,8 @@ struct OneDNNContext::Impl {
     PADDLE_ENFORCE_NE(
         it,
         outputs_name_.end(),
-        phi::errors::NotFound("OneDnnContext does not have the output %s.",
-                              output));
+        common::errors::NotFound("OneDnnContext does not have the output %s.",
+                                 output));
     return it->second;
   }
 
@@ -365,7 +366,7 @@ struct OneDNNContext::Impl {
   unsigned int block_next_cache_clearing_ = 0;
 
   // Holds some attributes only used by the onednn kernel calculation
-  // Since original mkldnn op kernel directly adds the operations that require
+  // Since original onednn op kernel directly adds the operations that require
   // fusion to the native kernel operations, and uses the attribute `fuse_xxx`
   // to control, for onednn, there will be some attributes that seem to be
   // independent of the device are also saved here.

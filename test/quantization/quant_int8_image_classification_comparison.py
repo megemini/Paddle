@@ -25,7 +25,7 @@ import numpy as np
 import paddle
 from paddle.base.framework import IrGraph
 from paddle.framework import core
-from paddle.static.quantization import QuantInt8MkldnnPass
+from paddle.static.quantization import QuantInt8OnednnPass
 
 paddle.enable_static()
 
@@ -190,10 +190,10 @@ class QuantInt8ImageClassificationComparisonTest(unittest.TestCase):
             if self._debug:
                 graph.draw('.', 'quant_orig', graph.all_op_nodes())
             if transform_to_int8:
-                mkldnn_int8_pass = QuantInt8MkldnnPass(
+                onednn_int8_pass = QuantInt8OnednnPass(
                     _scope=inference_scope, _place=place
                 )
-                graph = mkldnn_int8_pass.apply(graph)
+                graph = onednn_int8_pass.apply(graph)
             else:
                 graph = self._prepare_for_fp32_mkldnn(graph)
 
@@ -224,7 +224,7 @@ class QuantInt8ImageClassificationComparisonTest(unittest.TestCase):
                     feed={feed_target_names[0]: images},
                     fetch_list=fetch_targets,
                 )
-                batch_time = (time.time() - start) * 1000  # in miliseconds
+                batch_time = (time.time() - start) * 1000  # in milliseconds
                 outputs.append(out[0])
                 batch_acc1, batch_acc5 = self._get_batch_accuracy(
                     out[0], labels
@@ -270,19 +270,13 @@ class QuantInt8ImageClassificationComparisonTest(unittest.TestCase):
     ):
         _logger.info('--- Accuracy summary ---')
         _logger.info(
-            'Accepted top1 accuracy drop threshold: {}. (condition: (FP32_top1_acc - IN8_top1_acc) <= threshold)'.format(
-                threshold
-            )
+            f'Accepted top1 accuracy drop threshold: {threshold}. (condition: (FP32_top1_acc - IN8_top1_acc) <= threshold)'
         )
         _logger.info(
-            'FP32: avg top1 accuracy: {:.4f}, avg top5 accuracy: {:.4f}'.format(
-                fp32_acc1, fp32_acc5
-            )
+            f'FP32: avg top1 accuracy: {fp32_acc1:.4f}, avg top5 accuracy: {fp32_acc5:.4f}'
         )
         _logger.info(
-            'INT8: avg top1 accuracy: {:.4f}, avg top5 accuracy: {:.4f}'.format(
-                int8_acc1, int8_acc5
-            )
+            f'INT8: avg top1 accuracy: {int8_acc1:.4f}, avg top5 accuracy: {int8_acc5:.4f}'
         )
         assert fp32_acc1 > 0.0
         assert int8_acc1 > 0.0

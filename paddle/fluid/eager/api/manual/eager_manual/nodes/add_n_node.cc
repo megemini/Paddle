@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_functions.h"
 #include "paddle/fluid/eager/api/manual/eager_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
@@ -22,9 +23,10 @@
 #include "paddle/fluid/imperative/tracer.h"
 #include "paddle/phi/api/all.h"
 #include "paddle/phi/api/lib/api_custom_impl.h"
-#include "paddle/phi/core/flags.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
-PHI_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_bool(check_cuda_error);
 
 paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
 AddNGradNodeFinal::operator()(
@@ -32,7 +34,23 @@ AddNGradNodeFinal::operator()(
         &grads,
     bool create_graph,
     bool is_new_grad) {
+  VLOG(3) << "Running AD API GRAD: "
+          << "add_n_grad";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("AddNGradNodeFinal begin");
+  }
   // Fill Zero For GradIn Tensors
+
+  // This 'Local_XXXGradNode' record event is different with
+  // 'Global_XXXGradNode' event.
+  // * 'Local_XXXGradNode' will only cover execution time of this function.
+  // * 'Global_XXXGradNode' will not only cover execution time of this function,
+  // but also include gradient
+  //    accumulation when the output(s) of corresponding forward OP are shared
+  //    by other OP(s), which may have extra accumulation overhead than
+  //    'Local_XXXGradNode'.
+  phi::RecordEvent node_execution_inner(
+      "Local_AddNGradNodeFinal", phi::TracerEventType::OperatorInner, 1);
 
   // Apply Gradient Hooks
   auto hooked_grads = ApplyGradientHooks(grads);
@@ -97,6 +115,13 @@ AddNGradNodeFinal::operator()(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }
 
+  if (HasNodePostHook()) {
+    returns = ApplyNodePostHooks(returns, hooked_grads);
+  }
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("AddNGradNodeFinal finish");
+  }
   if (NeedComplexToRealConversion()) HandleComplexGradToRealGrad(&returns);
   return returns;
 }

@@ -18,7 +18,6 @@ import numpy as np
 
 import paddle
 from paddle import static
-from paddle.pir_utils import test_with_pir_api
 
 p_list_n_n = ("fro", "nuc", 1, -1, np.inf, -np.inf)
 p_list_m_n = (None, 2, -2)
@@ -83,7 +82,7 @@ def gen_empty_input():
 
 
 class API_TestStaticCond(unittest.TestCase):
-    @test_with_pir_api
+
     def test_out(self):
         paddle.enable_static()
         # test calling results of 'cond' in static graph mode
@@ -93,6 +92,7 @@ class API_TestStaticCond(unittest.TestCase):
 
 
 class API_TestDygraphCond(unittest.TestCase):
+
     def test_out(self):
         paddle.disable_static()
         # test calling results of 'cond' in dynamic mode
@@ -102,6 +102,7 @@ class API_TestDygraphCond(unittest.TestCase):
 
 
 class TestCondAPIError(unittest.TestCase):
+
     def test_dygraph_api_error(self):
         paddle.disable_static()
         # test raising errors when 'cond' is called in dygraph mode
@@ -117,7 +118,6 @@ class TestCondAPIError(unittest.TestCase):
                 x_tensor = paddle.to_tensor(x)
                 self.assertRaises(ValueError, paddle.linalg.cond, x_tensor, p)
 
-    @test_with_pir_api
     def test_static_api_error(self):
         paddle.enable_static()
         # test raising errors when 'cond' is called in static graph mode
@@ -154,12 +154,44 @@ class TestCondAPIError(unittest.TestCase):
 
 
 class TestCondEmptyTensorInput(unittest.TestCase):
+
     def test_dygraph_empty_tensor_input(self):
         paddle.disable_static()
         # test calling results of 'cond' when input is an empty tensor in dynamic mode
         x_list_n_n, x_list_m_n = gen_empty_input()
         test_dygraph_assert_true(self, x_list_n_n, p_list_n_n + p_list_m_n)
         test_dygraph_assert_true(self, x_list_m_n, p_list_m_n)
+
+
+class TestCondZeroSizeTensor(unittest.TestCase):
+    def setUp(self):
+        self.shape = [0, 3]
+        self.dtype = 'float32'
+        self.p = 2
+        self.except_shape = []
+
+    def _init_data(self):
+        self.x = paddle.randn(self.shape, dtype=self.dtype)
+        self.x.stop_gradient = False
+
+    def _test_cond(self):
+        res = paddle.linalg.cond(self.x, self.p)
+        np.testing.assert_allclose(res.shape, self.except_shape)
+        loss = res.sum()
+        loss.backward()
+        np.testing.assert_allclose(self.x.grad.shape, self.x.shape)
+
+    def test_dygraph(self):
+        self._init_data()
+        self._test_cond()
+
+
+class TestCondZeroSizeTensor1(TestCondZeroSizeTensor):
+    def setUp(self):
+        self.shape = [8, 9, 0, 3]
+        self.dtype = 'float32'
+        self.p = 2
+        self.except_shape = [8, 9]
 
 
 if __name__ == "__main__":

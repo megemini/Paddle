@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
@@ -22,6 +23,8 @@ from parameterize import (
     parameterize_func,
     place,
 )
+
+sys.path.append("../../distribution")
 from test_distribution_bernoulli import BernoulliNumpy, _kstest, _sigmoid
 
 import paddle
@@ -353,11 +356,13 @@ class BernoulliTestError(unittest.TestCase):
         ]
     )
     def test_bad_init_type(self, probs):
-        with paddle.static.program_guard(self.program):
-            with self.assertRaises(TypeError):
-                [_] = self.executor.run(
-                    self.program, feed={}, fetch_list=[Bernoulli(probs=probs)]
-                )
+        with (
+            paddle.static.program_guard(self.program),
+            self.assertRaises(TypeError),
+        ):
+            [_] = self.executor.run(
+                self.program, feed={}, fetch_list=[Bernoulli(probs=probs)]
+            )
 
     @parameterize_func(
         [
@@ -448,17 +453,17 @@ class BernoulliTestError(unittest.TestCase):
 
             # `logits, value = paddle.broadcast_tensors([self.logits, value])`
             # raise ValueError in dygraph, raise TypeError in static.
-            with self.assertRaises(TypeError):
+            with self.assertRaises((TypeError, ValueError)):
                 [_] = self.executor.run(
                     self.program, feed={}, fetch_list=[rv.cdf(value)]
                 )
 
-            with self.assertRaises(TypeError):
+            with self.assertRaises((TypeError, ValueError)):
                 [_] = self.executor.run(
                     self.program, feed={}, fetch_list=[rv.log_prob(value)]
                 )
 
-            with self.assertRaises(TypeError):
+            with self.assertRaises((TypeError, ValueError)):
                 [_] = self.executor.run(
                     self.program, feed={}, fetch_list=[rv.prob(value)]
                 )

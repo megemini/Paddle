@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
 from op_test import convert_float_to_uint16
+
+sys.path.append("../deprecated/legacy_test")
 from test_softmax_op import (
     TestSoftmaxOp,
     TestSoftmaxOp2,
@@ -39,7 +42,7 @@ def stable_softmax(x):
 @unittest.skipIf(
     not core.supports_bfloat16(), "place does not support BF16 evaluation"
 )
-class TestSoftmaxMKLDNNOp(TestSoftmaxOp):
+class TestSoftmaxONEDNNOp(TestSoftmaxOp):
     def get_x_shape(self):
         return [10, 10]
 
@@ -48,7 +51,7 @@ class TestSoftmaxMKLDNNOp(TestSoftmaxOp):
 
     def setUp(self):
         self.op_type = "softmax"
-        self.use_mkldnn = True
+        self.use_onednn = True
         self.dtype = np.uint16
         self.init_kernel_type()
         self.shape = self.get_x_shape()
@@ -61,41 +64,46 @@ class TestSoftmaxMKLDNNOp(TestSoftmaxOp):
 
         self.inputs = {'X': convert_float_to_uint16(x)}
         self.outputs = {'Out': out}
-        self.attrs = {'axis': self.axis, 'use_mkldnn': self.use_mkldnn}
+        self.attrs = {'axis': self.axis, 'use_onednn': self.use_onednn}
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     def test_check_grad(self):
         pass
 
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
 
 
-class TestSoftmaxMKLDNNOp2(TestSoftmaxOp2):
+class TestSoftmaxONEDNNOp2(TestSoftmaxOp2):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
 
-class TestSoftmaxMKLDNNOp3(TestSoftmaxOp3):
+class TestSoftmaxONEDNNOp3(TestSoftmaxOp3):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
 
-class TestSoftmaxMKLDNNOp4(TestSoftmaxOp4):
+class TestSoftmaxONEDNNOp4(TestSoftmaxOp4):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
 
-class TestSoftmaxMKLDNNOp5(TestSoftmaxOp5):
+class TestSoftmaxONEDNNOp5(TestSoftmaxOp5):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
 
-class TestSoftmaxMKLDNNOp6(TestSoftmaxOp6):
+class TestSoftmaxONEDNNOp6(TestSoftmaxOp6):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
 
 if __name__ == '__main__':

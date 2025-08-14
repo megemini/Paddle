@@ -21,10 +21,10 @@ limitations under the License. */
 #include <string>
 #include <vector>
 
+#include "paddle/common/flags.h"
 #include "paddle/fluid/inference/capi_exp/pd_config.h"
 #include "paddle/fluid/inference/capi_exp/pd_inference_api.h"
 #include "paddle/fluid/inference/capi_exp/pd_utils.h"
-#include "paddle/utils/flags.h"
 
 PD_DEFINE_string(infer_model, "", "model path");
 
@@ -53,8 +53,8 @@ void predictor_run() {
   const int width = 318;
   float *input = new float[batch_size * channels * height * width]();
 
-  int32_t shape[4] = {batch_size, channels, height, width};
-  PD_TensorReshape(tensor, 4, shape);
+  std::array<int32_t, 4> shape = {batch_size, channels, height, width};
+  PD_TensorReshape(tensor, 4, shape.data());
   PD_TensorCopyFromCpuFloat(tensor, input);
   EXPECT_TRUE(PD_PredictorRun(predictor));
 
@@ -67,7 +67,7 @@ void predictor_run() {
 TEST(PD_PredictorRun, predictor_run) { predictor_run(); }
 
 #ifdef PADDLE_WITH_DNNL
-TEST(PD_Config, profile_mkldnn) {
+TEST(PD_Config, profile_onednn) {
   std::string model_dir = FLAGS_infer_model;
   std::string prog_file = model_dir + "/model";
   std::string params_file = model_dir + "/params";
@@ -75,14 +75,11 @@ TEST(PD_Config, profile_mkldnn) {
   PD_ConfigDisableGpu(config);
   PD_ConfigSetCpuMathLibraryNumThreads(config, 10);
   PD_ConfigSwitchIrDebug(config, TRUE);
-  PD_ConfigEnableMKLDNN(config);
-  bool mkldnn_enable = PD_ConfigMkldnnEnabled(config);
-  EXPECT_TRUE(mkldnn_enable);
-  PD_ConfigEnableMkldnnQuantizer(config);
-  bool quantizer_enable = PD_ConfigMkldnnQuantizerEnabled(config);
-  EXPECT_TRUE(quantizer_enable);
-  PD_ConfigEnableMkldnnBfloat16(config);
-  PD_ConfigSetMkldnnCacheCapacity(config, 0);
+  PD_ConfigEnableONEDNN(config);
+  bool onednn_enable = PD_ConfigOnednnEnabled(config);
+  EXPECT_TRUE(onednn_enable);
+  PD_ConfigEnableOnednnBfloat16(config);
+  PD_ConfigSetOnednnCacheCapacity(config, 0);
   PD_ConfigSetModel(config, prog_file.c_str(), params_file.c_str());
   PD_ConfigDestroy(config);
 }

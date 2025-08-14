@@ -26,8 +26,17 @@ void GatherKernel(const Context& dev_ctx,
                   const DenseTensor& index,
                   const Scalar& axis,
                   DenseTensor* out) {
+  if (out && out->numel() == 0) {
+    dev_ctx.template Alloc<T>(out);
+    return;
+  }
   const auto& index_type = index.dtype();
   auto axis_v = axis.to<int>();
+  if (axis_v < 0) {
+    axis_v += static_cast<int>(x.dims().size());
+  }
+
+  // gather at non-zero axis
   if (axis_v != 0) {
     if (index_type == phi::DataType::INT32) {
       phi::funcs::GatherV2Function<T, int32_t>(
@@ -45,14 +54,15 @@ void GatherKernel(const Context& dev_ctx,
     return;
   }
 
+  // gather at axis 0
   if (index_type == phi::DataType::INT32) {
     phi::funcs::CPUGather<T, int>(dev_ctx, x, index, out);
   } else if (index_type == phi::DataType::INT64) {
     phi::funcs::CPUGather<T, int64_t>(dev_ctx, x, index, out);
   } else {
-    PADDLE_THROW(
-        phi::errors::InvalidArgument("The data type of Input(Index) of gather "
-                                     "must be int32 or int64 on CPU."));
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "The data type of Input(Index) of gather "
+        "must be int32 or int64 on CPU."));
   }
 }
 
@@ -64,7 +74,12 @@ PD_REGISTER_KERNEL(gather,
                    phi::GatherKernel,
                    float,
                    double,
-                   int,
                    uint8_t,
+                   int8_t,
+                   int16_t,
+                   int32_t,
                    int64_t,
-                   phi::dtype::bfloat16) {}
+                   bool,
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

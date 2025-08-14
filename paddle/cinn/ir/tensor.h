@@ -14,14 +14,14 @@
 
 #pragma once
 
-#include <absl/container/flat_hash_map.h>
-#include <absl/strings/string_view.h>
 #include <isl/cpp.h>
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -31,7 +31,7 @@
 #include "paddle/cinn/ir/dim.h"
 #include "paddle/cinn/ir/function_base.h"
 #include "paddle/cinn/lang/buffer.h"
-#include "paddle/cinn/poly/stage.h"
+#include "paddle/utils/flat_hash_map.h"
 
 namespace cinn {
 
@@ -112,6 +112,8 @@ std::string GenReduceInitTensorNameOf(const std::string& tensor_name);
 
 bool IsReduceInitTensorName(const std::string& tensor_name);
 
+bool IsSplitTransformTensorName(const std::string& tensor_name);
+
 std::string GetOriginalReduceTensorName(const std::string& tensor_name);
 
 class ComputeOp;
@@ -185,8 +187,6 @@ class _Tensor_ : public ExprNode<_Tensor_> {
 
   void Verify() const override;
 
-  bool IsReduceInited(poly::StageMap stages) const;
-
   //! Tell whether this tensor represents a tuple (consists of one or multiple
   //! tensors as output of a extern Call).
   bool is_tuple() const;
@@ -206,10 +206,10 @@ class _Tensor_ : public ExprNode<_Tensor_> {
    * @param statement The name of a statement(equivalent to the id of tensor).
    * @return A boolean.
    */
-  bool IsDependOnStatement(absl::string_view statement);
+  bool IsDependOnStatement(std::string_view statement);
 
   /**
-   * Get the names of the tensors thouse this tensor depends on.
+   * Get the names of the tensors those this tensor depends on.
    */
   std::set<std::string> DependingTensorNames();
 
@@ -217,15 +217,13 @@ class _Tensor_ : public ExprNode<_Tensor_> {
    * Get a new tensor with the \p shape, but the underlying buffer shared.
    * NOTE the tensor to Reshape should not be an inlined computation.
    */
-  ir::Tensor Reshape(const std::vector<Expr>& shape,
-                     poly::StageMap stages) const;
+  ir::Tensor Reshape(const std::vector<Expr>& shape) const;
 
   /**
    * Get a new tensor with the \p shape with a newly allocated buffer.
    * NOTE the tensor to Reshape should not be an inlined computation.
    */
-  ir::Tensor ReshapeCopied(const std::vector<Expr>& shape,
-                           poly::StageMap stages) const;
+  ir::Tensor ReshapeCopied(const std::vector<Expr>& shape) const;
 
   /**
    * Tell whether this tensor has same shape with \p other.
@@ -275,7 +273,7 @@ class _Tensor_ : public ExprNode<_Tensor_> {
   std::vector<Var> axis_with_reduce() const;
 
   /**
-   * Get the tensors thouse depend on the same buffer belong to this tensor.
+   * Get the tensors those depend on the same buffer belong to this tensor.
    */
   const std::set<std::string>& buffer_depended_tensor_names() const {
     return buffer_depended_tensor_names_;
@@ -304,19 +302,10 @@ class _Tensor_ : public ExprNode<_Tensor_> {
   void WithBuffer(const std::string& memory_type,
                   const std::string& buffer_name = "",
                   const Type& type = Void());
-  Tensor GetInitTensor(
-      poly::StageMap stages,
-      const Target& target = cinn::common::DefaultHostTarget()) const;
 
-  /**
-   * Create the initialization tensor.
-   * @param stages The stages.
-   * @param init_val The initial value.
-   * @return The initializing tensor.
-   */
-  ir::Tensor InitReduction(
-      poly::StageMap stages,
-      const Target& target = cinn::common::DefaultHostTarget()) const;
+  const std::optional<std::vector<Expr>>& value() const { return value_; }
+
+  void set_value(const std::vector<Expr>& value) { value_ = value; }
 
  private:
   //! Initialize the axis field after the shape field is assigned.
@@ -328,10 +317,10 @@ class _Tensor_ : public ExprNode<_Tensor_> {
   //! this.
   std::set<std::string> buffer_depended_tensor_names_;
 
-  friend Shared<poly::Stage> CreateStage(Tensor tensor);
+  // The flatten compute value of tensor, such as Tensor[[1, 2], [3, 4]] ->
+  // Tensor[1, 2, 3, 4]
+  std::optional<std::vector<Expr>> value_;
 };
-
-Shared<poly::Stage> CreateStage(Tensor tensor);
 
 class _Operation_;
 class Operation : public FunctionRef {

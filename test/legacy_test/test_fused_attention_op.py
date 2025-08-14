@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import unittest
 
 import numpy as np
@@ -22,17 +21,15 @@ import paddle
 import paddle.incubate.nn.functional as incubate_f
 import paddle.nn.functional as F
 from paddle import tensor
-from paddle.base.framework import default_main_program
 from paddle.nn.layer.common import Dropout, Linear
 from paddle.nn.layer.norm import LayerNorm
 from paddle.nn.layer.transformer import _convert_attention_mask
 
-default_main_program().random_seed = 42
+paddle.seed(42)
 
 
 class TestFusedAttentionOp(OpTest):
     def setUp(self):
-        self.with_new_comm()
         self.config()
         self.generate_input_data()
 
@@ -80,9 +77,6 @@ class TestFusedAttentionOp(OpTest):
         self.norm2 = LayerNorm(self.embed_dim)
         paddle.set_default_dtype(self.x_type)
         self.dropout = Dropout(self.dropout_prob, mode="upscale_in_train")
-
-    def with_new_comm(self):
-        os.environ["FLAGS_dynamic_static_unified_comm"] = "0"
 
     def config(self):
         self.x_type = np.float32
@@ -226,7 +220,10 @@ class TestFusedAttentionOp(OpTest):
         )
         out = self.out_proj(out_linear_in)
 
-        residual_out = residual + self.dropout(out)
+        if out.size == 0:
+            residual_out = residual
+        else:
+            residual_out = residual + self.dropout(out)
         if not self.pre_layer_norm:
             final_out = self.norm1(residual_out)
         else:
@@ -353,11 +350,6 @@ class TestFusedAttentionOp(OpTest):
         np.testing.assert_allclose(
             x_grad_ref, x_grad.numpy(), rtol=self.rtol, atol=self.atol
         )
-
-
-class TestFusedAttentionOpWithNewComm(TestFusedAttentionOp):
-    def with_new_comm(self):
-        os.environ["FLAGS_dynamic_static_unified_comm"] = "1"
 
 
 class TestFusedAttentionOpBiasIsNone(TestFusedAttentionOp):
@@ -740,6 +732,34 @@ class TestFusedAttentionOpParamStopGradient(OpTest):
         np.testing.assert_allclose(
             x_grad_ref, x_grad.numpy(), rtol=self.rtol, atol=self.atol
         )
+
+
+class TestFusedAttentionOp_ZeroSize(TestFusedAttentionOp):
+    def config(self):
+        self.x_type = np.float32
+        self.attn_mask_type = np.float64
+        self.pre_layer_norm = False
+        self.has_attn_mask = False
+        self.has_cache_kv = False
+        self.training = True
+
+        self.batch_size = 0  # 0-size
+        self.query_length = 128
+        self.cache_length = 128
+        self.head_dim = 64
+        self.num_heads = 16
+        self.embed_dim = self.head_dim * self.num_heads
+
+        self.dropout_prob = 0.0
+        self.attn_dropout_prob = 0.0
+        self.weight_attr = None
+        self.bias_attr = None
+        self.kdim, self.vdim = self.embed_dim, self.embed_dim
+        self.key_length, self.value_length = (
+            self.query_length,
+            self.query_length,
+        )
+        self.transpose_qkv_wb = False
 
 
 if __name__ == "__main__":

@@ -40,27 +40,39 @@ void BatchNormKernel(const Context& dev_ctx,
                      DenseTensor* saved_mean,
                      DenseTensor* saved_variance,
                      DenseTensor* reserve_space) {
+  if (x.numel() == 0) {
+    dev_ctx.template Alloc<T>(y);
+    if (mean_out) dev_ctx.template Alloc<T>(mean_out);
+    if (variance_out) dev_ctx.template Alloc<T>(variance_out);
+    if (saved_mean) dev_ctx.template Alloc<T>(saved_mean);
+    if (saved_variance) dev_ctx.template Alloc<T>(saved_variance);
+    if (reserve_space) {
+      reserve_space->Resize({0});
+      dev_ctx.template Alloc<T>(reserve_space);
+    }
+    return;
+  }
   using XPUType = typename XPUTypeTrait<T>::Type;
   bool test_mode = is_test && (!trainable_statistics);
   bool global_stats = test_mode || use_global_stats;
   const auto data_layout = common::StringToDataLayout(data_layout_str);
   PADDLE_ENFORCE_EQ(data_layout_str == "NCHW" || data_layout_str == "NHWC",
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The 'data_layout' attribute must be NCHW or NHWC. "
-                        "But recevived 'data_layout' is [%s].",
+                        "But received 'data_layout' is [%s].",
                         data_layout_str));
 
   const auto& x_dims = x.dims();
   PADDLE_ENFORCE_EQ(
       x_dims.size() >= 2 && x_dims.size() <= 5,
       true,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of input's dimensions should be between 2 and 5"
           "But received: the size of input's dimensions is [%d]",
           x_dims.size()));
 
-  int N = -1, C = -1, H = -1, W = -1, D = -1;
+  int64_t N = -1, C = -1, H = -1, W = -1, D = -1;
   funcs::ExtractNCWHD(x_dims, data_layout, &N, &C, &H, &W, &D);
   N = (N == 0) ? 1 : N;
   C = (C == 0) ? 1 : C;
@@ -98,13 +110,12 @@ void BatchNormKernel(const Context& dev_ctx,
   dev_ctx.template Alloc<float>(variance_out);
   dev_ctx.template Alloc<float>(saved_mean);
   dev_ctx.template Alloc<float>(saved_variance);
-
   PADDLE_ENFORCE_LE(
       x_dims.size(),
       5,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of input X's dimensions should be less than 6."
-          "But received: the size of input X's dimensionss is [%d]",
+          "But received: the size of input X's dimensions is [%d]",
           x_dims.size()));
 
   bool is_nchw = data_layout_str == "NCHW";
@@ -164,4 +175,5 @@ PD_REGISTER_KERNEL(batch_norm,
   kernel->OutputAt(2).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(3).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(4).SetDataType(phi::DataType::FLOAT32);
+  kernel->OutputAt(5).SetDataType(phi::DataType::UINT8);
 }

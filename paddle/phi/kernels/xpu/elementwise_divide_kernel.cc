@@ -30,13 +30,13 @@ void DivideKernel(const Context& dev_ctx,
                   const DenseTensor& y,
                   DenseTensor* out) {
   using XPUType = typename XPUTypeTrait<T>::Type;
-  auto f = [](xpu::Context* ctx,
+  auto f = [](xpu::Context* xpu_ctx,
               const XPUType* x,
               const XPUType* y,
               XPUType* z,
-              const std::vector<int>& xshape,
-              const std::vector<int>& yshape) {
-    return xpu::broadcast_div<XPUType>(ctx, x, y, z, xshape, yshape);
+              const std::vector<int64_t>& xshape,
+              const std::vector<int64_t>& yshape) {
+    return xpu::broadcast_div<XPUType>(xpu_ctx, x, y, z, xshape, yshape);
   };
 
   XPUElementwise<T, XPUType>(dev_ctx, x, y, -1, out, f);
@@ -50,5 +50,6 @@ PD_REGISTER_KERNEL(divide,
                    phi::DivideKernel,
                    float,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    int,
                    int64_t) {}

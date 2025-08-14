@@ -13,21 +13,25 @@
 # limitations under the License.
 
 import os
+import sys
 import unittest
 
 import numpy as np
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_places
+
+sys.path.append("../deprecated/legacy_test")
 from test_attribute_var import UnittestBase
 from utils import static_guard
 
 import paddle
+import paddle.distributed as dist
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
+from paddle.framework import in_pir_mode
 
 
 def pad_wrapper(x, paddings, pad_value):
     return paddle.nn.functional.pad(
-        x, pad=list(paddings), mode='constant', value=pad_value
+        x, pad=list(paddings), mode="constant", value=pad_value
     )
 
 
@@ -38,16 +42,16 @@ class TestPadOp(OpTest):
         self.op_type = "pad"
         self.python_api = pad_wrapper
         self.inputs = {
-            'X': np.random.random(self.shape).astype(self.dtype),
+            "X": np.random.random(self.shape).astype(self.dtype),
         }
         self.attrs = {}
-        self.attrs['paddings'] = list(np.array(self.paddings).flatten())
-        self.attrs['pad_value'] = self.pad_value
+        self.attrs["paddings"] = list(np.array(self.paddings).flatten())
+        self.attrs["pad_value"] = self.pad_value
         self.outputs = {
-            'Out': np.pad(
-                self.inputs['X'],
+            "Out": np.pad(
+                self.inputs["X"],
                 self.paddings,
-                mode='constant',
+                mode="constant",
                 constant_values=self.pad_value,
             )
         }
@@ -62,17 +66,19 @@ class TestPadOp(OpTest):
 
     def test_check_grad_normal(self):
         self.check_grad(
-            ['X'],
-            'Out',
+            ["X"],
+            "Out",
             check_prim=True,
             check_pir=True,
             check_prim_pir=True,
+            check_auto_parallel=self.check_auto_parallel,
         )
 
     def initTestCase(self):
         self.shape = (16, 16)
         self.paddings = [(0, 1), (2, 3)]
         self.pad_value = 0.0
+        self.check_auto_parallel = False
 
 
 class TestCase1(TestPadOp):
@@ -80,6 +86,7 @@ class TestCase1(TestPadOp):
         self.shape = (2, 3, 4, 5)
         self.paddings = [(0, 1), (2, 3), (2, 1), (1, 1)]
         self.pad_value = 0.5
+        self.check_auto_parallel = False
 
 
 class TestCase2(TestPadOp):
@@ -87,6 +94,7 @@ class TestCase2(TestPadOp):
         self.shape = (5, 5, 5)
         self.paddings = [(0, 0), (0, 0), (1, 2)]
         self.pad_value = 1.0
+        self.check_auto_parallel = False
 
 
 class TestCase3(TestPadOp):
@@ -94,6 +102,31 @@ class TestCase3(TestPadOp):
         self.shape = 100
         self.paddings = [(0, 1)]
         self.pad_value = 0.9
+        self.check_auto_parallel = False
+
+
+class TestCase4(TestPadOp):
+    def initTestCase(self):
+        self.shape = (10, 10)
+        self.paddings = [(0, 1), (2, 3)]
+        self.pad_value = 1.0
+
+        self.check_auto_parallel = True
+        self.placements = {
+            'X': [dist.Replicate()],
+        }
+
+
+class TestCase5(TestPadOp):
+    def initTestCase(self):
+        self.shape = (10, 10)
+        self.paddings = [(0, 0), (2, 3)]
+        self.pad_value = 1.0
+
+        self.check_auto_parallel = True
+        self.placements = {
+            'X': [dist.Shard(0)],
+        }
 
 
 # ----------------Pad Fp16----------------
@@ -109,8 +142,8 @@ def create_test_fp16(parent):
 
         def test_check_grad_normal(self):
             self.check_grad(
-                ['X'],
-                'Out',
+                ["X"],
+                "Out",
                 check_prim=True,
                 check_pir=True,
                 check_prim_pir=True,
@@ -125,23 +158,28 @@ create_test_fp16(TestPadOp)
 create_test_fp16(TestCase1)
 create_test_fp16(TestCase2)
 create_test_fp16(TestCase3)
+create_test_fp16(TestCase4)
+create_test_fp16(TestCase5)
 
 
 class TestPadOpError(unittest.TestCase):
+
     def test_errors(self):
-        with static_guard():
-            with paddle.static.program_guard(
+        with (
+            static_guard(),
+            paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
-            ):
-                input_data = np.random.random((2, 2)).astype("float32")
+            ),
+        ):
+            input_data = np.random.random((2, 2)).astype("float32")
 
-                def test_Variable():
-                    paddle.nn.functional.pad(x=input_data, pad=[1, 1, 1, 1])
+            def test_Variable():
+                paddle.nn.functional.pad(x=input_data, pad=[1, 1, 1, 1])
 
-                self.assertRaises(TypeError, test_Variable)
-
+            self.assertRaises(TypeError, test_Variable)
+            if core.is_compiled_with_cuda():
                 data = paddle.static.data(
-                    name='data', shape=[4], dtype='float16'
+                    name="data", shape=[4], dtype="float16"
                 )
                 paddle.nn.functional.pad(x=data, pad=[0, 1])
 
@@ -154,8 +192,8 @@ class TestPaddingValueTensor(UnittestBase):
     def test_static(self):
         with static_guard():
             main_prog = paddle.static.Program()
-            starup_prog = paddle.static.Program()
-            with paddle.static.program_guard(main_prog, starup_prog):
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
                 fc = paddle.nn.Linear(4, 10)
                 x = paddle.randn([2, 4])
                 x.stop_gradient = False
@@ -165,13 +203,14 @@ class TestPaddingValueTensor(UnittestBase):
 
                 sgd = paddle.optimizer.SGD()
                 sgd.minimize(paddle.mean(out))
-                self.assertTrue(self.var_prefix() in str(main_prog))
+                if not in_pir_mode():
+                    self.assertTrue(self.var_prefix() in str(main_prog))
 
                 exe = paddle.static.Executor()
-                exe.run(starup_prog)
+                exe.run(startup_prog)
                 res = exe.run(fetch_list=[feat, out])
                 gt = np.pad(
-                    res[0], [1, 1], 'constant', constant_values=[1.0, 1.0]
+                    res[0], [1, 1], "constant", constant_values=[1.0, 1.0]
                 )
                 np.testing.assert_allclose(res[1], gt)
 
@@ -183,7 +222,7 @@ class TestPaddingValueTensor(UnittestBase):
                 gt = np.pad(
                     infer_outs[0],
                     [1, 1],
-                    'constant',
+                    "constant",
                     constant_values=[1.0, 1.0],
                 )
                 np.testing.assert_allclose(infer_outs[1], gt)
@@ -191,8 +230,8 @@ class TestPaddingValueTensor(UnittestBase):
     def test_pir_static(self):
         with paddle.pir_utils.IrGuard():
             main_prog = paddle.static.Program()
-            starup_prog = paddle.static.Program()
-            with paddle.static.program_guard(main_prog, starup_prog):
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
                 fc = paddle.nn.Linear(4, 10)
                 x = paddle.randn([2, 4])
                 x.stop_gradient = False
@@ -204,15 +243,15 @@ class TestPaddingValueTensor(UnittestBase):
                 sgd.minimize(paddle.mean(out))
 
                 exe = paddle.static.Executor()
-                exe.run(starup_prog)
+                exe.run(startup_prog)
                 res = exe.run(fetch_list=[feat, out])
                 gt = np.pad(
-                    res[0], [1, 1], 'constant', constant_values=[1.0, 1.0]
+                    res[0], [1, 1], "constant", constant_values=[1.0, 1.0]
                 )
                 np.testing.assert_allclose(res[1], gt)
 
     def path_prefix(self):
-        return 'padding_value'
+        return "padding_value"
 
     def var_prefix(self):
         return "Var["
@@ -220,7 +259,7 @@ class TestPaddingValueTensor(UnittestBase):
     def call_func(self, x):
         padding_value = paddle.assign([1.0])
         out = paddle.nn.functional.pad(
-            x, pad=[1, 1, 1, 1], value=padding_value, mode='constant'
+            x, pad=[1, 1, 1, 1], value=padding_value, mode="constant"
         )
         return out
 
@@ -235,15 +274,15 @@ class TestPaddingValueTensor2(TestPaddingValueTensor):
 
 
 class TestPaddingValueTensor3(unittest.TestCase):
-    @test_with_pir_api
+
     def test_static(self):
         with static_guard():
-            np_x = np.random.random((16, 16)).astype('float32')
+            np_x = np.random.random((16, 16)).astype("float32")
             main_prog = paddle.static.Program()
-            starup_prog = paddle.static.Program()
-            with paddle.static.program_guard(main_prog, starup_prog):
-                x = paddle.assign(np_x).astype('float32')
-                pad_value = paddle.assign([0.0]).astype('float64')
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                x = paddle.assign(np_x).astype("float32")
+                pad_value = paddle.assign([0.0]).astype("float64")
                 y = paddle.nn.functional.pad(x, [0, 1, 2, 3], value=pad_value)
                 loss = y.sum()
                 optimize_ops, params_grads = paddle.optimizer.SGD(
@@ -251,7 +290,7 @@ class TestPaddingValueTensor3(unittest.TestCase):
                 ).minimize(loss)
 
             exe = paddle.static.Executor(paddle.CPUPlace())
-            exe.run(starup_prog)
+            exe.run(startup_prog)
             res = exe.run(
                 main_prog, fetch_list=[y] + [g for p, g in params_grads]
             )
@@ -273,13 +312,13 @@ class TestPadBP16Op(OpTest):
         self.python_api = pad_wrapper
         x = np.random.random(self.shape).astype(np.float32)
         self.attrs = {}
-        self.attrs['paddings'] = list(np.array(self.paddings).flatten())
-        self.attrs['pad_value'] = self.pad_value
+        self.attrs["paddings"] = list(np.array(self.paddings).flatten())
+        self.attrs["pad_value"] = self.pad_value
         out = np.pad(
-            x, self.paddings, mode='constant', constant_values=self.pad_value
+            x, self.paddings, mode="constant", constant_values=self.pad_value
         )
-        self.inputs = {'X': convert_float_to_uint16(x)}
-        self.outputs = {'Out': convert_float_to_uint16(out)}
+        self.inputs = {"X": convert_float_to_uint16(x)}
+        self.outputs = {"Out": convert_float_to_uint16(out)}
         self.prim_op_type = "prim"
         self.public_python_api = pad_wrapper
         self.if_enable_cinn()
@@ -300,14 +339,333 @@ class TestPadBP16Op(OpTest):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
             place,
-            ['X'],
-            'Out',
+            ["X"],
+            "Out",
             check_prim=True,
             check_pir=True,
             check_prim_pir=True,
         )
 
 
-if __name__ == '__main__':
+class TestPadOrder2N(unittest.TestCase):
+    def init_case(self):
+        self.shape = [2, 3]
+        self.paddings = [(0, 1), (1, 0)]
+        self.pad_value = 0.5
+
+    def test_order_dygraph(self):
+        self.init_case()
+        place = paddle.CPUPlace()
+        if core.is_compiled_with_cuda():
+            place = paddle.CUDAPlace(0)
+
+        paddle.disable_static(place)
+        x_np = np.random.random(self.shape).astype('float32')
+        paddings_np = self.paddings.copy()
+        x = paddle.to_tensor(x_np)
+        paddings = list(np.array(self.paddings).flatten())
+
+        # pad_from_left_axis
+        out_np = np.pad(
+            x_np, paddings_np, mode="constant", constant_values=self.pad_value
+        )
+        out = paddle.nn.functional.pad(
+            x,
+            paddings,
+            mode='constant',
+            value=self.pad_value,
+            pad_from_left_axis=True,
+        )
+        np.testing.assert_array_equal(out, out_np)
+
+        # pad_from_right_axis:
+        paddings_np.reverse()
+        out_np = np.pad(
+            x_np, paddings_np, mode="constant", constant_values=self.pad_value
+        )
+        out = paddle.nn.functional.pad(
+            x,
+            paddings,
+            mode='constant',
+            value=self.pad_value,
+            pad_from_left_axis=False,
+        )
+        np.testing.assert_array_equal(out, out_np)
+
+        paddle.enable_static()
+
+    def test_order_static(self):
+        self.init_case()
+        place = paddle.CPUPlace()
+        if core.is_compiled_with_cuda():
+            place = paddle.CUDAPlace(0)
+        x_np = np.random.random(self.shape).astype('float32')
+        paddings_np = self.paddings.copy()
+        paddings = list(np.array(self.paddings).flatten())
+
+        with static_guard():
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                x = paddle.static.data(
+                    name="x", shape=self.shape, dtype="float32"
+                )
+                y_pad_from_left_axis = paddle.nn.functional.pad(
+                    x,
+                    paddings,
+                    mode='constant',
+                    value=self.pad_value,
+                    pad_from_left_axis=True,
+                )
+                y_pad_from_right_axis = paddle.nn.functional.pad(
+                    x,
+                    paddings,
+                    mode='constant',
+                    value=self.pad_value,
+                    pad_from_left_axis=False,
+                )
+            exe = paddle.static.Executor(place)
+            exe.run(startup_prog)
+            res = exe.run(
+                main_prog,
+                feed={"x": x_np},
+                fetch_list=[y_pad_from_left_axis, y_pad_from_right_axis],
+            )
+            pd_out_pad_from_left_axis, pd_out_pad_from_right_axis = res
+            out_np_pad_from_left_axis = np.pad(
+                x_np,
+                paddings_np,
+                mode="constant",
+                constant_values=self.pad_value,
+            )
+            paddings_np.reverse()
+            out_np_pad_from_right_axis = np.pad(
+                x_np,
+                paddings_np,
+                mode="constant",
+                constant_values=self.pad_value,
+            )
+            np.testing.assert_array_equal(
+                pd_out_pad_from_left_axis, out_np_pad_from_left_axis
+            )
+            np.testing.assert_array_equal(
+                pd_out_pad_from_right_axis, out_np_pad_from_right_axis
+            )
+
+
+# test padding order for cases when length of padding is not 2(N-2) or 2N
+class TestPadOrder(unittest.TestCase):
+    def init_case(self):
+        self.shape = [2, 3]
+        self.paddings = [(0, 1)]
+        self.pad_value = 0.5
+
+    def test_order_dygraph(self):
+        self.init_case()
+        place = paddle.CPUPlace()
+        if core.is_compiled_with_cuda():
+            place = paddle.CUDAPlace(0)
+
+        paddle.disable_static(place)
+        x_np = np.random.random(self.shape).astype('float32')
+        paddings_np = self.paddings.copy()
+        paddings_np += [(0, 0)] * (len(self.shape) - len(paddings_np))
+
+        x = paddle.to_tensor(x_np)
+        paddings = list(np.array(self.paddings).flatten())
+
+        # pad from last axis by default
+        paddings_np.reverse()
+        out_np = np.pad(
+            x_np, paddings_np, mode="constant", constant_values=self.pad_value
+        )
+        out = paddle.nn.functional.pad(
+            x, paddings, mode='constant', value=self.pad_value
+        )
+        np.testing.assert_array_equal(out, out_np)
+
+    def test_order_static(self):
+        self.init_case()
+        place = paddle.CPUPlace()
+        if core.is_compiled_with_cuda():
+            place = paddle.CUDAPlace(0)
+
+        paddle.disable_static(place)
+        x_np = np.random.random(self.shape).astype('float32')
+        paddings_np = self.paddings.copy()
+        paddings_np += [(0, 0)] * (len(self.shape) - len(paddings_np))
+        paddings = list(np.array(self.paddings).flatten())
+
+        with static_guard():
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                x = paddle.static.data(
+                    name="x", shape=self.shape, dtype="float32"
+                )
+                y = paddle.nn.functional.pad(
+                    x, paddings, mode='constant', value=self.pad_value
+                )
+            exe = paddle.static.Executor(place)
+            exe.run(startup_prog)
+            res = exe.run(main_prog, feed={"x": x_np}, fetch_list=[y])
+            paddings_np.reverse()
+            out_np = np.pad(
+                x_np,
+                paddings_np,
+                mode="constant",
+                constant_values=self.pad_value,
+            )
+            np.testing.assert_array_equal(res[0], out_np)
+
+
+class TestPadOrder2N3D(TestPadOrder2N):
+    def init_case(self):
+        self.shape = [2, 3, 4]
+        self.paddings = [(0, 1), (2, 3), (2, 1)]
+        self.pad_value = 0.5
+
+
+class TestPadOrder2N4D(TestPadOrder2N):
+    def init_case(self):
+        self.shape = [2, 3, 4, 5]
+        self.paddings = [(0, 1), (2, 3), (2, 1), (1, 1)]
+        self.pad_value = 0.5
+
+
+class TestPadOrder2N5D(TestPadOrder2N):
+    def init_case(self):
+        self.shape = [1, 2, 3, 4, 5]
+        self.paddings = [(0, 1), (2, 3), (2, 1), (1, 1), (1, 0)]
+        self.pad_value = 0.5
+
+
+class TestPadOrder1(TestPadOrder):
+    def init_case(self):
+        self.shape = [2, 3, 4]
+        self.paddings = [(0, 1), (2, 3)]
+        self.pad_value = 0.5
+
+
+class TestPadOrder2(TestPadOrder):
+    def init_case(self):
+        self.shape = [2, 3, 4, 5]
+        self.paddings = [(0, 1), (2, 3), (2, 1)]
+        self.pad_value = 0.5
+
+
+class TestPadOrder3(TestPadOrder):
+    def init_case(self):
+        self.shape = [2, 3, 4, 5]
+        self.paddings = [(0, 1)]
+        self.pad_value = 0.5
+
+
+class TestPadOp_ZeroSize(unittest.TestCase):
+    def init_case(self):
+        self.shape = [0, 16]
+        self.paddings = [(0, 1), (2, 3)]
+        self.paddings_empty_tensor = False
+        self.pad_value = 0.5
+
+    def test_dygraph(self):
+        self.init_case()
+        for place in get_places():
+            paddle.disable_static(place)
+            x_np = np.random.random(self.shape).astype('float32')
+            paddings_np = self.paddings.copy()
+            x = paddle.to_tensor(x_np)
+            x.stop_gradient = False
+            paddings = list(np.array(self.paddings).flatten())
+            if self.paddings_empty_tensor:
+                paddings = paddle.to_tensor(paddings)
+                # output the same as x
+                out_np = x_np
+            else:
+                out_np = np.pad(
+                    x_np,
+                    paddings_np,
+                    mode="constant",
+                    constant_values=self.pad_value,
+                )
+            out = paddle.nn.functional.pad(
+                x,
+                paddings,
+                mode='constant',
+                value=self.pad_value,
+                pad_from_left_axis=True,
+            )
+            np.testing.assert_array_equal(out, out_np)
+            out.sum().backward()
+            np.testing.assert_allclose(x.grad.numpy(), np.ones(self.shape))
+
+
+class TestPadOp_ZeroSize2(TestPadOp_ZeroSize):
+    def init_case(self):
+        self.shape = [4, 6, 6]
+        self.paddings = []
+        self.paddings_empty_tensor = True
+        self.pad_value = 0.5
+
+
+class TestPadAliasSupport(unittest.TestCase):
+    def setUp(self):
+        paddle.disable_static()
+        self.shape = (2, 3)
+        self.paddings = [1, 2, 3, 4]
+        self.value = 0.5
+        self.x = np.random.random(self.shape).astype('float32')
+
+    def test_no_param_name(self):
+        out = paddle.nn.functional.pad(
+            paddle.to_tensor(self.x), self.paddings, value=self.value
+        )
+        expected = np.pad(
+            self.x,
+            [(1, 2), (3, 4)],
+            mode='constant',
+            constant_values=self.value,
+        )
+        np.testing.assert_array_equal(out.numpy(), expected)
+
+    def test_x_param_name(self):
+        out = paddle.nn.functional.pad(
+            x=paddle.to_tensor(self.x), pad=self.paddings, value=self.value
+        )
+        expected = np.pad(
+            self.x,
+            [(1, 2), (3, 4)],
+            mode='constant',
+            constant_values=self.value,
+        )
+        np.testing.assert_array_equal(out.numpy(), expected)
+
+    def test_input_param_name(self):
+        out = paddle.nn.functional.pad(
+            input=paddle.to_tensor(self.x), pad=self.paddings, value=self.value
+        )
+        expected = np.pad(
+            self.x,
+            [(1, 2), (3, 4)],
+            mode='constant',
+            constant_values=self.value,
+        )
+        np.testing.assert_array_equal(out.numpy(), expected)
+
+    def test_both_param_name(self):
+        with self.assertRaises(ValueError) as context:
+            paddle.nn.functional.pad(
+                x=paddle.to_tensor(self.x),
+                input=paddle.to_tensor(self.x),
+                pad=self.paddings,
+                value=self.value,
+            )
+        self.assertIn(
+            "Cannot specify both 'x' and its alias 'input'",
+            str(context.exception),
+        )
+
+
+if __name__ == "__main__":
     # paddle.enable_static()
     unittest.main()

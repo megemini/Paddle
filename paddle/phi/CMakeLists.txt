@@ -25,17 +25,22 @@ add_subdirectory(backends)
 add_subdirectory(kernels)
 # phi infermeta
 add_subdirectory(infermeta)
-# phi tools
-add_subdirectory(tools)
 # phi capi
 if(WITH_CUSTOM_DEVICE)
   add_subdirectory(capi)
 endif()
 
+if(WIN32)
+  file(GLOB_RECURSE YAML_FILE "${CMAKE_CURRENT_SOURCE_DIR}/ops/yaml/*.yaml")
+  set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS ${YAML_FILE})
+endif()
+
 set(PHI_DEPS
     phi_profiler_proto
     auto_parallel_proto
-    ${flags_dep}
     glog
     warpctc
     warprnnt
@@ -44,6 +49,18 @@ set(PHI_DEPS
     cblas
     utf8proc
     common)
+if(WITH_CINN)
+  list(APPEND PHI_DEPS ap_phi)
+endif()
+
+list(
+  APPEND
+  PHI_DEPS
+  framework_proto
+  pass_desc_proto
+  data_feed_proto
+  trainer_desc_proto
+  heter_service_proto)
 
 set(INFERENCE_DEPS phi_profiler_proto auto_parallel_proto)
 
@@ -63,12 +80,16 @@ if(WITH_XBYAK)
   list(APPEND PHI_DEPS xbyak)
 endif()
 
-if(WITH_MKLDNN)
-  list(APPEND PHI_DEPS mkldnn)
+if(WITH_ONEDNN)
+  list(APPEND PHI_DEPS onednn)
 endif()
 
 if(WITH_GLOO)
   list(APPEND PHI_DEPS gloo)
+endif()
+
+if(WITH_FLAGCX)
+  list(APPEND PHI_DEPS flagcx)
 endif()
 
 if(WITH_CUDNN_FRONTEND)
@@ -96,7 +117,7 @@ if(WITH_DGC)
   list(APPEND PHI_DEPS dgc)
 endif()
 
-set(PHI_SRCS
+set(PHI_CORE_SRCS
     ${common_srcs}
     ${api_srcs}
     ${core_srcs}
@@ -104,6 +125,8 @@ set(PHI_SRCS
     ${kernels_srcs}
     ${infermeta_srcs}
     ${capi_srcs})
+
+set(PHI_GPU_SRCS ${kernels_gpu_srcs})
 
 if(WITH_SHARED_PHI)
   set(PHI_BUILD_TYPE
@@ -120,8 +143,15 @@ if(WITH_AVX
    AND AVX512F_FLAG
    AND WITH_MKL)
   set_source_files_properties(
+    kernels/fusion/cpu/fused_layer_norm_avx_kernel.cc
+    kernels/fusion/cpu/rms_norm_avx_kernel.cc
+    PROPERTIES
+      COMPILE_FLAGS
+      "${Wno_Maybe_Uninitialized} ${FMA_FLAG} ${AVX512F_FLAG} ${NO_INLINE}")
+  set_source_files_properties(
     kernels/fusion/cpu/self_dp_attention_kernel.cc
-    PROPERTIES COMPILE_FLAGS "-Wno-maybe-uninitialized  -mfma ${AVX512F_FLAG}")
+    PROPERTIES COMPILE_FLAGS
+               "${Wno_Maybe_Uninitialized} ${FMA_FLAG} ${AVX512F_FLAG}")
 endif()
 
 if(WITH_GPU)
@@ -130,31 +160,81 @@ if(WITH_GPU)
     PROPERTIES COMPILE_FLAGS
                "-DCUDA_REAL_ARCHS=\"${NVCC_FLAGS_EXTRA_real_archs}\"")
   nv_library(
-    phi ${PHI_BUILD_TYPE}
-    SRCS ${PHI_SRCS}
+    phi_core ${PHI_BUILD_TYPE}
+    SRCS ${PHI_CORE_SRCS}
     DEPS ${PHI_DEPS})
+  nv_library(
+    phi_gpu ${PHI_BUILD_TYPE}
+    SRCS ${PHI_GPU_SRCS}
+    DEPS ${PHI_DEPS} phi_core)
 elseif(WITH_ROCM)
-  hip_add_library(phi ${PHI_BUILD_TYPE} ${PHI_SRCS})
-  target_link_libraries(phi ${PHI_DEPS})
+  hip_library(
+    phi_core ${PHI_BUILD_TYPE}
+    SRCS ${PHI_CORE_SRCS}
+    DEPS ${PHI_DEPS})
+  hip_library(
+    phi_gpu ${PHI_BUILD_TYPE}
+    SRCS ${PHI_GPU_SRCS}
+    DEPS ${PHI_DEPS} phi_core)
 elseif(WITH_XPU_KP)
   xpu_library(
-    phi ${PHI_BUILD_TYPE}
-    SRCS ${PHI_SRCS}
+    phi_core ${PHI_BUILD_TYPE}
+    SRCS ${PHI_CORE_SRCS}
     DEPS ${PHI_DEPS})
 else()
   cc_library(
-    phi ${PHI_BUILD_TYPE}
-    SRCS ${PHI_SRCS}
+    phi_core ${PHI_BUILD_TYPE}
+    SRCS ${PHI_CORE_SRCS}
     DEPS ${PHI_DEPS})
 endif()
 
+set(NVTX3_PATH "${CUDA_INCLUDE_DIRS}/../targets/x86_64-linux/include/nvtx3/")
+get_filename_component(NVTX3_PATH "${NVTX3_PATH}" ABSOLUTE)
+
+if(EXISTS "${NVTX3_PATH}")
+  target_include_directories(phi_core PUBLIC "${NVTX3_PATH}")
+endif()
+
+# core/memory/allocation uses shm_unlink and requires the rt library
+if(UNIX AND NOT APPLE)
+  target_link_libraries(phi_core rt)
+endif()
+
+set(PHI_DUMMY_FILE ${CMAKE_CURRENT_BINARY_DIR}/phi_dummy.cpp)
+if(MSVC)
+  set(PHI_DUMMY_FILE_CONTENT
+      "__declspec(dllexport) int phi_dummy_placeholder_function(){ return 0\\; }"
+  )
+else()
+  set(PHI_DUMMY_FILE_CONTENT "")
+endif()
+file(WRITE ${PHI_DUMMY_FILE} ${PHI_DUMMY_FILE_CONTENT})
+
+add_library(phi ${PHI_BUILD_TYPE} ${PHI_DUMMY_FILE})
+target_link_libraries(phi phi_core)
+if(WITH_GPU OR WITH_ROCM)
+  target_link_libraries(phi phi_gpu)
+  target_link_libraries(phi_gpu ${ROCM_HIPRTC_LIB})
+  target_link_libraries(phi_core ${ROCM_HIPRTC_LIB})
+endif()
+
+# Note(silverling): some functions in phi_core depend on phi_gpu,
+# when phi is built to dynamic library, it's fine. But when phi
+# is built to static library, phi_gpu should be linked to phi_core.
+# By the way, cyclic dependency is allowed in static library.
+if((WITH_GPU OR WITH_ROCM) AND NOT WITH_SHARED_PHI)
+  target_link_libraries(phi_core phi_gpu)
+endif()
+
+target_compile_definitions(phi_core PUBLIC PHI_INNER)
+
 if(WIN32)
-  target_link_libraries(phi shlwapi.lib)
+  target_link_libraries(phi_core shlwapi.lib)
 endif()
 
 if(WIN32)
   if(WITH_SHARED_PHI)
-    set_property(TARGET phi PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    set_property(TARGET phi_core PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
     set(PHI_NAME
         phi.dll
         CACHE INTERNAL "" FORCE)
@@ -187,15 +267,32 @@ endif()
 
 set(PHI_LIB
     "${CMAKE_CURRENT_BINARY_DIR}/${PHI_NAME}"
-    CACHE FILEPATH "PHI Library" FORCE)
+    CACHE FILEPATH "PHI Dummy Library" FORCE)
+
+string(REPLACE "phi" "phi_core" PHI_CORE_NAME ${PHI_NAME})
+set(PHI_CORE_NAME
+    ${PHI_CORE_NAME}
+    CACHE INTERNAL "" FORCE)
+set(PHI_CORE_LIB
+    "${CMAKE_CURRENT_BINARY_DIR}/${PHI_CORE_NAME}"
+    CACHE FILEPATH "PHI CPU Library" FORCE)
+
+if(WITH_GPU OR WITH_ROCM)
+  string(REPLACE "phi" "phi_gpu" PHI_GPU_NAME ${PHI_NAME})
+  set(PHI_GPU_NAME
+      ${PHI_GPU_NAME}
+      CACHE INTERNAL "" FORCE)
+  set(PHI_GPU_LIB
+      "${CMAKE_CURRENT_BINARY_DIR}/${PHI_GPU_NAME}"
+      CACHE FILEPATH "PHI GPU Library" FORCE)
+endif()
 
 if(MKL_FOUND AND WITH_ONEMKL)
-  target_include_directories(phi PRIVATE ${MKL_INCLUDE})
+  target_include_directories(phi_core PRIVATE ${MKL_INCLUDE})
 endif()
 
 add_dependencies(phi extern_lapack)
 if(WITH_CUTLASS)
-  add_dependencies(phi cutlass_codegen)
   add_definitions("-DPADDLE_WITH_MEMORY_EFFICIENT_ATTENTION"
   )# for memory_efficient_attention.h
 endif()

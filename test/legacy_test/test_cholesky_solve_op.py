@@ -1,4 +1,4 @@
-#   Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
+#   Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -69,9 +69,7 @@ def broadcast_shape(matA, matB):
             Broadshape.append(max(shapeA[idx], shapeB[idx]))
         else:
             raise Exception(
-                'shapeA and shapeB should be broadcasted, but got {} and {}'.format(
-                    shapeA, shapeB
-                )
+                f'shapeA and shapeB should be broadcasted, but got {shapeA} and {shapeB}'
             )
     bsA = Broadshape + list(shapeA[-2:])
     bsB = Broadshape + list(shapeB[-2:])
@@ -143,7 +141,7 @@ class TestCholeskySolveOp(OpTest):
 
     # check Op grad
     def test_check_grad_normal(self):
-        self.check_grad(['Y'], 'Out', max_relative_error=0.01)
+        self.check_grad(['Y'], 'Out', max_relative_error=0.01, check_pir=True)
 
 
 # test condition:  3D(broadcast) + 3D, upper=True
@@ -171,7 +169,9 @@ class TestCholeskySolveAPI(unittest.TestCase):
 
     def check_static_result(self, place):
         paddle.enable_static()
-        with base.program_guard(base.Program(), base.Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             x = paddle.static.data(name="x", shape=[10, 2], dtype=self.dtype)
             y = paddle.static.data(name="y", shape=[10, 10], dtype=self.dtype)
             z = paddle.linalg.cholesky_solve(x, y, upper=self.upper)
@@ -187,7 +187,6 @@ class TestCholeskySolveAPI(unittest.TestCase):
 
             exe = base.Executor(place)
             fetches = exe.run(
-                base.default_main_program(),
                 feed={"x": x_np, "y": umat},
                 fetch_list=[z],
             )
@@ -239,7 +238,7 @@ class TestCholeskySolveAPI(unittest.TestCase):
 
 # test condition out of bounds
 class TestCholeskySolveOpError(unittest.TestCase):
-    def test_errors(self):
+    def test_errors_1(self):
         paddle.enable_static()
         with program_guard(Program(), Program()):
             # The input type of solve_op must be Variable.
@@ -251,6 +250,9 @@ class TestCholeskySolveOpError(unittest.TestCase):
             )
             self.assertRaises(TypeError, paddle.linalg.cholesky_solve, x1, y1)
 
+    def test_errors_2(self):
+        paddle.enable_static()
+        with program_guard(Program(), Program()):
             # The data type of input must be float32 or float64.
             x2 = paddle.static.data(name="x2", shape=[30, 30], dtype="bool")
             y2 = paddle.static.data(name="y2", shape=[30, 10], dtype="bool")
@@ -278,6 +280,64 @@ class TestCholeskySolveOpError(unittest.TestCase):
             x7 = paddle.static.data(name="x7", shape=[2, 3, 4], dtype="float64")
             y7 = paddle.static.data(name="y7", shape=[2, 4, 3], dtype="float64")
             self.assertRaises(ValueError, paddle.linalg.cholesky_solve, x7, y7)
+
+
+# API function test
+class TestCholeskySolveAPIZeroSize(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(2025)
+        self.place = [paddle.CPUPlace()]
+        self.dtype = "float64"
+        self.upper = True
+        if core.is_compiled_with_cuda():
+            self.place.append(paddle.CUDAPlace(0))
+        self.init_shape()
+
+    def init_shape(self):
+        self.x_shape = [10, 0]
+        self.y_shape = [10, 10]
+        self.expected_shape = [10, 0]
+        # test in dynamic mode
+
+    def test_dygraph(self):
+        def run(place):
+            paddle.disable_static(place)
+            x_np = np.random.random(self.x_shape).astype(self.dtype)
+            y_np = np.random.random(self.y_shape).astype(self.dtype)
+
+            x = paddle.to_tensor(x_np, stop_gradient=False)
+            y = paddle.to_tensor(y_np, stop_gradient=False)
+            z = paddle.linalg.cholesky_solve(x, y, upper=self.upper)
+            loss = paddle.sum(z)
+            loss.backward()
+
+            self.assertEqual(z.shape, self.expected_shape)
+            self.assertEqual(x.shape, x.grad.shape)
+            self.assertEqual(y.shape, y.grad.shape)
+
+        for idx, place in enumerate(self.place):
+            run(place)
+
+
+class TestCholeskySolveAPIZeroSize1(TestCholeskySolveAPIZeroSize):
+    def init_shape(self):
+        self.x_shape = [0, 6]
+        self.y_shape = [0, 0]
+        self.expected_shape = [0, 6]
+
+
+class TestCholeskySolveAPIZeroSize2(TestCholeskySolveAPIZeroSize):
+    def init_shape(self):
+        self.x_shape = [1, 10, 6]
+        self.y_shape = [0, 10, 10]
+        self.expected_shape = [0, 10, 6]
+
+
+class TestCholeskySolveAPIZeroSize3(TestCholeskySolveAPIZeroSize):
+    def init_shape(self):
+        self.x_shape = [0, 0, 0]
+        self.y_shape = [0, 0, 0]
+        self.expected_shape = [0, 0, 0]
 
 
 if __name__ == "__main__":

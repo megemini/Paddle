@@ -24,8 +24,8 @@ limitations under the License. */
 #include <unordered_map>
 #include <unordered_set>
 
-#define GLOG_NO_ABBREVIATED_SEVERITIES  // msvc conflict logging with windows.h
-#include "glog/logging.h"               // For VLOG()
+#include "glog/logging.h"  // For VLOG()
+#include "paddle/common/flags.h"
 #include "paddle/common/macros.h"
 #include "paddle/fluid/framework/attribute.h"
 #include "paddle/fluid/framework/details/op_registry.h"
@@ -34,7 +34,6 @@ limitations under the License. */
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/shape_inference.h"
-#include "paddle/phi/core/flags.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/utils/test_macros.h"
 
@@ -61,8 +60,8 @@ class OpVersionMap_OpVersionPair;
 class ProgramDesc;
 class VarDesc;
 class VarType;
-class VarType_LoDTensorArrayDesc;
-class VarType_LoDTensorDesc;
+class VarType_DenseTensorArrayDesc;
+class VarType_DenseTensorDesc;
 class VarType_ReaderDesc;
 class VarType_TensorDesc;
 class VarType_Tuple;
@@ -71,7 +70,7 @@ class Version;
 }  // namespace framework
 }  // namespace paddle
 
-PHI_DECLARE_bool(check_kernel_launch);
+COMMON_DECLARE_bool(check_kernel_launch);
 
 namespace paddle {
 namespace framework {
@@ -95,7 +94,7 @@ struct OperatorRegistrar : public Registrar {
     PADDLE_ENFORCE_EQ(
         OpInfoMap::Instance().Has(op_type),
         false,
-        platform::errors::AlreadyExists(
+        common::errors::AlreadyExists(
             "Operator '%s' is registered more than once.", op_type));
     static_assert(sizeof...(ARGS) != 0,
                   "OperatorRegistrar should be invoked at least by OpClass");
@@ -153,8 +152,7 @@ inline void CheckKernelLaunch(const char* op_type UNUSED) {}
 
 #ifdef PADDLE_WITH_CUDA
 template <>
-inline void CheckKernelLaunch<::paddle::platform::CUDAPlace>(
-    const char* op_type) {
+inline void CheckKernelLaunch<::phi::GPUPlace>(const char* op_type) {
   if (FLAGS_check_kernel_launch) {
     PADDLE_ENFORCE_CUDA_LAUNCH_SUCCESS(op_type);
   }
@@ -172,12 +170,12 @@ inline void RegisterKernelClass(const char* op_type,
   std::string library(library_type);
   std::string data_layout = "ANYLAYOUT";
   if (library == "MKLDNN") {
-    data_layout = "MKLDNNLAYOUT";
+    data_layout = "ONEDNNLAYOUT";
   }
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-  if (std::is_same<PlaceType, platform::CustomPlace>::value) {
+  if (std::is_same<PlaceType, phi::CustomPlace>::value) {
     OpKernelType key(ToDataType(std::type_index(typeid(T))),
-                     platform::CustomPlace(library_type),
+                     phi::CustomPlace(library_type),
                      common::StringToDataLayout(data_layout),
                      LibraryType::kPlain,
                      customized_type_value);
@@ -361,19 +359,19 @@ struct OpKernelRegistrarFunctorEx<PlaceType,
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #define REGISTER_OP_CUDA_KERNEL(op_type, ...) \
-  REGISTER_OP_KERNEL(op_type, CUDA, ::paddle::platform::CUDAPlace, __VA_ARGS__)
+  REGISTER_OP_KERNEL(op_type, CUDA, ::phi::GPUPlace, __VA_ARGS__)
 #else
 #define REGISTER_OP_CUDA_KERNEL(op_type, ...)
 #endif
 
 #define REGISTER_OP_CPU_KERNEL(op_type, ...) \
-  REGISTER_OP_KERNEL(op_type, CPU, ::paddle::platform::CPUPlace, __VA_ARGS__)
+  REGISTER_OP_KERNEL(op_type, CPU, ::phi::CPUPlace, __VA_ARGS__)
 
 #define REGISTER_OP_IPU_KERNEL(op_type, ...) \
-  REGISTER_OP_KERNEL(op_type, IPU, ::paddle::platform::IPUPlace, __VA_ARGS__)
+  REGISTER_OP_KERNEL(op_type, IPU, ::phi::IPUPlace, __VA_ARGS__)
 
 #define REGISTER_OP_XPU_KERNEL(op_type, ...) \
-  REGISTER_OP_KERNEL(op_type, XPU, ::paddle::platform::XPUPlace, __VA_ARGS__)
+  REGISTER_OP_KERNEL(op_type, XPU, ::phi::XPUPlace, __VA_ARGS__)
 
 #define REGISTER_OP_KERNEL_EX(op_type, library_type, place_class,  \
                               customized_name,                     \
@@ -395,25 +393,25 @@ struct OpKernelRegistrarFunctorEx<PlaceType,
 
 #define REGISTER_OP_CUDA_KERNEL_FUNCTOR(op_type, ...)                 \
   REGISTER_OP_KERNEL_EX(                                              \
-      op_type, CUDA, ::paddle::platform::CUDAPlace, DEFAULT_TYPE,     \
+      op_type, CUDA, ::phi::GPUPlace, DEFAULT_TYPE,     \
       ::paddle::framework::OpKernelType::kDefaultCustomizedTypeValue, \
       __VA_ARGS__)
 
 #define REGISTER_OP_CPU_KERNEL_FUNCTOR(op_type, ...)                  \
   REGISTER_OP_KERNEL_EX(                                              \
-      op_type, CPU, ::paddle::platform::CPUPlace, DEFAULT_TYPE,       \
+      op_type, CPU, ::phi::CPUPlace, DEFAULT_TYPE,       \
       ::paddle::framework::OpKernelType::kDefaultCustomizedTypeValue, \
       __VA_ARGS__)
 
 #define REGISTER_OP_XPU_KERNEL_FUNCTOR(op_type, ...)                  \
   REGISTER_OP_KERNEL_EX(                                              \
-      op_type, XPU, ::paddle::platform::XPUPlace, DEFAULT_TYPE,       \
+      op_type, XPU, ::phi::XPUPlace, DEFAULT_TYPE,       \
       ::paddle::framework::OpKernelType::kDefaultCustomizedTypeValue, \
       __VA_ARGS__)
 
 #define REGISTER_OP_IPU_KERNEL_FUNCTOR(op_type, ...)                  \
   REGISTER_OP_KERNEL_EX(                                              \
-      op_type, IPU, ::paddle::platform::IPUPlace, DEFAULT_TYPE,       \
+      op_type, IPU, ::phi::IPUPlace, DEFAULT_TYPE,       \
       ::paddle::framework::OpKernelType::kDefaultCustomizedTypeValue, \
       __VA_ARGS__)
 

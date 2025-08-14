@@ -23,6 +23,7 @@ from op_test import (
     convert_float_to_uint16,
     convert_uint16_to_float,
 )
+from utils import compare_legacy_with_pt
 
 import paddle
 from paddle import base
@@ -37,7 +38,7 @@ class TestSGDOpBF16(OpTest):
     def setUp(self):
         self.op_type = 'sgd'
         self.dtype = np.uint16
-        self.use_mkldnn = True
+        self.use_onednn = True
         self.conf()
         w = np.random.random((self.h, self.w)).astype('float32')
         w_bf16 = convert_float_to_uint16(w)
@@ -48,14 +49,16 @@ class TestSGDOpBF16(OpTest):
 
         self.inputs = {'Param': w_bf16, 'Grad': g_bf16, 'LearningRate': lr_bf16}
         self.outputs = {'ParamOut': w - lr * g}
-        self.attrs = {'use_mkldnn': self.use_mkldnn}
+        self.attrs = {'use_onednn': self.use_onednn}
 
     def conf(self):
         self.h = 102
         self.w = 105
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace(), check_dygraph=False)
+        self.check_output_with_place(
+            core.CPUPlace(), check_dygraph=False, check_pir_onednn=True
+        )
 
 
 @unittest.skipIf(
@@ -154,7 +157,7 @@ class TestSparseGradSGDOpBF16(TestSparseSGDOpBF16):
             Grad='Grad',
             ParamOut='Param',
             LearningRate='LearningRate',
-            use_mkldnn=True,
+            use_onednn=True,
         )
         sgd_op.run(scope, place)
 
@@ -212,7 +215,7 @@ class TestSparseGradParamSGDOpBF16(TestSparseSGDOpBF16):
             Grad='Grad',
             ParamOut='Param',
             LearningRate='LearningRate',
-            use_mkldnn=True,
+            use_onednn=True,
         )
         sgd_op.run(scope, place)
 
@@ -236,7 +239,7 @@ class TestSGDOpBF16API(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         np.random.seed(12345)
-        base.set_flags({'FLAGS_use_mkldnn': True})
+        base.set_flags({'FLAGS_use_onednn': True})
 
     def setUp(self):
         self.sample_count = 20
@@ -283,7 +286,7 @@ class TestSGDOpBF16API(unittest.TestCase):
         out_dtype = np.uint16 if bf16 else np.float32
         lookup_table_grad = np.zeros(self.w_shape, dtype=out_dtype)
 
-        # indexes may dupplicate
+        # indexes may duplicate
         if bf16:
             for i, idx in enumerate(data):
                 idxv = idx[0]
@@ -330,27 +333,32 @@ class TestSGDOpBF16API(unittest.TestCase):
             data = np.random.randint(0, 9, self.ids_shape).astype("int64")
             yield data, label
 
+    @compare_legacy_with_pt
     def test_sgd(self):
         place = base.CPUPlace()
         main = base.Program()
         with base.program_guard(main):
             ids_shape = list(self.ids_shape)
             x = paddle.static.data(
-                name='X', shape=[-1] + ids_shape, dtype='int64'
+                name='X', shape=[-1, *ids_shape], dtype='int64'
             )
             y_shape = list(self.y_shape)
             label = paddle.static.data(
-                name='Y', shape=[-1] + y_shape, dtype='uint16'
+                name='Y', shape=[-1, *y_shape], dtype='uint16'
             )
-            emb = paddle.static.nn.embedding(
-                input=x,
-                size=self.w_shape,
-                param_attr=base.ParamAttr(
+            pre_dtype = paddle.get_default_dtype()
+            paddle.set_default_dtype("uint16")
+            emb = paddle.nn.Embedding(
+                num_embeddings=self.w_shape[0],
+                embedding_dim=self.w_shape[1],
+                sparse=False,
+                weight_attr=base.ParamAttr(
                     name="emb_weight", initializer=self.initializer
                 ),
-                is_sparse=False,
-                dtype="uint16",
+            )(
+                x
             )  # bfloat16
+            paddle.set_default_dtype(pre_dtype)
             cost = paddle.add(emb, label)
             avg_cost = paddle.mean(cost)
 

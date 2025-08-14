@@ -23,8 +23,11 @@ from paddle.autograd.py_layer import PyLayerMeta
 from paddle.base.data_feeder import convert_dtype
 from paddle.base.dygraph.base import _convert_into_variable, in_to_static_mode
 from paddle.base.framework import Variable, core, default_main_program
+from paddle.framework import use_pir_api
+from paddle.jit.utils import OrderedSet
 from paddle.pir import Value
 from paddle.static.amp.fp16_utils import AmpOptions
+from paddle.utils import is_sequence, map_structure
 
 from .py_layer import StaticPyLayer
 from .utils import (
@@ -32,10 +35,33 @@ from .utils import (
     Dygraph2StaticException,
     GetterSetterHelper,
     UndefinedVar,
+    create_undefined_variable,
 )
-from .variable_trans_func import to_static_variable
 
 __all__ = []
+
+
+def to_static_variable(x, dtype=None):
+    '''
+    Translate a Python Tensor to PaddlePaddle static graph Tensor
+    '''
+    if isinstance(x, bool):
+        dtype = 'bool' if dtype is None else dtype
+        return paddle.full(shape=[], dtype=dtype, fill_value=x)
+    if isinstance(x, float):
+        dtype = 'float64' if dtype is None else dtype
+        return paddle.full(shape=[], dtype=dtype, fill_value=x)
+    if isinstance(x, int):
+        dtype = 'int64' if dtype is None else dtype
+        return paddle.full(shape=[], dtype=dtype, fill_value=x)
+    if not use_pir_api() and (isinstance(x, UndefinedVar) or x is None):
+        """
+        for early return case, we need a variable to represent None, current we use data_layer_not_check.
+        """
+        return create_undefined_variable()
+    if is_sequence(x):
+        return map_structure(to_static_variable, x)
+    return x
 
 
 def convert_attr(x, attr):
@@ -43,13 +69,21 @@ def convert_attr(x, attr):
     # Value and Tensor are unified. So we don't need to transform
     # the size attr into a method call. The AttributeJstTransformer and
     # convert_attr can be safely removed.
-    if isinstance(x, Variable) and attr == "size":
+    if (
+        isinstance(x, Variable)
+        and not isinstance(x, paddle.Tensor)
+        and attr == "size"
+    ):
         return x.size()
     else:
         return getattr(x, attr)
 
 
 def convert_load(x):
+    # convert dygraph `PyLayer` into StaticPyLayer
+    if isinstance(x, PyLayerMeta):
+        return StaticPyLayer(x)
+
     if in_to_static_mode():
         if isinstance(x, paddle.Tensor):
             """
@@ -57,19 +91,16 @@ def convert_load(x):
             """
             return _convert_into_variable(x)
 
-        # convert dygraph `PyLayer` into StaticPyLayer
-        if isinstance(x, PyLayerMeta):
-            return StaticPyLayer(x)
-
         # get the new output of the var
         if isinstance(x, Value):
-            cur_block = default_main_program().current_block()
 
             from paddle.jit.pir_dy2static.parameter_recorder import (
                 _global_inplace_map,
             )
 
-            new_var = _global_inplace_map.get(cur_block.program, x)
+            new_var = _global_inplace_map.get(
+                paddle.static.default_main_program(), x
+            )
             if new_var is not None:
                 return new_var
 
@@ -86,7 +117,7 @@ def convert_load(x):
             if new_var is not None:
                 return new_var
 
-        if x is paddle.amp.auto_cast:
+        if x is paddle.amp.auto_cast and not use_pir_api():
             return convert_auto_cast
 
     return x
@@ -162,14 +193,19 @@ def convert_while_loop(
         _run_py_while(cond, body, getter, setter)
 
 
-def _convert_tensor_arrray_if_necessary(setterhelper, push_pop_names):
+def _convert_tensor_array_if_necessary(setterhelper, push_pop_names):
     push_pop_vars = setterhelper.get(push_pop_names)
     if push_pop_vars is None:
         return
 
     def maybe_to_tensor_array(v):
         if isinstance(v, list):
-            return paddle.tensor.create_array("float32", initialized_list=v)
+            dtype = (
+                paddle.base.libpaddle.DataType.UNDEFINED
+                if use_pir_api()
+                else "float32"
+            )
+            return paddle.tensor.create_array(dtype, initialized_list=v)
         else:
             return v
 
@@ -183,11 +219,11 @@ def _run_paddle_while(
 ):
     # NOTE: loop_vars of Paddle op `control_flow.while_loop` must be Paddle Tensors.
     helper = GetterSetterHelper(getter, setter, return_name_ids, push_pop_names)
-    _convert_tensor_arrray_if_necessary(helper, push_pop_names)
+    _convert_tensor_array_if_necessary(helper, push_pop_names)
 
-    union_name = (set(return_name_ids) if return_name_ids else set()) | (
-        set(push_pop_names) if push_pop_names else set()
-    )
+    union_name = (
+        OrderedSet(return_name_ids) if return_name_ids else OrderedSet()
+    ) | (OrderedSet(push_pop_names) if push_pop_names else OrderedSet())
     union_name = list(union_name)
 
     def new_body_fn(*args):
@@ -411,20 +447,24 @@ def _run_paddle_cond(
     helper = GetterSetterHelper(
         get_args, set_args, return_name_ids, push_pop_names
     )
-    _convert_tensor_arrray_if_necessary(helper, push_pop_names)
+    _convert_tensor_array_if_necessary(helper, push_pop_names)
     pred = cast_bool_if_necessary(pred)
     init_args = helper.get(return_name_ids)
     from paddle.jit.dy2static.program_translator import ProgramTranslator
+    from paddle.jit.pir_dy2static.parameter_recorder import _global_inplace_map
 
-    inplace_map = ProgramTranslator.get_instance()._inplace_map
+    if use_pir_api():
+        inplace_map = _global_inplace_map
+    else:
+        inplace_map = ProgramTranslator.get_instance()._inplace_map
     union_name = None
     # TODO(@xiongkun) lambda can have push_pop_names, which will cause error.
     if return_name_ids is None and push_pop_names is None:
         union_name = None
     else:
-        union_name = (set(return_name_ids) if return_name_ids else set()) | (
-            set(push_pop_names) if push_pop_names else set()
-        )
+        union_name = (
+            OrderedSet(return_name_ids) if return_name_ids else OrderedSet()
+        ) | (OrderedSet(push_pop_names) if push_pop_names else OrderedSet())
         union_name = list(union_name)
 
     def new_true_fn():
@@ -466,11 +506,11 @@ def _run_paddle_cond(
             "Unsupported return type of true_fn and false_fn in cond", str(e)
         ):
             raise Dygraph2StaticException(
-                f"Your if/else have different return type. TODO: add link to modifty. {str(e)}"
+                f"Your if/else have different return type. TODO: add link to modify. {e}"
             )
         if re.search("Incompatible return values of", str(e)):
             raise Dygraph2StaticException(
-                f"Your if/else have different number of return value. TODO: add link to modifty. {str(e)}"
+                f"Your if/else have different number of return value. TODO: add link to modify. {e}"
             )
         raise e
     get_args = lambda: helper.get(union_name)
@@ -499,11 +539,11 @@ def _remove_no_value_return_var(out):
                 ):
                     # return None
                     if index == 0:
-                        processed_out = (None,) + out[1:]
+                        processed_out = (None, *out[1:])
                     elif index == 1:
                         processed_out = align_ret[:1] + out[1:]
                     else:
-                        processed_out = (align_ret[:index],) + out[1:]
+                        processed_out = (align_ret[:index], *out[1:])
                     break
 
         for index, item in enumerate(processed_out):
@@ -531,9 +571,7 @@ def _check_no_undefined_var(outs, names, branch_name):
     for var, name in zip(list(outs), names):
         if isinstance(var, UndefinedVar):
             raise ValueError(
-                "Required '{}' must be initialized both in if-else branch, but found it not initialized in '{}'.".format(
-                    name, branch_name
-                )
+                f"Required '{name}' must be initialized both in if-else branch, but found it not initialized in '{branch_name}'."
             )
 
 
@@ -577,21 +615,23 @@ def convert_len(var):
     if isinstance(var, Variable):
         assert var.ndim > 0, "len() of a 0-D tensor is wrong"
         if var.type in [
-            core.VarDesc.VarType.LOD_TENSOR,
+            core.VarDesc.VarType.DENSE_TENSOR,
             core.VarDesc.VarType.SELECTED_ROWS,
         ]:
             # Note: Length of var may be known ahead of time in dygraph,
             # but it probably represents batch size which can be variant.
             # so we return a variable dynamically inferred from var.shape.
-            if var.shape[0] > 0 and var.type == core.VarDesc.VarType.LOD_TENSOR:
+            if (
+                var.shape[0] > 0
+                and var.type == core.VarDesc.VarType.DENSE_TENSOR
+            ):
                 return var.shape[0]
             return paddle.shape(var)[0]
-        elif var.type == core.VarDesc.VarType.LOD_TENSOR_ARRAY:
+        elif var.type == core.VarDesc.VarType.DENSE_TENSOR_ARRAY:
             return paddle.tensor.array_length(var)
         else:
             raise TypeError(
-                'len(var) only supports LoDTensor/LoDTensorArray/SelectedRows, but received %s.'
-                % type(var)
+                f'len(var) only supports DenseTensor/DenseTensorArray/SelectedRows, but received {type(var)}.'
             )
     elif isinstance(var, Value):
         if var.is_dense_tensor_type() or var.is_selected_row_type():
@@ -620,16 +660,22 @@ def convert_zip(*args):
         if isinstance(arg, (Variable, Value)) and arg.shape[0] == -1:
             raise RuntimeError(
                 "Not support zip(tensor, ...) when tensor.shape[0] == -1, "
-                f"but found args[{str(i)}].shape[0] == -1 in 'zip'"
+                f"but found args[{i}].shape[0] == -1 in 'zip'"
             )
     return zip(*args)
+
+
+def convert_super(super_fn):
+    if super_fn is super:
+        return super_fn
+    return lambda cls, instance: super_fn()
 
 
 # TODO(xiongkun): delete when list<variable> is ready.
 class VariableTuple:
     """
     this class will cause enumerate can't be wrapped by other iterator change function.
-    this will be fixed when list<Variable> is producted.
+    this will be fixed when list<Variable> is produced.
     VariableTuple can only deal with variables which is fixed.
     """
 
@@ -637,7 +683,7 @@ class VariableTuple:
         self.var = var
         self.len = convert_len(var)
         if isinstance(self.len, (Variable, Value)):
-            self.rag = paddle.arange(start, start + self.len, 1, paddle.int64)
+            self.rag = paddle.arange(start, start + self.len, 1, "int64")
         else:
             self.rag = range(start, start + self.len)
 
@@ -679,7 +725,7 @@ def convert_shape(x):
     #  (1) if x.shape contains -1, such as [2, -1, 64], returns [2, var, 64],
     #      where var = paddle.shape(x)[1]
 
-    #  (2) if x.shape does not contains -1, return lsit(x.shape) directly
+    #  (2) if x.shape does not contains -1, return list(x.shape) directly
 
     if isinstance(x, (Variable, Value)):
         values = list(x.shape)
@@ -711,22 +757,28 @@ def convert_var_dtype(var, dtype):
             'int32',
             'int64',
             'uint8',
-        ], "The dtype of var {} is {}, which is not supported in the cast op.".format(
-            var.name, src_dtype
-        )
+        ], f"The dtype of var {var.name} is {src_dtype}, which is not supported in the cast op."
         assert dtype in [
             'bool',
             'int',
             'float',
+            'complex',
         ], f"The casted target dtype is {dtype}, which is not supported in type casting."
         cast_map = {
             'bool': 'bool',
             'int': 'int32',
             'float': 'float32',
+            'complex': 'complex64',
         }
         return paddle.cast(var, dtype=cast_map[dtype])
     else:
-        return eval(f'{dtype}(var)')
+        assert dtype in [
+            'bool',
+            'int',
+            'float',
+            'complex',
+        ], f"The casted target dtype is {dtype}, which is not supported in type casting."
+        return eval(dtype)(var)
 
 
 def convert_assert(cond, message=""):
@@ -752,28 +804,6 @@ def convert_print(*objects, sep=' ', end='\n', file=None, flush=False):
         if isinstance(obj, (Variable, Value)):
             paddle.static.Print(obj)
     print(*objects, sep=sep, end=end, file=file, flush=flush)
-
-
-def convert_pop(target, *args):
-    """
-    A function representation of a Python pop statement for a list or dict.
-
-    Args:
-        target(list|dict|Tensor): A variable to pop item from.
-        *args(tuple): index or default value to parse.
-
-    Returns:
-        A item poped from target.
-    """
-
-    is_variable = isinstance(target, (Variable, Value))
-    if is_variable:
-        is_tensor_array = target.type == core.VarDesc.VarType.LOD_TENSOR_ARRAY
-
-    if is_variable and is_tensor_array:
-        return _run_paddle_pop(target, *args)
-    else:
-        return _run_python_pop(target, *args)
 
 
 @contextmanager
@@ -809,71 +839,11 @@ def convert_auto_cast(
     )
 
 
-def _run_paddle_pop(array, *args):
-    if len(args) == 0:
-        idx = -1
+def create_bool_as_type(x, value=True):
+    '''
+    Create a bool variable, which type is the same as x.
+    '''
+    if isinstance(x, (Variable, Value)):
+        return paddle.full(shape=[], fill_value=value, dtype="bool")
     else:
-        idx = args[0]
-
-    assert isinstance(idx, int)
-
-    def cond(i, new_array):
-        return paddle.less_than(i, arr_len)
-
-    def body(i, new_array):
-        item = paddle.tensor.array_read(array=array, i=i)
-        paddle.tensor.array_write(
-            item, paddle.tensor.array_length(new_array), new_array
-        )
-
-        i = paddle.increment(i)
-        return i, new_array
-
-    arr_len = paddle.tensor.array_length(array)
-    if idx < 0:
-        idx = idx + arr_len
-    else:
-        from paddle.tensor import fill_constant
-
-        idx = fill_constant(shape=[1], dtype="int64", value=idx)
-
-    pop_item = paddle.tensor.array_read(array, idx)
-
-    tmp = paddle.assign(array)
-    new_array = _slice_tensor_array(tmp, 0, idx)
-    i = idx + 1
-    from paddle.static.nn import while_loop
-
-    _, new_array = while_loop(cond, body, [i, new_array])
-    paddle.assign(new_array, output=array)
-
-    return pop_item
-
-
-# TODO(liym27): A better way to slice tensor array.
-#  Maybe support start == end for slice op.
-def _slice_tensor_array(array, start, end):
-    def true_fn():
-        null_array = paddle.tensor.create_array("float32")
-        return null_array
-
-    def false_fn(array, start, end):
-        new_array = paddle.slice(array, starts=[start], ends=[end], axes=[0])
-        return new_array
-
-    new_array = paddle.static.nn.cond(
-        start == end, true_fn, lambda: false_fn(array, start, end)
-    )
-    return new_array
-
-
-def _run_python_pop(target, *args):
-    # 1. pop for a dict
-    if len(args) == 2:
-        idx, default = args
-        return target.pop(idx, default)
-
-    # 2. pop for a list or dict
-    else:
-        idx = args[0] if args else -1
-        return target.pop(idx)
+        return value

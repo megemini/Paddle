@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_devices
 
 import paddle
-from paddle import base
 
 
 class TestCauchyInplaceDtype(unittest.TestCase):
@@ -35,10 +35,7 @@ class TestCauchyInplaceDtype(unittest.TestCase):
             tensor_fp64.cauchy_()
             self.assertEqual(tensor_fp64.dtype, paddle.float64)
 
-        places = ['cpu']
-        if base.core.is_compiled_with_cuda():
-            places.append('gpu')
-        for place in places:
+        for place in get_devices():
             paddle.set_device(place)
             test_fp32()
             test_fp64()
@@ -94,11 +91,8 @@ class TestCauchyInplaceDistribution(unittest.TestCase):
 
 class TestCauchyInplaceEmptyTensor(unittest.TestCase):
     def test_cauchy_inplace_op_empty_tensor(self):
-        places = ['cpu']
-        if base.core.is_compiled_with_cuda():
-            places.append('gpu')
         test_shapes = [(200, 1), (1, 200)]
-        for place in places:
+        for place in get_devices():
             paddle.set_device(place)
             for test_shape in test_shapes:
                 tensor = paddle.empty(shape=test_shape)
@@ -124,10 +118,7 @@ class TestCauchyInplaceGrad(unittest.TestCase):
             cauchy_grad = tensor_b.grad.numpy()
             self.assertTrue((cauchy_grad == 0).all())
 
-        places = ['cpu']
-        if base.core.is_compiled_with_cuda():
-            places.append('gpu')
-        for place in places:
+        for place in get_devices():
             paddle.set_device(place)
             test_grad()
 

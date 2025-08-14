@@ -26,10 +26,11 @@ import numpy as np
 import paddle
 from paddle import profiler
 from paddle.base.framework import _current_expected_place, _set_expected_place
+from paddle.pir.core import datatype_to_vartype
 from paddle.profiler.timer import benchmark
 from paddle.profiler.utils import in_profiler_mode
 
-from ...framework import core, in_dynamic_mode
+from ...framework import core, in_dynamic_mode, in_pir_mode
 from ..multiprocess_utils import (
     MP_STATUS_CHECK_INTERVAL,
     CleanupFuncRegistrar,
@@ -49,11 +50,11 @@ from .worker import (
 # NOTE: fix `terminate called without an active exception`
 # if for loop break and program exit immediately(with no model
 # layers processing) after iterate **the first few data** in
-# distributed lauch mode, distributed launch will call
+# distributed launch mode, distributed launch will call
 # terminate() to kill main process on each devices, but thread
-# is still iterating to fullfill blocking queue caches, which
+# is still iterating to fulfill blocking queue caches, which
 # may cause thread error `terminate called without an active
-# exception` for terminate is a strong singal and `__del__`
+# exception` for terminate is a strong signal and `__del__`
 # of DataLoader may not be called, so we add a global link to
 # the last DataLoader instance to call `__del__` to clean up
 # resources
@@ -111,7 +112,7 @@ class _DataLoaderIterBase:
         else:
             self._collate_fn = loader.collate_fn or default_convert_fn
 
-        # LoDTensorBlockingQueue instance for create_py_reader and a thread
+        # DenseTensorBlockingQueue instance for create_py_reader and a thread
         # to put mini-batch data to self._blocking_queue, mini-batch data
         # will be get from:
         # 1. multi-process mode: get data from workers' result queue
@@ -132,6 +133,9 @@ class _DataLoaderIterBase:
 
     def __iter__(self):
         return self
+
+    def __next__(self):
+        raise NotImplementedError('Should implement `__next__` for a iterator')
 
     def __len__(self):
         return len(self._batch_sampler)
@@ -164,7 +168,7 @@ class _DataLoaderIterSingleProcess(_DataLoaderIterBase):
             self._drop_last,
         )
 
-        # NOTE: _structrue_infos used to record the data structure of
+        # NOTE: _structure_infos used to record the data structure of
         # batch to restore batch structure after reading Tensor
         # from blocking_queue in single-process mode. Note that
         # only single process is used in single-process mode, we
@@ -179,8 +183,12 @@ class _DataLoaderIterSingleProcess(_DataLoaderIterBase):
             self._places
         )
 
-        self._init_thread()
         self._shutdown = False
+        try:
+            self._init_thread()
+        except Exception:
+            self._try_shutdown_all()
+            raise
 
         global _loader
         _loader = self
@@ -188,12 +196,18 @@ class _DataLoaderIterSingleProcess(_DataLoaderIterBase):
     def _init_thread(self):
         self._var_names = [v.name for v in self._feed_list]
         self._shapes = [v.shape for v in self._feed_list]
-        self._dtypes = [v.dtype for v in self._feed_list]
-        self._need_check_feed = [
-            v.desc.need_check_feed() for v in self._feed_list
-        ]
+        if in_pir_mode():
+            self._need_check_feed = [False for v in self._feed_list]
+            self._dtypes = [
+                datatype_to_vartype[v.dtype] for v in self._feed_list
+            ]
+        else:
+            self._need_check_feed = [
+                v.desc.need_check_feed() for v in self._feed_list
+            ]
+            self._dtypes = [v.dtype for v in self._feed_list]
         # if only 1 place, do not need to keep order
-        self._blocking_queue = core.init_lod_tensor_blocking_queue(
+        self._blocking_queue = core.init_dense_tensor_blocking_queue(
             core.Variable(),
             self._blocking_queue_capacity,
             len(self._places) > 1,
@@ -250,13 +264,13 @@ class _DataLoaderIterSingleProcess(_DataLoaderIterBase):
                 break
 
             try:
-                # pack as LoDTensorArray
-                array = core.LoDTensorArray()
+                # pack as DenseTensorArray
+                array = core.DenseTensorArray()
                 for slot in batch:
-                    if isinstance(slot, (paddle.Tensor, core.eager.Tensor)):
+                    if isinstance(slot, paddle.Tensor):
                         slot = slot.value().get_tensor()
-                    elif not isinstance(slot, core.LoDTensor):
-                        tmp = core.LoDTensor()
+                    elif not isinstance(slot, core.DenseTensor):
+                        tmp = core.DenseTensor()
                         tmp.set(slot, core.CPUPlace())
                         slot = tmp
 
@@ -417,13 +431,17 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
             (self._worker_shm_buffer_size) * 2 * self._num_workers
         )
 
+        self._shutdown = False
         # init workers and indices queues and put 2 indices in each indices queue
         self._init_workers()
         for _ in range(self._outstanding_capacity):
             self._try_put_indices()
 
-        self._init_thread()
-        self._shutdown = False
+        try:
+            self._init_thread()
+        except Exception:
+            self._try_shutdown_all()
+            raise
 
     def _init_workers(self):
         from paddle.incubate import multiprocessing
@@ -486,12 +504,18 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
     def _init_thread(self):
         self._var_names = [v.name for v in self._feed_list]
         self._shapes = [v.shape for v in self._feed_list]
-        self._dtypes = [v.dtype for v in self._feed_list]
-        self._need_check_feed = [
-            v.desc.need_check_feed() for v in self._feed_list
-        ]
+        if in_pir_mode():
+            self._need_check_feed = [False for v in self._feed_list]
+            self._dtypes = [
+                datatype_to_vartype[v.dtype] for v in self._feed_list
+            ]
+        else:
+            self._need_check_feed = [
+                v.desc.need_check_feed() for v in self._feed_list
+            ]
+            self._dtypes = [v.dtype for v in self._feed_list]
         # if only 1 place, do not need to keep order
-        self._blocking_queue = core.init_lod_tensor_blocking_queue(
+        self._blocking_queue = core.init_dense_tensor_blocking_queue(
             core.Variable(), self._outstanding_capacity, len(self._places) > 1
         )
         core._set_max_memory_map_allocation_pool_size(
@@ -561,8 +585,10 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
             self._try_put_indices()
 
     def _shutdown_worker(self, worker_id, shutdown=False):
-        if self._worker_status[worker_id] or (
-            self._persistent_workers and shutdown
+        if worker_id < len(self._worker_status) and (
+            self._worker_status[worker_id]
+            or self._persistent_workers
+            and shutdown
         ):
             self._indices_queues[worker_id].put(None)
             self._worker_status[worker_id] = False
@@ -574,7 +600,7 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
                 self._clear_and_remove_data_queue()
 
                 # set _workers_done_event should be set before put None
-                # to indices_queue, workers wll exit on reading None from
+                # to indices_queue, workers will exit on reading None from
                 # indices_queue
                 self._workers_done_event.set()
                 for i in range(self._num_workers):
@@ -610,21 +636,19 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
                         self._resume_worker_cnt -= 1
                         continue
                     try:
-                        # pack as LoDTensorArray
-                        array = core.LoDTensorArray()
+                        # pack as DenseTensorArray
+                        array = core.DenseTensorArray()
                         if self._use_shared_memory:
                             for tensor in batch:
                                 array.append(tensor)
                         else:
-                            # LoDTensor not in shared memory is not
+                            # DenseTensor not in shared memory is not
                             # serializable, cannot be create in workers
                             for slot in batch:
-                                if isinstance(
-                                    slot, (paddle.Tensor, core.eager.Tensor)
-                                ):
+                                if isinstance(slot, paddle.Tensor):
                                     slot = slot.get_tensor()
-                                elif not isinstance(slot, core.LoDTensor):
-                                    tmp = core.LoDTensor()
+                                elif not isinstance(slot, core.DenseTensor):
+                                    tmp = core.DenseTensor()
                                     tmp.set(slot, core.CPUPlace())
                                     slot = tmp
                                 array.append(slot)
@@ -704,10 +728,11 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
                 if len(failed_workers) > 0:
                     self._exit_thread_unexpectedly()
                     pids = ', '.join(str(w.pid) for w in failed_workers)
-                    raise RuntimeError(
+                    logging.warning(
                         f"DataLoader {len(failed_workers)} workers exit unexpectedly, "
                         f"pids: {pids}"
                     )
+                    return
 
                 # get(timeout) will call _poll(timeout) and may raise IOError
                 if isinstance(e, (IOError, queue.Empty)):
@@ -724,7 +749,7 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
                 if self._dataset_kind == _DatasetKind.ITER and isinstance(
                     data, _IterableDatasetStopIteration
                 ):
-                    # if a worker get StopIteraion, we shutdown this worker,
+                    # if a worker get StopIteration, we shutdown this worker,
                     # note that this batch indices to trigger StopIteration
                     # is discard, outstanding batch number should be decrease
                     # and another indices should be put for other workers

@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle import base
 
 
 class TensorToListTest(unittest.TestCase):
@@ -25,12 +25,7 @@ class TensorToListTest(unittest.TestCase):
         self.shape = [11, 25, 32, 43]
 
     def test_tensor_tolist(self):
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-            places.append(base.CUDAPinnedPlace())
-
-        for p in places:
+        for p in get_places():
             np_arr = np.reshape(
                 np.array(range(np.prod(self.shape))), self.shape
             )

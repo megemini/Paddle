@@ -14,7 +14,7 @@
 
 #include "paddle/cinn/utils/profiler.h"
 
-#include "paddle/utils/flags.h"
+#include "paddle/common/flags.h"
 
 #ifdef CINN_WITH_NVTX
 #include <nvToolsExt.h>
@@ -51,7 +51,7 @@ void ProfilerHelper::UpdateState() {
       g_state = ProfilerState::kAll;
       break;
     default:
-      LOG(WARNING) << "Unsupport FLAGS_cinn_profiler_state = "
+      LOG(WARNING) << "Unsupported FLAGS_cinn_profiler_state = "
                    << FLAGS_cinn_profiler_state << ", and will do nothing.";
   }
 }

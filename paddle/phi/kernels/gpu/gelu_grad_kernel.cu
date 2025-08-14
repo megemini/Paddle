@@ -21,7 +21,7 @@
 #include "paddle/phi/kernels/funcs/broadcast_function.h"
 #include "paddle/phi/kernels/gpu/gelu_funcs.h"
 
-PD_DECLARE_bool(use_fast_math);
+COMMON_DECLARE_bool(use_fast_math);
 
 namespace phi {
 
@@ -66,10 +66,13 @@ void GeluGradKernel(const Context& dev_ctx,
                     bool approximate,
                     DenseTensor* x_grad) {
   dev_ctx.template Alloc<T>(x_grad);
+  if (x_grad && x_grad->numel() == 0) {
+    return;
+  }
   std::vector<const DenseTensor*> ins = {&x, &out_grad};
   std::vector<DenseTensor*> outs = {x_grad};
   if (approximate) {
-#ifdef __NVCC__
+#if defined(__NVCC__) || defined(__HIPCC__)
     if (std::is_same<T, dtype::float16>::value) {
       size_t n = x.numel();
       const auto* x_ptr = reinterpret_cast<const __half*>(x.data<T>());

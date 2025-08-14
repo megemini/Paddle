@@ -19,7 +19,7 @@ limitations under the License. */
 #include <string>
 #include <unordered_set>
 
-#include "paddle/utils/flags.h"
+#include "paddle/common/flags.h"
 
 namespace paddle {
 namespace framework {
@@ -29,7 +29,6 @@ class Scope;
 
 std::unordered_set<std::string>* GetThreadLocalUsedVarNameSet();
 
-void LogVarUsageIfUnusedVarCheckEnabled(const std::string& name);
 void CheckUnusedVar(const OperatorBase& op, const Scope& scope);
 
 }  // namespace framework

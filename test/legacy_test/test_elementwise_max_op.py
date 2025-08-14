@@ -36,7 +36,7 @@ class TestElementwiseOp(OpTest):
         self.init_data()
         self.op_type = "elementwise_max"
         self.prim_op_type = "prim"
-        self.if_enbale_cinn()
+        self.if_enable_cinn()
         self.python_api = paddle.maximum
         self.public_python_api = paddle.maximum
         self.inputs = {'X': self.x, 'Y': self.y}
@@ -65,7 +65,7 @@ class TestElementwiseOp(OpTest):
                 ['X', 'Y'], 'Out', check_prim=True, check_prim_pir=True
             )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         if hasattr(self, 'attrs') and self.attrs['axis'] != -1:
             self.check_grad(
                 ['Y'],
@@ -84,7 +84,7 @@ class TestElementwiseOp(OpTest):
                 check_prim_pir=True,
             )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         if hasattr(self, 'attrs') and self.attrs['axis'] != -1:
             self.check_grad(
                 ['X'],
@@ -103,7 +103,7 @@ class TestElementwiseOp(OpTest):
                 check_prim_pir=True,
             )
 
-    def if_enbale_cinn(self):
+    def if_enable_cinn(self):
         pass
 
 
@@ -119,7 +119,7 @@ class TestElementwiseFP16Op(TestElementwiseOp):
         self.init_data()
         self.op_type = "elementwise_max"
         self.prim_op_type = "prim"
-        self.if_enbale_cinn()
+        self.if_enable_cinn()
         self.python_api = paddle.maximum
         self.dtype = np.float16
         self.public_python_api = paddle.maximum
@@ -169,7 +169,7 @@ class TestElementwiseMaxFP16Op_ZeroDim3(TestElementwiseFP16Op):
         core.cudnn_version() < 8100
         or paddle.device.cuda.get_device_capability()[0] < 8
     ),
-    "run test when gpu is availble and the minimum cudnn version is 8.1.0 and gpu's compute capability is at least 8.0.",
+    "run test when gpu is available and the minimum cudnn version is 8.1.0 and gpu's compute capability is at least 8.0.",
 )
 class TestElementwiseBF16Op(OpTest):
     def init_data(self):
@@ -222,7 +222,7 @@ class TestElementwiseBF16Op(OpTest):
                 check_prim_pir=True,
             )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         self.check_grad(
             ['Y'],
             'Out',
@@ -232,7 +232,7 @@ class TestElementwiseBF16Op(OpTest):
             check_prim_pir=True,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         self.check_grad(
             ['X'],
             'Out',
@@ -367,6 +367,40 @@ class TestElementwiseFP16Op_broadcast_4(TestElementwiseFP16Op):
         sgn = np.random.choice([-1, 1], (2, 3, 1, 5)).astype(np.float16)
         y = x + sgn * np.random.uniform(1, 2, (2, 3, 1, 5)).astype(np.float16)
         self.inputs = {'X': x, 'Y': y}
+        self.outputs = {'Out': np.maximum(self.inputs['X'], self.inputs['Y'])}
+
+
+class TestElementwiseOpEqualInput(TestElementwiseOp):
+    def init_data(self):
+        self.x = np.ones([13, 17]).astype(np.float32)
+        self.y = np.ones([13, 17]).astype(np.float32)
+
+    def setUp(self):
+        self.init_data()
+        self.op_type = "elementwise_max"
+        self.prim_op_type = "prim"
+        self.if_enable_cinn()
+        self.python_api = paddle.maximum
+        self.dtype = np.float32
+        self.public_python_api = paddle.maximum
+        self.inputs = {'X': self.x, 'Y': self.y}
+        self.outputs = {'Out': np.maximum(self.inputs['X'], self.inputs['Y'])}
+
+
+class TestElementwiseOp0SizeInput(TestElementwiseOp):
+    def init_data(self):
+        self.x = np.ones([0, 1, 2]).astype(np.float32)
+        self.y = np.ones([1, 3598, 2]).astype(np.float32)
+
+    def setUp(self):
+        self.init_data()
+        self.op_type = "elementwise_max"
+        self.prim_op_type = "prim"
+        self.if_enable_cinn()
+        self.python_api = paddle.maximum
+        self.dtype = np.float32
+        self.public_python_api = paddle.maximum
+        self.inputs = {'X': self.x, 'Y': self.y}
         self.outputs = {'Out': np.maximum(self.inputs['X'], self.inputs['Y'])}
 
 

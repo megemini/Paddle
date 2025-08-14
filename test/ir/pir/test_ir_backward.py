@@ -26,29 +26,28 @@ paddle.enable_static()
 
 def get_ir_program_0():
     paddle.enable_static()
-    x = paddle.randn([4, 4])
-    main_program, start_program = (
-        paddle.static.Program(),
-        paddle.static.Program(),
-    )
-    with paddle.static.program_guard(main_program, start_program):
-        x_s = paddle.static.data('x', [4, 4], x.dtype)
-        x_s.stop_gradient = False
-        k_s = paddle.tanh(x_s)
-    pir_program = pir.translate_to_pir(main_program.desc)
-    return pir_program
+    with paddle.pir_utils.OldIrGuard():
+        x = paddle.randn([4, 4])
+        main_program, start_program = (
+            paddle.static.Program(),
+            paddle.static.Program(),
+        )
+        with paddle.static.program_guard(main_program, start_program):
+            x_s = paddle.static.data('x', [4, 4], x.dtype)
+            x_s.stop_gradient = False
+            k_s = paddle.tanh(x_s)
+        pir_program = pir.translate_to_pir(main_program.desc)
+        return pir_program
 
 
 class TesBackward_1(unittest.TestCase):
-    def tearDown(self) -> None:
-        paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
-
     def test_grad(self):
         pir_program = get_ir_program_0()
         input = pir_program.global_block().ops[-1].operand(0).source()
         tanh_out = pir_program.global_block().ops[-1].result(0)
-        with paddle.pir_utils.IrGuard(), paddle.pir.core.program_guard(
-            pir_program
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.pir.core.program_guard(pir_program),
         ):
             out = paddle.mean(tanh_out)
             out2 = paddle.mean(tanh_out)
@@ -72,8 +71,9 @@ class TesBackward_1(unittest.TestCase):
         pir_program = get_ir_program_0()
         input = pir_program.global_block().ops[-1].operand(0).source()
         tanh_out = pir_program.global_block().ops[-1].result(0)
-        with paddle.pir_utils.IrGuard(), paddle.pir.core.program_guard(
-            pir_program
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.pir.core.program_guard(pir_program),
         ):
             out = paddle.mean(tanh_out)
             input_grad = grad(out, input)
@@ -98,13 +98,14 @@ class TesBackward_1(unittest.TestCase):
         pir_program = get_ir_program_0()
         input = pir_program.global_block().ops[-1].operand(0).source()
         tanh_out = pir_program.global_block().ops[-1].result(0)
-        with paddle.pir_utils.IrGuard(), paddle.pir.core.program_guard(
-            pir_program
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.pir.core.program_guard(pir_program),
         ):
             out = paddle.mean(tanh_out)
             input_grad = grad(out, input, no_grad_vars=[input])
             self.assertEqual(
-                pir_program.global_block().ops[-1].name(), "pd_op.mean"
+                pir_program.global_block().ops[-3].name(), "pd_op.mean"
             )
 
     def test_split(self):
@@ -112,8 +113,9 @@ class TesBackward_1(unittest.TestCase):
         pir_program = get_ir_program_0()
         input = pir_program.global_block().ops[-1].operand(0).source()
         tanh_out = pir_program.global_block().ops[-1].result(0)
-        with paddle.pir_utils.IrGuard(), paddle.pir.core.program_guard(
-            pir_program
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.pir.core.program_guard(pir_program),
         ):
             out = paddle.split(tanh_out, [2, 2], 0)
             input_grad = grad(out, input)
@@ -138,35 +140,32 @@ class TesBackward_1(unittest.TestCase):
 
 def get_ir_program_1():
     paddle.enable_static()
-    x = paddle.randn([2, 2])
-    main_program, start_program = (
-        paddle.static.Program(),
-        paddle.static.Program(),
-    )
-    with paddle.static.program_guard(main_program, start_program):
-        x_s = paddle.static.data('x', [4, 4], x.dtype)
-        y_s = paddle.static.data('y', [4, 4], x.dtype)
-        x_s.stop_gradient = False
-        y_s.stop_gradient = False
+    with paddle.pir_utils.OldIrGuard():
+        x = paddle.randn([2, 2])
+        main_program, start_program = (
+            paddle.static.Program(),
+            paddle.static.Program(),
+        )
+        with paddle.static.program_guard(main_program, start_program):
+            x_s = paddle.static.data('x', [4, 4], x.dtype)
+            x_s.stop_gradient = False
 
-        k_s = paddle.tanh(x_s)
-        z_x = paddle.tanh(x_s)
-        out = paddle.add(z_x, k_s)
-    pir_program = pir.translate_to_pir(main_program.desc)
-    return pir_program
+            k_s = paddle.tanh(x_s)
+            z_x = paddle.tanh(x_s)
+            out = paddle.add(z_x, k_s)
+        pir_program = pir.translate_to_pir(main_program.desc)
+        return pir_program
 
 
 class TesBackward_2(unittest.TestCase):
-    def tearDown(self) -> None:
-        paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
-
     def test_add_n(self):
         pir_program = get_ir_program_1()
         input_x = pir_program.global_block().ops[-3].operand(0).source()
 
         add_out = pir_program.global_block().ops[-1].result(0)
-        with paddle.pir_utils.IrGuard(), paddle.pir.core.program_guard(
-            pir_program
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.pir.core.program_guard(pir_program),
         ):
             out = paddle.mean(add_out)
             input_grad = grad(out, input_x)
@@ -186,13 +185,13 @@ class TesBackward_2(unittest.TestCase):
         input_x = pir_program.global_block().ops[-3].operand(0).source()
 
         add_out = pir_program.global_block().ops[-1].result(0)
-        with paddle.pir_utils.IrGuard(), paddle.pir.core.program_guard(
-            pir_program
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.pir.core.program_guard(pir_program),
         ):
             out = paddle.concat([add_out, add_out])
             input_grad = grad(out, input_x)
         ops_name = [
-            "pd_op.data",
             "pd_op.data",
             "pd_op.tanh",
             "pd_op.tanh",
@@ -219,29 +218,28 @@ class TesBackward_2(unittest.TestCase):
 
 def get_ir_program_2():
     paddle.enable_static()
-    x = paddle.randn([2, 2])
-    main_program, start_program = (
-        paddle.static.Program(),
-        paddle.static.Program(),
-    )
-    with paddle.static.program_guard(main_program, start_program):
-        x_s = paddle.static.data('x', [4, 4], x.dtype)
-        x_s.stop_gradient = False
-        k_s = paddle.sum(x_s, axis=(-1,), keepdim=False)
-    pir_program = pir.translate_to_pir(main_program.desc)
-    return pir_program
+    with paddle.pir_utils.OldIrGuard():
+        x = paddle.randn([2, 2])
+        main_program, start_program = (
+            paddle.static.Program(),
+            paddle.static.Program(),
+        )
+        with paddle.static.program_guard(main_program, start_program):
+            x_s = paddle.static.data('x', [4, 4], x.dtype)
+            x_s.stop_gradient = False
+            k_s = paddle.sum(x_s, axis=(-1,), keepdim=False)
+        pir_program = pir.translate_to_pir(main_program.desc)
+        return pir_program
 
 
 class TestBackward_3(unittest.TestCase):
-    def tearDown(self) -> None:
-        paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
-
     def test_basic_network(self):
         pir_program = get_ir_program_2()
         x = pir_program.global_block().ops[-1].operand(0).source()
         sum_x = pir_program.global_block().ops[-1].result(0)
-        with paddle.pir_utils.IrGuard(), paddle.pir.core.program_guard(
-            pir_program
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.pir.core.program_guard(pir_program),
         ):
             norm = paddle.tensor.fill_constant(
                 shape=[],
@@ -253,9 +251,6 @@ class TestBackward_3(unittest.TestCase):
 
 
 class TestBackward_4(unittest.TestCase):
-    def tearDown(self) -> None:
-        paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
-
     def test_basic_network(self):
         if not paddle.framework.in_pir_mode():
             return
@@ -271,15 +266,15 @@ class TestBackward_4(unittest.TestCase):
             def true_func():
                 y = double_x * 3
                 out = grad(y, x)
-                filted_dx = [dxi for dxi in out if dxi is not None]
-                grad_x = filted_dx
+                filtered_dx = [dxi for dxi in out if dxi is not None]
+                grad_x = filtered_dx
                 return grad_x
 
             def false_func():
                 y = double_x * 4
                 out = grad(y, x)
-                filted_dx = [dxi for dxi in out if dxi is not None]
-                grad_x = filted_dx
+                filtered_dx = [dxi for dxi in out if dxi is not None]
+                grad_x = filtered_dx
                 return grad_x
 
             out = paddle.static.nn.cond(pred, true_func, false_func)
@@ -293,6 +288,28 @@ class TestBackward_4(unittest.TestCase):
             (grad_x,) = exe.run(program, fetch_list=[out])
             res = np.full([2, 2], 6.0, dtype='float32')
             self.assertEqual((grad_x == res).all(), True)
+
+
+class TestBackward_5(unittest.TestCase):
+    def test_skip_vjp(self):
+        if not paddle.framework.in_pir_mode():
+            return
+        program = paddle.static.Program()
+        with paddle.static.program_guard(program):
+            x = paddle.static.data('x', [4, 4], 'float32')
+            x.stop_gradient = True
+            y = paddle.nn.functional.relu(x)
+            y.stop_gradient = False
+            z = paddle.nn.functional.relu(y)
+            loss = paddle.mean(z)
+
+            paddle.autograd.ir_backward.append_backward(loss)
+        relu_grad_number = 0
+        for op in program.global_block().ops:
+            if op.name() == "pd_op.relu_grad":
+                relu_grad_number += 1
+
+        self.assertEqual(relu_grad_number, 1)
 
 
 class TestValueSet(unittest.TestCase):

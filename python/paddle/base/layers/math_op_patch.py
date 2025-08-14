@@ -17,8 +17,12 @@ import warnings
 
 from .. import core
 from ..dygraph.base import in_to_static_mode
-from ..framework import Variable, default_main_program, static_only
-from .layer_function_generator import OpProtoHolder
+from ..framework import (
+    OpProtoHolder,
+    Variable,
+    default_main_program,
+    static_only,
+)
 
 _supported_int_dtype_ = [
     core.VarDesc.VarType.BOOL,
@@ -28,6 +32,11 @@ _supported_int_dtype_ = [
     core.VarDesc.VarType.INT32,
     core.VarDesc.VarType.INT64,
 ]
+_supported_complex_dtype_ = [
+    core.VarDesc.VarType.COMPLEX64,
+    core.VarDesc.VarType.COMPLEX128,
+]
+
 
 compare_ops = ['__eq__', '__ne__', '__lt__', '__le__', '__gt__', '__ge__']
 
@@ -38,6 +47,22 @@ SUPPORT_PROMOTION_OPS = [
     "__rsub__",
     "__mul__",
     "__rmul__",
+    "__mod__",
+    "__rmod__",
+    "__div__",
+    "__rdiv__",
+    "__truediv__",
+    "__rtruediv__",
+    "__floordiv__",
+    "__rfloordiv__",
+    "__pow__",
+    "__rpow__",
+    "__eq__",
+    "__ne__",
+    "__lt__",
+    "__le__",
+    "__gt__",
+    "__ge__",
 ]
 
 EXPRESSION_MAP = {
@@ -54,8 +79,11 @@ EXPRESSION_MAP = {
     "__pow__": "A ** B",
     "__rpow__": "A **= B",
     "__floordiv__": "A //B",
+    "__rfloordiv__": "A //=B",
     "__mod__": "A % B",
+    "__rmod__": "A %= B",
     "__matmul__": "A @ B",
+    "__rmatmul__": "A @= B",
     "__eq__": "A == B",
     "__ne__": "A != B",
     "__lt__": "A < B",
@@ -67,6 +95,24 @@ EXPRESSION_MAP = {
 _already_patch_variable = False
 
 
+# TODO(liym27): A better way to slice tensor array.
+#  Maybe support start == end for slice op.
+def _slice_tensor_array(array, start, end):
+    from paddle.static.nn import cond
+    from paddle.tensor import create_array
+
+    def true_fn():
+        null_array = create_array("float32")
+        return null_array
+
+    def false_fn(array, start, end):
+        new_array = array[start:end]
+        return new_array
+
+    new_array = cond(start == end, true_fn, lambda: false_fn(array, start, end))
+    return new_array
+
+
 def monkey_patch_variable():
     def unique_tmp_name():
         return default_main_program()._name_generator.generate("tmp")
@@ -75,7 +121,7 @@ def monkey_patch_variable():
         try:
             dtype = var.dtype
         except:
-            raise ValueError("Cannot get data type from %s", var.name)
+            raise ValueError(f"Cannot get data type from {var.name}")
         return dtype
 
     def current_block(var):
@@ -240,18 +286,43 @@ def monkey_patch_variable():
         """
         Variable don't have 'place' interface in static graph mode
         But this interface can greatly facilitate dy2static.
-        So we give a warnning here and return None.
+        So we give a warning here and return None.
         """
         warnings.warn(
             "Variable do not have 'place' interface for static graph mode, try not to use it. None will be returned."
         )
+
+    @static_only
+    def contiguous(self):
+        """
+        Variable don't have 'contiguous' interface in static graph mode
+        But this interface can greatly facilitate dy2static.
+        So we give a warning here and return None.
+        """
+        warnings.warn(
+            "Variable do not have 'contiguous' interface for static graph mode, try not to use it. self will be returned."
+        )
+        return self
+
+    @static_only
+    def is_contiguous(self):
+        """
+        Variable don't have 'is_contiguous' interface in static graph mode
+        But this interface can greatly facilitate dy2static.
+        So we give a warning here and return None.
+        """
+        warnings.warn(
+            "Variable do not have 'is_contiguous' interface for static graph mode, try not to use it. True will be returned."
+        )
+        return True
 
     def astype(self, dtype):
         """
         **Notes**:
             **The variable must be a** :ref:`api_paddle_Tensor`
 
-        Cast a variable to a specified data type.
+        Cast a variable to a specified data type if it differs from the current dtype;
+        otherwise, return the original variable.
 
         Args:
 
@@ -284,11 +355,12 @@ def monkey_patch_variable():
             .. code-block:: python
 
                 >>> import paddle.base as base
+                >>> import paddle
                 >>> import numpy as np
 
                 >>> x = np.ones([2, 2], np.float32)
                 >>> with base.dygraph.guard():
-                ...     original_variable = base.dygraph.to_variable(x)
+                ...     original_variable = paddle.to_tensor(x)
                 ...     print("original var's dtype is: {}, numpy dtype is {}".format(original_variable.dtype, original_variable.numpy().dtype))
                 ...     new_variable = original_variable.astype('int64')
                 ...     print("new var's dtype is: {}, numpy dtype is {}".format(new_variable.dtype, new_variable.numpy().dtype))
@@ -296,6 +368,9 @@ def monkey_patch_variable():
                 original var's dtype is: paddle.float32, numpy dtype is float32
                 new var's dtype is: paddle.int64, numpy dtype is int64
         """
+        if self.dtype == dtype:
+            return self
+
         block = current_block(self)
         out = create_new_tmp_var(block, dtype)
         block.append_op(
@@ -307,6 +382,9 @@ def monkey_patch_variable():
         out.stop_gradient = self.stop_gradient
         return out
 
+    def type_as(self, other):
+        return self.astype(other.dtype)
+
     @static_only
     def append(self, var):
         """
@@ -317,7 +395,7 @@ def monkey_patch_variable():
         """
         if not isinstance(var, Variable):
             if in_to_static_mode():
-                """in dy2static mode, x may be tensorable values such as int, float, np.array"""
+                """In dy2static mode, x may be tensor values such as int, float, np.array"""
                 from paddle.tensor.creation import to_tensor
 
                 var = to_tensor(var)
@@ -325,11 +403,9 @@ def monkey_patch_variable():
                 raise TypeError(
                     f"Required input var should be Variable, but received {type(var)}"
                 )
-        if self.type != core.VarDesc.VarType.LOD_TENSOR_ARRAY:
+        if self.type != core.VarDesc.VarType.DENSE_TENSOR_ARRAY:
             raise TypeError(
-                "Only Variable with VarType.LOD_TENSOR_ARRAY support `append` method, but received type: {}".format(
-                    self.type
-                )
+                f"Only Variable with VarType.DENSE_TENSOR_ARRAY support `append` method, but received type: {self.type}"
             )
         from paddle.tensor.array import array_length, array_write
 
@@ -351,24 +427,58 @@ def monkey_patch_variable():
     def pop(self, *args):
         """
         The type variable must be LoD Tensor Array.
-        When self is LoDTensorArray, calling pop is similar to Python's pop on list.
+        When self is DenseTensorArray, calling pop is similar to Python's pop on list.
         This interface is used to simplify dygraph to static graph operations.
 
         Args:
-            self(Variable): The source variable, which must be LOD_TENSOR_ARRAY
+            self(Variable): The source variable, which must be DENSE_TENSOR_ARRAY
             *args: optional, a int means index.
         Returns:
             Variable: self[index]
         """
-        from paddle.jit.dy2static.convert_operators import _run_paddle_pop
+        import paddle
+        from paddle.static.nn import while_loop
+        from paddle.tensor import fill_constant
 
-        if self.type != core.VarDesc.VarType.LOD_TENSOR_ARRAY:
+        if self.type != core.VarDesc.VarType.DENSE_TENSOR_ARRAY:
             raise TypeError(
-                "Only Variable with VarType.LOD_TENSOR_ARRAY support `pop` method, but received type: {}".format(
-                    self.type
-                )
+                f"Only Variable with VarType.DENSE_TENSOR_ARRAY support `pop` method, but received type: {self.type}"
             )
-        return _run_paddle_pop(self, *args)
+        if len(args) == 0:
+            idx = -1
+        else:
+            idx = args[0]
+
+        assert isinstance(idx, int)
+
+        def cond(i, new_array):
+            return paddle.less_than(i, arr_len)
+
+        def body(i, new_array):
+            item = paddle.tensor.array_read(array=self, i=i)
+            paddle.tensor.array_write(
+                item, paddle.tensor.array_length(new_array), new_array
+            )
+
+            i = paddle.increment(i)
+            return i, new_array
+
+        arr_len = paddle.tensor.array_length(self)
+        if idx < 0:
+            idx = idx + arr_len
+        else:
+            idx = fill_constant(shape=[1], dtype="int64", value=idx)
+
+        pop_item = paddle.tensor.array_read(self, idx)
+
+        tmp = paddle.assign(self)
+        new_array = _slice_tensor_array(tmp, 0, idx)
+        i = idx + 1
+
+        _, new_array = while_loop(cond, body, [i, new_array])
+        paddle.assign(new_array, output=self)
+
+        return pop_item
 
     def _scalar_op_(var, scale, bias):
         block = current_block(var)
@@ -383,6 +493,9 @@ def monkey_patch_variable():
 
     def _neg_(var):
         return _scalar_op_(var, -1.0, 0.0)
+
+    def _abs_(var):
+        return paddle.abs(var)
 
     @property
     def _ndim(self):
@@ -451,6 +564,40 @@ def monkey_patch_variable():
         """
         return len(self.shape)
 
+    @property
+    def requires_grad(self) -> bool:
+        """
+        Whether this Tensor requires gradient computation.
+
+        This is a convenience property that returns the opposite of stop_gradient.
+        Setting requires_grad=True is equivalent to setting stop_gradient=False.
+
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> x = paddle.randn([2, 3])
+                >>> print(x.requires_grad)  # False by default
+                >>>
+                >>> x.requires_grad = False
+                >>> print(x.stop_gradient)  # True
+        """
+        return not self.stop_gradient
+
+    @requires_grad.setter
+    def requires_grad(self, value: bool) -> None:
+        """
+        Set whether this Tensor requires gradient computation.
+
+        Args:
+            value (bool): True to enable gradient computation, False to disable.
+        """
+        if not isinstance(value, bool):
+            raise TypeError(
+                f"requires_grad must be bool, but got {type(value)}"
+            )
+        self.stop_gradient = not value
+
     def _scalar_add_(var, value):
         return _scalar_op_(var, 1.0, value)
 
@@ -496,10 +643,19 @@ def monkey_patch_variable():
                     and self.dtype in _supported_int_dtype_
                 ):
                     self = astype(self, 'float32')
+                # bool(tensor) + int(scalar) will do type promotion to int64
+                if self.dtype == core.VarDesc.VarType.BOOL:
+                    self = astype(self, 'int64')
                 # here use `scale` replace `elementwise` to get better performance
                 # but only +, -, *, / can use this method
                 if scalar_method is not None:
                     return scalar_method(self, other_var)
+            elif isinstance(other_var, complex):
+                if self.dtype not in _supported_complex_dtype_:
+                    self = astype(self, 'complex64')
+                    other_var = create_new_tmp_var(
+                        current_block(self), dtype='complex64'
+                    )
             else:
                 # do nothing
                 pass
@@ -533,27 +689,40 @@ def monkey_patch_variable():
 
             if lhs_dtype != rhs_dtype:
                 if method_name in SUPPORT_PROMOTION_OPS:
-                    if core.need_type_promotion(lhs_dtype, rhs_dtype):
-                        common_dtype = core.get_promote_dtype(
-                            op_type, lhs_dtype, rhs_dtype
-                        )
+                    # different major types or both 0-d tensor follow with T+T rule.
+                    if len(other_var.shape) == 0 or len(self.shape) == 0:
+                        if not core.is_common_dtype_for_scalar(
+                            lhs_dtype, rhs_dtype
+                        ) or (
+                            len(other_var.shape) == 0 and len(self.shape) == 0
+                        ):
+                            promote_type = core.get_promote_dtype_old_ir(
+                                op_type, lhs_dtype, rhs_dtype
+                            )
+                            if lhs_dtype != promote_type:
+                                self = astype(self, promote_type)
+                            if rhs_dtype != promote_type:
+                                other_var = astype(other_var, promote_type)
+                        # common major types follow with tensor: int32(tensor) + int64(scalar) = int32
+                        else:
+                            if len(self.shape) == 0:
+                                self = astype(self, rhs_dtype)
+                            else:
+                                other_var = astype(other_var, lhs_dtype)
+                    elif core.need_type_promotion_old_ir(
+                        op_type, lhs_dtype, rhs_dtype
+                    ):
+                        # only report warning here, real promotion deal in Executor
                         warnings.warn(
-                            f"The input dtypes of OP {op_type} are {lhs_dtype} and {rhs_dtype}, the output will be auto-promoted to {common_dtype}"
+                            f"The input dtypes of OP {op_type} are {lhs_dtype} and {rhs_dtype}, the output will be auto-promoted"
                         )
                         warnings.filterwarnings(
                             "ignore", message="The input dtypes of OP"
                         )
-                        if rhs_dtype != common_dtype:
-                            other_var = astype(other_var, common_dtype)
-                        if lhs_dtype != common_dtype:
-                            self = astype(self, common_dtype)
-                    else:
-                        # NOTE(zoooo0820): Currently, we still keep the old illogical \
-                        # logic for compatibility reasons
-                        other_var = astype(other_var, lhs_dtype)
-
                 else:
-                    other_var = astype(other_var, lhs_dtype)
+                    raise TypeError(
+                        f"got different data type in {op_type} between {lhs_dtype} and {rhs_dtype}."
+                    )
 
             if reverse:
                 tmp = self
@@ -561,11 +730,12 @@ def monkey_patch_variable():
                 other_var = tmp
 
             if (
-                op_type == "divide" or op_type == "elementwise_div"
-            ) and self.dtype in _supported_int_dtype_:
+                (op_type == "divide" or op_type == "elementwise_div")
+                and self.dtype in _supported_int_dtype_
+                and self.dtype == other_var.dtype
+            ):
                 self = astype(self, 'float32')
                 other_var = astype(other_var, 'float32')
-
             # NOTE(zhiqiu): the output of compare operator should be bool.
             if method_name in compare_ops:
                 out = create_new_tmp_var(current_block(self), dtype="bool")
@@ -580,16 +750,9 @@ def monkey_patch_variable():
                 file_name = stack[1]
                 line_num = stack[2]
                 warnings.warn(
-                    "{}:{}\nThe behavior of expression {} has been unified with {}(X, Y, axis=-1) from Paddle 2.0. "
+                    f"{file_name}:{line_num}\nThe behavior of expression {EXPRESSION_MAP[method_name]} has been unified with {op_type}(X, Y, axis=-1) from Paddle 2.0. "
                     "If your code works well in the older versions but crashes in this version, try to use "
-                    "{}(X, Y, axis=0) instead of {}. This transitional warning will be dropped in the future.".format(
-                        file_name,
-                        line_num,
-                        EXPRESSION_MAP[method_name],
-                        op_type,
-                        op_type,
-                        EXPRESSION_MAP[method_name],
-                    ),
+                    f"{op_type}(X, Y, axis=0) instead of {EXPRESSION_MAP[method_name]}. This transitional warning will be dropped in the future.",
                     category=DeprecationWarning,
                 )
             current_block(self).append_op(
@@ -613,6 +776,27 @@ def monkey_patch_variable():
         """
         __impl__.__name__ = method_name
         return __impl__
+
+    def _int_(self):
+        raise TypeError(
+            "int(Variable) is not supported in static graph mode. If you are using @to_static, you can try this:\n"
+            "1. If you want to get the value of Variable, you can switch to non-fullgraph mode by setting @to_static(full_graph=True).\n"
+            "2. If you want to run it in full graph mode, you need use Variable.astype(paddle.int32), and do not use int(Variable)."
+        )
+
+    def _float_(self):
+        raise TypeError(
+            "float(Variable) is not supported in static graph mode. If you are using @to_static, you can try this:\n"
+            "1. If you want to get the value of Variable, you can switch to non-fullgraph mode by setting @to_static(full_graph=True).\n"
+            "2. If you want to run it in full graph mode, you need use Variable directly, and do not use float(Variable)."
+        )
+
+    def _complex_(self):
+        raise TypeError(
+            "complex(Variable) is not supported in static graph mode. If you are using @to_static, you can try this:\n"
+            "1. If you want to get the value of Variable, you can switch to non-fullgraph mode by setting @to_static(full_graph=True).\n"
+            "2. If you want to run it in full graph mode, you need use Variable directly, and do not use complex(Variable)."
+        )
 
     def values(var):
         block = current_block(var)
@@ -650,16 +834,21 @@ def monkey_patch_variable():
     variable_methods = [
         #   b=-a
         ('__neg__', _neg_),
+        ('__abs__', _abs_),
         ('astype', astype),
+        ('type_as', type_as),
         ('cpu', cpu),
         ('cuda', cuda),
         ('place', place),
+        ('contiguous', contiguous),
+        ('is_contiguous', is_contiguous),
         ('append', append),
         ('item', _item),
         ('pop', pop),
         ('dim', dim),
         ('ndimension', ndimension),
         ('ndim', _ndim),
+        ("requires_grad", requires_grad),
         (
             '__add__',
             _binary_creator_('__add__', 'elementwise_add', False, _scalar_add_),
@@ -725,12 +914,26 @@ def monkey_patch_variable():
             ),
         ),
         (
+            '__rfloordiv__',
+            _binary_creator_(
+                '__rfloordiv__', 'elementwise_floordiv', True, None
+            ),
+        ),
+        (
             '__mod__',
             _binary_creator_('__mod__', 'elementwise_mod', False, None),
         ),
         (
+            '__rmod__',
+            _binary_creator_('__rmod__', 'elementwise_mod', True, None),
+        ),
+        (
             '__matmul__',
             _binary_creator_('__matmul__', "matmul_v2", False, None),
+        ),
+        (
+            '__rmatmul__',
+            _binary_creator_('__rmatmul', "matmul_v2", True, None),
         ),
         #  for logical compare
         ('__eq__', _binary_creator_('__eq__', 'equal', False, None)),
@@ -739,6 +942,9 @@ def monkey_patch_variable():
         ('__le__', _binary_creator_('__le__', 'less_equal', False, None)),
         ('__gt__', _binary_creator_('__gt__', 'greater_than', False, None)),
         ('__ge__', _binary_creator_('__ge__', 'greater_equal', False, None)),
+        ('__float__', _float_),
+        ('__int__', _int_),
+        ('__complex__', _complex_),
         ('values', values),
         ('indices', indices),
         ('to_dense', to_dense),

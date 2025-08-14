@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 def call_MultiMarginLoss_layer(
@@ -224,7 +224,7 @@ def calc_multi_margin_loss(
             [weight[label[i]] for i in range(label.size)]
         ).reshape(-1, 1)
         expected = np.mean(
-            np.maximum(weight * (margin + input - index_sample), 0.0) ** p,
+            weight * (np.maximum((margin + input - index_sample), 0.0) ** p),
             axis=1,
         ) - weight * (margin**p / input.shape[1])
 
@@ -239,7 +239,7 @@ def calc_multi_margin_loss(
 
 
 class TestMultiMarginLoss(unittest.TestCase):
-    @test_with_pir_api
+
     def test_MultiMarginLoss(self):
         batch_size = 5
         num_classes = 2
@@ -249,9 +249,7 @@ class TestMultiMarginLoss(unittest.TestCase):
             np.int64
         )
 
-        places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            places.append(paddle.CUDAPlace(0))
+        places = get_places()
         reductions = ['sum', 'mean', 'none']
         for place in places:
             for reduction in reductions:
@@ -298,7 +296,7 @@ class TestMultiMarginLoss(unittest.TestCase):
         self.assertRaises(
             ValueError,
             paddle.nn.MultiMarginLoss,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         input = paddle.to_tensor([[0.1, 0.3]], dtype='float32')
         label = paddle.to_tensor([0], dtype='int32')
@@ -307,7 +305,7 @@ class TestMultiMarginLoss(unittest.TestCase):
             paddle.nn.functional.multi_margin_loss,
             input=input,
             label=label,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         paddle.enable_static()
 
@@ -332,7 +330,6 @@ class TestMultiMarginLoss(unittest.TestCase):
         )
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_MultiMarginLoss_p(self):
         p = 2
         batch_size = 5
@@ -386,7 +383,6 @@ class TestMultiMarginLoss(unittest.TestCase):
         np.testing.assert_allclose(static_functional, dy_functional)
         np.testing.assert_allclose(dy_functional, expected)
 
-    @test_with_pir_api
     def test_MultiMarginLoss_weight(self):
         batch_size = 5
         num_classes = 2
@@ -440,7 +436,6 @@ class TestMultiMarginLoss(unittest.TestCase):
         np.testing.assert_allclose(static_functional, dy_functional)
         np.testing.assert_allclose(dy_functional, expected)
 
-    @test_with_pir_api
     def test_MultiMarginLoss_static_data_shape(self):
         batch_size = 5
         num_classes = 2

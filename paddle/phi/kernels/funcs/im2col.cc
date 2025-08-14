@@ -19,8 +19,7 @@ namespace phi {
 class CPUContext;
 }  // namespace phi
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 
 /*
  * im = [input_channels, input_height, input_width]
@@ -30,7 +29,7 @@ namespace funcs {
 template <class T, typename DeviceContext>
 class Im2ColFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
  public:
-  void operator()(const DeviceContext& context UNUSED,
+  void operator()(const DeviceContext& dev_ctx UNUSED,
                   const phi::DenseTensor& im,
                   const std::vector<int>& dilation,
                   const std::vector<int>& stride,
@@ -39,13 +38,13 @@ class Im2ColFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
                   const DataLayout data_layout) {
     PADDLE_ENFORCE_EQ(im.dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im.dims()));
     PADDLE_ENFORCE_EQ(col->dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col->dims()));
@@ -75,7 +74,7 @@ class Im2ColFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
 template <class T, typename DeviceContext>
 class Col2ImFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
  public:
-  void operator()(const DeviceContext& context UNUSED,
+  void operator()(const DeviceContext& dev_ctx UNUSED,
                   const phi::DenseTensor& col,
                   const std::vector<int>& dilation,
                   const std::vector<int>& stride,
@@ -84,13 +83,13 @@ class Col2ImFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
                   const DataLayout data_layout) {
     PADDLE_ENFORCE_EQ(im->dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im->dims()));
     PADDLE_ENFORCE_EQ(col.dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col.dims()));
@@ -111,16 +110,16 @@ class Col2ImFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
                 stride[0] +
             1,
         col_height,
-        phi::errors::InvalidArgument("Output_height and padding(padding_up, "
-                                     "padding_down) are inconsistent."));
+        common::errors::InvalidArgument("Output_height and padding(padding_up, "
+                                        "padding_down) are inconsistent."));
     PADDLE_ENFORCE_EQ(
         (im_width + padding[1] + padding[3] -
          ((dilation[1] * (filter_width - 1) + 1))) /
                 stride[1] +
             1,
         col_width,
-        phi::errors::InvalidArgument("Output_height and padding(padding_up, "
-                                     "padding_down) are inconsistent."));
+        common::errors::InvalidArgument("Output_height and padding(padding_up, "
+                                        "padding_down) are inconsistent."));
 
     int channels_col = im_channels * filter_height * filter_width;
 
@@ -187,7 +186,7 @@ template class Col2ImFunctor<phi::funcs::ColFormat::kCFO,
 template <class T, typename DeviceContext>
 class Im2ColFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
  public:
-  void operator()(const DeviceContext& context UNUSED,
+  void operator()(const DeviceContext& dev_ctx UNUSED,
                   const phi::DenseTensor& im,
                   const std::vector<int>& dilation UNUSED,
                   const std::vector<int>& stride,
@@ -196,13 +195,13 @@ class Im2ColFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
                   const DataLayout data_layout UNUSED) {
     PADDLE_ENFORCE_EQ(im.dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im.dims()));
     PADDLE_ENFORCE_EQ(col->dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col->dims()));
@@ -260,7 +259,7 @@ class Im2ColFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
 template <class T, typename DeviceContext>
 class Col2ImFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
  public:
-  void operator()(const DeviceContext& context UNUSED,
+  void operator()(const DeviceContext& dev_ctx UNUSED,
                   const phi::DenseTensor& col,
                   const std::vector<int>& dilation UNUSED,
                   const std::vector<int>& stride,
@@ -269,13 +268,13 @@ class Col2ImFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
                   const DataLayout data_layout UNUSED) {
     PADDLE_ENFORCE_EQ(im->dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im->dims()));
     PADDLE_ENFORCE_EQ(col.dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col.dims()));
@@ -290,14 +289,14 @@ class Col2ImFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
     PADDLE_ENFORCE_EQ(
         (im_height + padding[0] + padding[2] - filter_height) / stride[0] + 1,
         col_height,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Output_height and padding(padding_up, padding_down) "
             "are inconsistent."));
     PADDLE_ENFORCE_EQ(
         (im_width + padding[1] + padding[3] - filter_width) / stride[1] + 1,
         col_width,
-        phi::errors::InvalidArgument("col_width and padding(padding_left, "
-                                     "padding_right) are inconsistent."));
+        common::errors::InvalidArgument("col_width and padding(padding_left, "
+                                        "padding_right) are inconsistent."));
 
     T* im_data = im->data<T>();
     const T* col_data = col.data<T>();
@@ -361,5 +360,4 @@ template class Col2ImFunctor<phi::funcs::ColFormat::kOCF,
 template class Col2ImFunctor<phi::funcs::ColFormat::kOCF,
                              phi::CPUContext,
                              phi::dtype::complex<double>>;
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

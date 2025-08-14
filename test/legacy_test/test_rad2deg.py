@@ -15,11 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 
 import paddle
 from paddle import base
-from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -33,7 +32,6 @@ class TestRad2degAPI(unittest.TestCase):
         self.x_shape = [6]
         self.out_np = np.rad2deg(self.x_np)
 
-    @test_with_pir_api
     def test_static_graph(self):
         startup_program = paddle.static.Program()
         train_program = paddle.static.Program()
@@ -43,11 +41,7 @@ class TestRad2degAPI(unittest.TestCase):
             )
             out = paddle.rad2deg(x)
 
-            place = (
-                base.CUDAPlace(0)
-                if core.is_compiled_with_cuda()
-                else base.CPUPlace()
-            )
+            place = get_device_place()
             exe = base.Executor(place)
             res = exe.run(
                 feed={'input': self.x_np},

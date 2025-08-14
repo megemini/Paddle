@@ -18,7 +18,7 @@ import numpy as np
 from test_case_base import TestCaseBase
 
 import paddle
-from paddle.jit.sot.utils.paddle_api_config import add_break_graph_apis
+from paddle.jit.sot.utils.paddle_api_config import add_break_graph_function
 
 
 def ifelse_func(x, y):
@@ -44,7 +44,7 @@ def multi_output(x: paddle.Tensor):
         return 2 * m
 
 
-class TestExecutor(TestCaseBase):
+class TestBreakgraph(TestCaseBase):
     def test_simple(self):
         x = paddle.to_tensor(2)
         self.assert_results(multi_output, x)
@@ -74,7 +74,7 @@ def to_tensor_break_graph(x, y):
 
 class TestToTensor(TestCaseBase):
     def test_simple(self):
-        add_break_graph_apis([paddle.to_tensor])
+        add_break_graph_function(paddle.to_tensor)
         x = paddle.to_tensor(2)
         y = paddle.to_tensor(3)
         self.assert_results(to_tensor_break_graph, x, y)
@@ -183,6 +183,31 @@ class TestBreakGraphInLayer(TestCaseBase):
         x = paddle.rand([2, 3], dtype=paddle.float32)
         net = MyLayer()
         self.assert_results(net.forward, x)
+
+
+def dummy(*args):
+    return None
+
+
+def break_graph_call_generator_function(x):
+    return dummy(y for y in x)
+
+
+class TestBreakGraphCallGeneratorFunction(TestCaseBase):
+    def test_break_graph_when_call_generator_function(self):
+        x = paddle.rand([1], dtype=paddle.float32)
+        y = paddle.rand([1], dtype=paddle.float32)
+        self.assert_results(break_graph_call_generator_function, [x, y])
+
+
+def unary_not_break_graph(x):
+    return not x
+
+
+class TestUnaryNot(TestCaseBase):
+    def test_unary_not_break_graph(self):
+        x = paddle.to_tensor(0)
+        self.assert_results(unary_not_break_graph, x)
 
 
 if __name__ == "__main__":

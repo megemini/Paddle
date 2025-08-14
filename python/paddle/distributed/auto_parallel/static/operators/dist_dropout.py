@@ -58,12 +58,12 @@ class DistributedDropout(DistributedOperatorImplContainer):
 
         # step2: infer spmd
         rule = get_phi_spmd_rule("dropout")
-        # tensor order following order in PHI defition
+        # tensor order following order in PHI definition
         fw_results = rule.infer_forward(x_spec)
         bw_results = rule.infer_backward(x_spec, output_spec)
 
         # step3: update dist_attr
-        # tensor order following order in PHI defition
+        # tensor order following order in PHI definition
         changed = update_op_dims_mapping(
             dist_op, [x_name], [out_name], fw_results, bw_results
         )
@@ -72,10 +72,10 @@ class DistributedDropout(DistributedOperatorImplContainer):
         if changed:
             (
                 _,
-                infered_output_dims_mappings,
+                inferred_output_dims_mappings,
             ) = merge_forward_backward_dims_mapping(fw_results, bw_results)
             dist_op.dist_attr.set_output_dims_mapping(
-                mask_name, infered_output_dims_mappings[0]
+                mask_name, inferred_output_dims_mappings[0]
             )
 
         return changed
@@ -111,7 +111,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
         op_dist_attr = ctx.get_op_dist_attr_for_program(src_op)
         assert (
             op_dist_attr is not None
-        ), f"forward op [{str(src_op)}] don't have dist attribute !"
+        ), f"forward op [{src_op}] don't have dist attribute !"
 
         if is_enable_auto_rand_ctrl() and not op_dist_attr.is_recompute:
             # check validation of inputs / outputs
@@ -130,7 +130,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                 and src_op.attr("seed")
             ):
                 _logger.info(
-                    f"Auto Parallel Random Control Skipped Since manul seed is set by user: {src_op}"
+                    f"Auto Parallel Random Control Skipped Since manual seed is set by user: {src_op}"
                 )
             elif rank_id not in op_dist_attr.process_mesh.process_ids:
                 pass
@@ -144,7 +144,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                     assert (
                         pre_op.type == "seed"
                         and len(pre_op.attr("rng_name")) == 0
-                    ), f"found exception op {str(pre_op)}"
+                    ), f"found exception op {pre_op}"
 
                     # determinate rng
                     X_var = main_block._var_recursive(kwargs['X'][0])
@@ -161,7 +161,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                     pre_op._set_attr("force_cpu", True)
                 else:
                     _logger.info(
-                        f"Auto Parallel Random Control Skipped Since manul seed is set by user: {src_op}"
+                        f"Auto Parallel Random Control Skipped Since manual seed is set by user: {src_op}"
                     )
             else:
                 # determinate rng
@@ -180,7 +180,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                         ".".join(["tensor_parallel_seed", 'tmp'])
                     ),
                     dtype=paddle.int32,
-                    type=core.VarDesc.VarType.LOD_TENSOR,
+                    type=core.VarDesc.VarType.DENSE_TENSOR,
                     persistable=False,
                     stop_gradient=False,
                 )

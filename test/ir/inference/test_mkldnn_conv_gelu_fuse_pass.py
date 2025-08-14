@@ -23,7 +23,7 @@ from program_config import ProgramConfig, TensorConfig
 import paddle
 
 
-class TestConvGeluMkldnnFusePass(PassAutoScanTest):
+class TestConvGeluOnednnFusePass(PassAutoScanTest):
     def is_program_valid(self, program_config: ProgramConfig) -> bool:
         return True
 
@@ -95,12 +95,12 @@ class TestConvGeluMkldnnFusePass(PassAutoScanTest):
         return program_config
 
     def sample_predictor_configs(self, program_config):
-        config = self.create_inference_config(use_mkldnn=True)
+        config = self.create_inference_config(use_onednn=True)
         yield config, ["fused_conv2d"], (1e-5, 1e-5)
 
     def test(self):
         self.run_and_statis(
-            quant=False, passes=["conv_activation_mkldnn_fuse_pass"]
+            quant=False, passes=["conv_activation_onednn_fuse_pass"]
         )
 
 

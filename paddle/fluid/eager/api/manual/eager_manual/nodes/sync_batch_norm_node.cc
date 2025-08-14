@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_functions.h"
 #include "paddle/fluid/eager/api/manual/eager_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
@@ -21,13 +22,14 @@
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/imperative/tracer.h"
 #include "paddle/phi/api/all.h"
-#include "paddle/phi/api/backward/backward_api.h"
-#include "paddle/phi/api/backward/sparse_bw_api.h"
+#include "paddle/phi/api/backward/backward_api_base.h"
+#include "paddle/phi/api/backward/sparse_backward_api_base.h"
 #include "paddle/phi/api/include/sparse_api.h"
 #include "paddle/phi/api/lib/api_custom_impl.h"
-#include "paddle/phi/core/flags.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
-PHI_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_bool(check_cuda_error);
 
 paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
 SyncBatchNormGradNode::operator()(
@@ -37,6 +39,20 @@ SyncBatchNormGradNode::operator()(
     bool is_new_grad) {
   VLOG(3) << "Running AD API GRAD: "
           << "sync_batch_norm_grad";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("SyncBatchNormGradNode begin");
+  }
+  // This 'Local_XXXGradNode' record event is different with
+  // 'Global_XXXGradNode' event.
+  // * 'Local_XXXGradNode' will only cover execution time of this function.
+  // * 'Global_XXXGradNode' will not only cover execution time of this function,
+  // but also include gradient
+  //    accumulation when the output(s) of corresponding forward OP are shared
+  //    by other OP(s), which may have extra accumulation overhead than
+  //    'Local_XXXGradNode'.
+  phi::RecordEvent node_execution_inner(
+      "Local_SyncBatchNormGradNode", phi::TracerEventType::OperatorInner, 1);
+
   // Fill Zero For GradIn Tensors
 
   // Apply Gradient Hooks
@@ -163,28 +179,30 @@ SyncBatchNormGradNode::operator()(
 
   auto& x_grad = returns[0][0];
   egr::AutogradMeta* x_grad_autograd_meta =
-      returns[0][0].initialized() ? egr::EagerUtils::autograd_meta(&x_grad)
-                                  : nullptr;
+      returns[0][0].has_allocation() ? egr::EagerUtils::autograd_meta(&x_grad)
+                                     : nullptr;
   if (x_grad_autograd_meta) x_grad_autograd_meta->SetStopGradient(false);
 
   auto& scale_grad = returns[3][0];
   egr::AutogradMeta* scale_grad_autograd_meta =
-      returns[3][0].initialized() ? egr::EagerUtils::autograd_meta(&scale_grad)
-                                  : nullptr;
+      returns[3][0].has_allocation()
+          ? egr::EagerUtils::autograd_meta(&scale_grad)
+          : nullptr;
   if (scale_grad_autograd_meta)
     scale_grad_autograd_meta->SetStopGradient(false);
 
   auto& bias_grad = returns[4][0];
   egr::AutogradMeta* bias_grad_autograd_meta =
-      returns[4][0].initialized() ? egr::EagerUtils::autograd_meta(&bias_grad)
-                                  : nullptr;
+      returns[4][0].has_allocation()
+          ? egr::EagerUtils::autograd_meta(&bias_grad)
+          : nullptr;
   if (bias_grad_autograd_meta) bias_grad_autograd_meta->SetStopGradient(false);
 
   // Create Grad Node
   if (trace_backward) {
-    PADDLE_THROW(phi::errors::Unavailable(
-        "The Op sync_batch_norm_grad doesn't have any grad"
-        "op. If you don't intend calculating higher order"
+    PADDLE_THROW(common::errors::Unavailable(
+        "The Op sync_batch_norm_grad doesn't have any grad "
+        "op. If you don't intend calculating higher order "
         "derivatives, please set `create_graph`to False."));
   }
   VLOG(4) << "Finish AD API GRAD: sync_batch_norm_grad";
@@ -242,6 +260,12 @@ SyncBatchNormGradNode::operator()(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }
 
+  if (HasNodePostHook()) {
+    returns = ApplyNodePostHooks(returns, hooked_grads);
+  }
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("SyncBatchNormGradNode finish");
+  }
   // Return
   if (NeedComplexToRealConversion()) HandleComplexGradToRealGrad(&returns);
   return returns;
@@ -256,6 +280,20 @@ SyncBatchNormGradNode::operator()(
     bool is_new_grad) {
   VLOG(3) << "Running AD API GRAD: "
           << "sync_batch_norm_grad";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("sparse::SyncBatchNormGradNode begin");
+  }
+  // This 'Local_XXXGradNode' record event is different with
+  // 'Global_XXXGradNode' event.
+  // * 'Local_XXXGradNode' will only cover execution time of this function.
+  // * 'Global_XXXGradNode' will not only cover execution time of this function,
+  // but also include gradient
+  //    accumulation when the output(s) of corresponding forward OP are shared
+  //    by other OP(s), which may have extra accumulation overhead than
+  //    'Local_XXXGradNode'.
+  phi::RecordEvent node_execution_inner(
+      "Local_SyncBatchNormGradNode", phi::TracerEventType::OperatorInner, 1);
+
   // Fill Zero For GradIn Tensors
 
   // Apply Gradient Hooks
@@ -382,28 +420,30 @@ SyncBatchNormGradNode::operator()(
 
   auto& x_grad = returns[0][0];
   egr::AutogradMeta* x_grad_autograd_meta =
-      returns[0][0].initialized() ? egr::EagerUtils::autograd_meta(&x_grad)
-                                  : nullptr;
+      returns[0][0].has_allocation() ? egr::EagerUtils::autograd_meta(&x_grad)
+                                     : nullptr;
   if (x_grad_autograd_meta) x_grad_autograd_meta->SetStopGradient(false);
 
   auto& scale_grad = returns[3][0];
   egr::AutogradMeta* scale_grad_autograd_meta =
-      returns[3][0].initialized() ? egr::EagerUtils::autograd_meta(&scale_grad)
-                                  : nullptr;
+      returns[3][0].has_allocation()
+          ? egr::EagerUtils::autograd_meta(&scale_grad)
+          : nullptr;
   if (scale_grad_autograd_meta)
     scale_grad_autograd_meta->SetStopGradient(false);
 
   auto& bias_grad = returns[4][0];
   egr::AutogradMeta* bias_grad_autograd_meta =
-      returns[4][0].initialized() ? egr::EagerUtils::autograd_meta(&bias_grad)
-                                  : nullptr;
+      returns[4][0].has_allocation()
+          ? egr::EagerUtils::autograd_meta(&bias_grad)
+          : nullptr;
   if (bias_grad_autograd_meta) bias_grad_autograd_meta->SetStopGradient(false);
 
   // Create Grad Node
   if (trace_backward) {
-    PADDLE_THROW(phi::errors::Unavailable(
-        "The Op sync_batch_norm_grad doesn't have any grad"
-        "op. If you don't intend calculating higher order"
+    PADDLE_THROW(common::errors::Unavailable(
+        "The Op sync_batch_norm_grad doesn't have any grad "
+        "op. If you don't intend calculating higher order "
         "derivatives, please set `create_graph`to False."));
   }
   VLOG(4) << "Finish AD API GRAD: sync_batch_norm_grad";
@@ -462,6 +502,12 @@ SyncBatchNormGradNode::operator()(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }
 
+  if (HasNodePostHook()) {
+    returns = ApplyNodePostHooks(returns, hooked_grads);
+  }
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("sparse::SyncBatchNormGradNode finish");
+  }
   // Return
   if (NeedComplexToRealConversion()) HandleComplexGradToRealGrad(&returns);
   return returns;

@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
+import paddle
 from paddle.common_ops_import import check_variable_and_dtype
 from paddle.distributed.auto_parallel.static.cost.comm_op_cost import (
-    AllreduceSumOpCost,
+    AllReduceOpCost,
     IdentityOpCost,
 )
 from paddle.distributed.fleet.meta_optimizers.common import OP_ROLE_KEY, OpRole
@@ -81,14 +82,14 @@ class DistributedEmbedding(DistributedOperatorImplContainer):
 
         # step2: infer spmd
         rule = get_phi_spmd_rule("embedding")
-        # tensor order following order in PHI defition
+        # tensor order following order in PHI definition
         fw_results = rule.infer_forward(x_spec, w_spec, padding_idx, is_sparse)
         bw_results = rule.infer_backward(
             x_spec, w_spec, output_spec, padding_idx, is_sparse
         )
 
         # step3: update dist_attr
-        # tensor order following order in PHI defition
+        # tensor order following order in PHI definition
         changed = update_op_dims_mapping(
             dist_op, [x_name, w_name], [out_name], fw_results, bw_results
         )
@@ -130,9 +131,7 @@ register_distributed_operator_impl_container(
 def adopt_lookup_table_v1(ctx, main_block, src_op, Ids_var):
     assert (
         len(Ids_var.shape) == 3
-    ), "input Ids to lookup_table should have 3 dimensions but got [{}] with shape [{}]".format(
-        Ids_var.name, Ids_var.shape
-    )
+    ), f"input Ids to lookup_table should have 3 dimensions but got [{Ids_var.name}] with shape [{Ids_var.shape}]"
     if not Ids_var.stop_gradient:
         raise NotImplementedError(
             'Requiring the gradient of Ids of lookup_table(v1) dist op is not currently supported. Please open an issue with details on your use case so that we can prioritize adding this (for instance, adversarial training for language model).'
@@ -145,19 +144,19 @@ def adopt_lookup_table_v1(ctx, main_block, src_op, Ids_var):
         ),
         dtype=Ids_var.dtype,
         shape=target_shape,
-        type=core.VarDesc.VarType.LOD_TENSOR,
+        type=core.VarDesc.VarType.DENSE_TENSOR,
         persistable=False,
         stop_gradient=True,
     )
 
-    target_shape = [0] + list(Ids_var.shape[:-1])
+    target_shape = [0, *list(Ids_var.shape[:-1])]
     xshape_var = main_block.create_var(
         name=unique_name.generate_with_ignorable_key(
             ".".join(["dist_Xshape", 'tmp'])
         ),
         dtype=Ids_var.dtype,
         shape=target_shape,
-        type=core.VarDesc.VarType.LOD_TENSOR,
+        type=core.VarDesc.VarType.DENSE_TENSOR,
         persistable=False,
         stop_gradient=True,
     )
@@ -186,7 +185,7 @@ def adopt_lookup_table_v1(ctx, main_block, src_op, Ids_var):
     set_var_dist_attr(
         ctx,
         xshape_var,
-        [-1] + list(Ids_var_dist_attr.dims_mapping),
+        [-1, *list(Ids_var_dist_attr.dims_mapping)],
         Ids_var_dist_attr.process_mesh,
         chunk_id=Ids_var_dist_attr.chunk_id,
     )
@@ -209,7 +208,7 @@ def adopt_lookup_table_v1(ctx, main_block, src_op, Ids_var):
         intermediate_var_0.name, Ids_var_dist_attr.dims_mapping
     )
     new_op_dist_attr.set_output_dims_mapping(
-        xshape_var.name, [-1] + list(Ids_var_dist_attr.dims_mapping)
+        xshape_var.name, [-1, *list(Ids_var_dist_attr.dims_mapping)]
     )
     ctx.set_op_dist_attr_for_program(reshape_op, new_op_dist_attr)
 
@@ -250,8 +249,8 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
         )[0]
         attrs = {"use_calc_stream": True, "use_model_parallel": True}
         var_names = serial_op.output("Out")
-        c_allreduce_sum_desc_mapping = build_comm_desc_from_dist_op(
-            "c_allreduce_sum",
+        all_reduce_sum_desc_mapping = build_comm_desc_from_dist_op(
+            "all_reduce",
             dist_op,
             ctx,
             var_names,
@@ -260,10 +259,10 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
         )
 
         comm_op_cost_list = build_comm_costs_from_descs(
-            AllreduceSumOpCost,
+            AllReduceOpCost,
             ctx,
             processes,
-            c_allreduce_sum_desc_mapping,
+            all_reduce_sum_desc_mapping,
             cluster,
         )
 
@@ -424,7 +423,7 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
         op_dist_attr = ctx.get_op_dist_attr_for_program(src_op)
         assert (
             op_dist_attr is not None
-        ), f"forward op [{str(src_op)}] don't have dist attribute !"
+        ), f"forward op [{src_op}] don't have dist attribute !"
 
         # check validation of inputs / outputs
         assert 'Ids' in kwargs, "input [{}] is not given".format('Ids')
@@ -461,9 +460,7 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
         )[0]
         assert (
             embedding_row_dim_mapping >= 0
-        ), "row_parallel_embedding's row should be divided by a specific mesh axis, but got [{}]".format(
-            embedding_row_dim_mapping
-        )
+        ), f"row_parallel_embedding's row should be divided by a specific mesh axis, but got [{embedding_row_dim_mapping}]"
         process_mesh_shape = op_dist_attr.process_mesh.shape
         process_mesh_group = op_dist_attr.process_mesh.process_ids
 
@@ -473,7 +470,7 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
                 ctx, op_dist_attr.process_mesh, rank_id
             )
 
-        # A generalized method to calculate embedding offset using cartisian product
+        # A generalized method to calculate embedding offset using cartesian product
         relative_idx = _get_idx_in_axis(
             process_mesh_group,
             process_mesh_shape,
@@ -514,23 +511,23 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
         naive_copy_op_dist_attr_for_program(c_embedding_op, src_op, ctx)
 
         # use_model_parallel
-        c_allreduce_sum_op = main_block.append_op(
-            type='c_allreduce_sum',
-            inputs={'X': [Out_var]},
-            outputs={'Out': [Out_var]},
+        all_reduce_sum_op = main_block.append_op(
+            type='all_reduce',
+            inputs={'x': [Out_var]},
+            outputs={'out': [Out_var]},
             attrs={
                 'ring_id': group.id,
-                'use_calc_stream': True,
+                'reduce_type': paddle.distributed.ReduceOp.SUM,
                 'use_model_parallel': True,
                 OP_ROLE_KEY: src_op.attr('op_role'),
             },
         )
-        c_allreduce_sum_op._set_attr(
+        all_reduce_sum_op._set_attr(
             'op_namescope', '/' + ParallelMode.TensorParallel
         )
         # allreduce
         set_comm_op_dist_attr_for_program(
-            c_allreduce_sum_op,
+            all_reduce_sum_op,
             op_dist_attr.process_mesh,
             out_var_dist_attr,
             ctx,
@@ -547,7 +544,7 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
             process_mesh = param_dist_attr.process_mesh
             dim_mapping = param_dist_attr.dims_mapping
 
-            # NOTE all not splitted axis should be presented in mesh
+            # NOTE all not split axis should be presented in mesh
             for axis, size in enumerate(process_mesh.shape):
                 if size <= 1 or axis in dim_mapping:
                     pass
@@ -560,14 +557,13 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
                     )
                     sync_group = new_process_group(group_ranks)
 
-                    startup_block.append_op(
-                        type='c_broadcast',
-                        inputs={'X': param},
-                        outputs={'Out': param},
+                    broadcast_op = startup_block.append_op(
+                        type='broadcast',
+                        inputs={'x': param},
+                        outputs={'out': param},
                         attrs={
                             'ring_id': sync_group.id,
                             'root': 0,
-                            'use_calc_stream': True,
                             OP_ROLE_KEY: OpRole.Forward,
                         },
                     )
@@ -582,7 +578,7 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
         dist_attr = ctx.get_op_dist_attr_for_program(backward_op)
         assert (
             dist_attr is not None
-        ), f"backward op [{str(backward_op)}] don't have dist attribute !"
+        ), f"backward op [{backward_op}] don't have dist attribute !"
 
         # FIXME (JZ-LIANG) Remove this hack to support any op mesh group for Pipeline Parallelism
         if rank_id not in dist_attr.process_mesh.process_ids:
@@ -626,13 +622,11 @@ class DistributedEmbeddingImpl(DistributedOperatorImpl):
         )[0]
         assert (
             embedding_row_dim_mapping >= 0
-        ), "row_parallel_embedding's row should be divided by a specific mesh axis, but got [{}]".format(
-            embedding_row_dim_mapping
-        )
+        ), f"row_parallel_embedding's row should be divided by a specific mesh axis, but got [{embedding_row_dim_mapping}]"
         process_mesh_shape = dist_attr.process_mesh.shape
         process_mesh_group = dist_attr.process_mesh.process_ids
 
-        # A generalized method to calculate embedding offset using cartisian product
+        # A generalized method to calculate embedding offset using cartesian product
         relative_idx = _get_idx_in_axis(
             process_mesh_group,
             process_mesh_shape,

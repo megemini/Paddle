@@ -42,8 +42,8 @@ class TestFcBf16MklDNNOp(OpTest):
 
     def setUp(self):
         self.op_type = "fc"
-        self.use_mkldnn = True
-        self.mkldnn_data_type = "bfloat16"
+        self.use_onednn = True
+        self.onednn_data_type = "bfloat16"
         self.force_fp32_output = False
         self.generate_data()
 
@@ -60,14 +60,14 @@ class TestFcBf16MklDNNOp(OpTest):
         }
 
         self.attrs = {
-            'use_mkldnn': self.use_mkldnn,
+            'use_onednn': self.use_onednn,
             'force_fp32_output': self.force_fp32_output,
         }
 
         self.outputs = {'Out': self.output}
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     def test_check_grad_normal(self):
         pass
@@ -76,7 +76,7 @@ class TestFcBf16MklDNNOp(OpTest):
         pass
 
 
-class TestFCMKLDNNOp1(TestFcBf16MklDNNOp):
+class TestFCONEDNNOp1(TestFcBf16MklDNNOp):
     def generate_data(self):
         self.matrix = MatrixGenerate(2, 15, 48, 2, 2)
         self.bias = np.random.random(48).astype(np.float32)

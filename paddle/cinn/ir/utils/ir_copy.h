@@ -19,6 +19,7 @@
 
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/ir/lowered_func.h"
+#include "paddle/cinn/ir/stmt.h"
 
 namespace cinn {
 
@@ -28,15 +29,22 @@ class ModuleExpr;
 namespace ir_utils {
 
 //! Shallow copy an expression.
-Expr IRCopy(Expr x);
+Expr IRCopy(const Expr& x, bool copy_buffer_node = true);
 
-std::vector<Expr> IRCopy(const std::vector<Expr>& x);
+std::vector<Expr> IRCopy(const std::vector<Expr>& x,
+                         bool copy_buffer_node = true);
 
-ir::ModuleExpr IRCopy(const ir::ModuleExpr& x);
+std::vector<stmt::StmtRef> IRCopy(const std::vector<stmt::StmtRef>& x,
+                                  bool copy_buffer_node = true);
+stmt::BlockRef IRCopy(const stmt::BlockRef& x, bool copy_buffer_node = true);
+ir::ModuleExpr IRCopy(const ir::ModuleExpr& x, bool copy_buffer_node = true);
 
-ir::LoweredFunc IRCopy(const ir::LoweredFunc& x);
+ir::Module IRCopy(const Module& m, bool copy_buffer_node = true);
 
-std::vector<ir::LoweredFunc> IRCopy(const std::vector<ir::LoweredFunc>& x);
+ir::LoweredFunc IRCopy(const ir::LoweredFunc& x, bool copy_buffer_node = true);
+
+std::vector<ir::LoweredFunc> IRCopy(const std::vector<ir::LoweredFunc>& x,
+                                    bool copy_buffer_node = true);
 
 }  // namespace ir_utils
 }  // namespace ir

@@ -70,9 +70,7 @@ class TestGraphSampleNeighbors(unittest.TestCase):
                 or out_count[i] == len(self.dst_src_dict[self.nodes[i]])
             )
             # Ensure no repetitive sample neighbors.
-            self.assertTrue(
-                neighbors.shape[0] == paddle.unique(neighbors).shape[0]
-            )
+            self.assertTrue(neighbors.shape[0] == np.unique(neighbors).shape[0])
             # Ensure the correct sample neighbors.
             in_neighbors = np.isin(
                 neighbors.numpy(), self.dst_src_dict[self.nodes[i]]
@@ -110,7 +108,7 @@ class TestGraphSampleNeighbors(unittest.TestCase):
                 )
                 # Ensure no repetitive sample neighbors.
                 self.assertTrue(
-                    neighbors.shape[0] == paddle.unique(neighbors).shape[0]
+                    neighbors.shape[0] == np.unique(neighbors).shape[0]
                 )
                 # Ensure the correct sample neighbors.
                 in_neighbors = np.isin(
@@ -311,9 +309,7 @@ class TestGeometricGraphSampleNeighbors(unittest.TestCase):
                 or out_count[i] == len(self.dst_src_dict[self.nodes[i]])
             )
             # Ensure no repetitive sample neighbors.
-            self.assertTrue(
-                neighbors.shape[0] == paddle.unique(neighbors).shape[0]
-            )
+            self.assertTrue(neighbors.shape[0] == np.unique(neighbors).shape[0])
             # Ensure the correct sample neighbors.
             in_neighbors = np.isin(
                 neighbors.numpy(), self.dst_src_dict[self.nodes[i]]
@@ -350,7 +346,7 @@ class TestGeometricGraphSampleNeighbors(unittest.TestCase):
                 )
                 # Ensure no repetitive sample neighbors.
                 self.assertTrue(
-                    neighbors.shape[0] == paddle.unique(neighbors).shape[0]
+                    neighbors.shape[0] == np.unique(neighbors).shape[0]
                 )
                 # Ensure the correct sample neighbors.
                 in_neighbors = np.isin(

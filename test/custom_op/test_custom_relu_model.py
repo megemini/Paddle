@@ -26,9 +26,7 @@ from paddle.utils.cpp_extension.extension_utils import run_cmd
 
 # Because Windows don't use docker, the shared lib already exists in the
 # cache dir, it will not be compiled again unless the shared lib is removed.
-file = '{}\\custom_relu_for_model_jit\\custom_relu_for_model_jit.pyd'.format(
-    get_build_directory()
-)
+file = f'{get_build_directory()}\\custom_relu_for_model_jit\\custom_relu_for_model_jit.pyd'
 if os.name == 'nt' and os.path.isfile(file):
     cmd = f'del {file}'
     run_cmd(cmd, True)
@@ -53,7 +51,7 @@ custom_module = load(
 
 class Net(nn.Layer):
     """
-    A simple exmaple for Regression Model.
+    A simple example for Regression Model.
     """
 
     def __init__(self, in_dim, out_dim, use_custom_op=False):
@@ -102,7 +100,7 @@ class TestDygraphModel(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.model_save_dir = os.path.join(self.temp_dir.name, 'infer_model')
         self.model_path_template = os.path.join(
-            self.model_save_dir, 'custom_relu_dygaph_model_{}.pdparams'
+            self.model_save_dir, 'custom_relu_dygraph_model_{}.pdparams'
         )
         self.model_dy2stat_path = os.path.join(
             self.model_save_dir, 'infer_model/custom_relu_model_dy2sta'
@@ -142,7 +140,9 @@ class TestDygraphModel(unittest.TestCase):
 
         net = Net(self.in_dim, self.out_dim, use_custom_op)
         if dy2stat:
-            net = paddle.jit.to_static(net, input_spec=[self.x_spec])
+            net = paddle.jit.to_static(
+                net, input_spec=[self.x_spec], full_graph=True
+            )
         mse_loss = paddle.nn.MSELoss()
         sgd = paddle.optimizer.SGD(
             learning_rate=0.1, parameters=net.parameters()
@@ -250,72 +250,74 @@ class TestStaticModel(unittest.TestCase):
         # set device
         paddle.set_device(device)
 
-        with paddle.static.scope_guard(paddle.static.Scope()):
-            with paddle.static.program_guard(
+        with (
+            paddle.static.scope_guard(paddle.static.Scope()),
+            paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
-            ):
-                x = paddle.static.data(
-                    shape=[None, self.in_dim], name='x', dtype='float32'
-                )
-                y = paddle.static.data(
-                    shape=[None, 1], name='y', dtype='float32'
-                )
+            ),
+        ):
+            x = paddle.static.data(
+                shape=[None, self.in_dim], name='x', dtype='float32'
+            )
+            y = paddle.static.data(shape=[None, 1], name='y', dtype='float32')
 
-                net = Net(self.in_dim, self.out_dim, use_custom_op)
-                out = net(x)
+            net = Net(self.in_dim, self.out_dim, use_custom_op)
+            out = net(x)
 
-                loss = nn.functional.mse_loss(out, y)
-                sgd = paddle.optimizer.SGD(learning_rate=0.01)
-                sgd.minimize(loss)
+            loss = nn.functional.mse_loss(out, y)
+            sgd = paddle.optimizer.SGD(learning_rate=0.01)
+            sgd.minimize(loss)
 
-                exe = exe = paddle.static.Executor()
-                exe.run(paddle.static.default_startup_program())
+            exe = exe = paddle.static.Executor()
+            exe.run(paddle.static.default_startup_program())
 
-                main_program = paddle.static.default_main_program()
+            main_program = paddle.static.default_main_program()
 
-                for batch_id in range(self.batch_num):
-                    x_data = self.datas[batch_id]
-                    y_data = self.labels[batch_id]
+            for batch_id in range(self.batch_num):
+                x_data = self.datas[batch_id]
+                y_data = self.labels[batch_id]
 
-                    res = exe.run(
-                        main_program,
-                        feed={'x': x_data, 'y': y_data},
-                        fetch_list=[out],
-                    )
-
-                # save model
-                paddle.static.save_inference_model(
-                    self.model_path_template.format(use_custom_op),
-                    [x],
-                    [out],
-                    exe,
+                res = exe.run(
+                    main_program,
+                    feed={'x': x_data, 'y': y_data},
+                    fetch_list=[out],
                 )
 
-                return res[0]
+            # save model
+            paddle.static.save_inference_model(
+                self.model_path_template.format(use_custom_op),
+                [x],
+                [out],
+                exe,
+            )
+
+            return res[0]
 
     def eval_model(self, device, use_custom_op=False):
         paddle.set_device(device)
 
-        with paddle.static.scope_guard(paddle.static.Scope()):
-            with paddle.static.program_guard(paddle.static.Program()):
-                exe = paddle.static.Executor()
+        with (
+            paddle.static.scope_guard(paddle.static.Scope()),
+            paddle.static.program_guard(paddle.static.Program()),
+        ):
+            exe = paddle.static.Executor()
 
-                [
-                    inference_program,
-                    feed_target_names,
-                    fetch_targets,
-                ] = paddle.static.load_inference_model(
-                    self.model_path_template.format(use_custom_op), exe
-                )
+            [
+                inference_program,
+                feed_target_names,
+                fetch_targets,
+            ] = paddle.static.load_inference_model(
+                self.model_path_template.format(use_custom_op), exe
+            )
 
-                x_data = self.datas[0]
-                results = exe.run(
-                    inference_program,
-                    feed={feed_target_names[0]: x_data},
-                    fetch_list=fetch_targets,
-                )
+            x_data = self.datas[0]
+            results = exe.run(
+                inference_program,
+                feed={feed_target_names[0]: x_data},
+                fetch_list=fetch_targets,
+            )
 
-                return results[0]
+            return results[0]
 
 
 if __name__ == '__main__':

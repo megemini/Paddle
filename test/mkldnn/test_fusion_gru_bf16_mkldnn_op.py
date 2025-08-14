@@ -25,14 +25,16 @@ from paddle.base import core
 @unittest.skipIf(
     not core.supports_bfloat16(), "place does not support BF16 evaluation"
 )
-class TestFusionGRUBF16MKLDNNOp(OpTest):
+class TestFusionGRUBF16ONEDNNOp(OpTest):
     def set_confs(self):
         pass
 
     def test_check_output(self):
         for use_seq in {True, False}:
             self.attrs['use_seq'] = use_seq
-            self.check_output(check_dygraph=False)
+            self.check_output(
+                check_dygraph=False, check_pir_onednn=self.check_pir_onednn
+            )
 
     def setUp(self):
         self.op_type = "fusion_gru"
@@ -41,14 +43,14 @@ class TestFusionGRUBF16MKLDNNOp(OpTest):
         self.D = 5
         self.is_reverse = False
         self.with_h0 = False
-        self.use_mkldnn = True
+        self.use_onednn = True
         self._cpu_only = True
         self.with_bias = True
         self.act_state = 'tanh'
         self.act_gate = 'sigmoid'
         self.origin_mode = False
-        self.use_mkldnn = True
-        self.mkldnn_data_type = "bfloat16"
+        self.use_onednn = True
+        self.onednn_data_type = "bfloat16"
         self.force_fp32_output = False
         self.weights_dtype = 'fp32'
         self.set_confs()
@@ -57,7 +59,7 @@ class TestFusionGRUBF16MKLDNNOp(OpTest):
         N = len(self.lod[0])
 
         # fp32 X input for reference implementation and
-        # corressponding bf16 data as input to GRU oneDNN bf16 kernel
+        # corresponding bf16 data as input to GRU oneDNN bf16 kernel
         x_fp32 = np.random.rand(T, self.M).astype('float32')
         x_bf16 = convert_float_to_uint16(x_fp32)
 
@@ -127,22 +129,22 @@ class TestFusionGRUBF16MKLDNNOp(OpTest):
             'is_reverse': self.is_reverse,
             'origin_mode': self.origin_mode,
             'force_fp32_output': self.force_fp32_output,
-            'use_mkldnn': self.use_mkldnn,
-            'mkldnn_data_type': self.mkldnn_data_type,
+            'use_onednn': self.use_onednn,
+            'mkldnn_data_type': self.onednn_data_type,
         }
 
 
-class TestFusionGRUINT8MKLDNNOp2(TestFusionGRUBF16MKLDNNOp):
+class TestFusionGRUINT8ONEDNNOp2(TestFusionGRUBF16ONEDNNOp):
     def set_confs(self):
         self.origin_mode = False
 
 
-class TestFusionGRUINT8MKLDNNOp3(TestFusionGRUBF16MKLDNNOp):
+class TestFusionGRUINT8ONEDNNOp3(TestFusionGRUBF16ONEDNNOp):
     def set_confs(self):
         self.with_bias = False
 
 
-class TestFusionGRUINT8MKLDNNBF16WeightsOp(TestFusionGRUBF16MKLDNNOp):
+class TestFusionGRUINT8ONEDNNBF16WeightsOp(TestFusionGRUBF16ONEDNNOp):
     def set_confs(self):
         self.weights_dtype = 'bf16'
 

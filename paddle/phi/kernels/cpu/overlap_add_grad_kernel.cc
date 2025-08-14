@@ -41,7 +41,7 @@ void OverlapAddGradKernel(const Context& dev_ctx,
                   : out_grad.dims()[static_cast<int>(out_grad_rank) - 1]);
 
   // When the number of input dims is larger than 2, it needs to copy
-  // from x to resize input into 2d and output into 3d. Morevoer, output
+  // from x to resize input into 2d and output into 3d. Moreover, output
   // dims will be restored at the last step.
   DenseTensor out_grad_(out_grad.type());
   out_grad_ = out_grad;
@@ -137,6 +137,7 @@ void OverlapAddGradKernel(const Context& dev_ctx,
   // Restore output dims when the number of dims is larger than 2.
   if (out_grad_rank > 2) {
     std::vector<int64_t> restored_x_grad_shape;
+    restored_x_grad_shape.reserve(preserved_dims.size());
     for (int i = 0; i < preserved_dims.size(); i++) {
       restored_x_grad_shape.push_back(preserved_dims[i]);
     }

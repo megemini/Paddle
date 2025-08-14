@@ -73,14 +73,6 @@ if(WITH_MUSL)
   set(WITH_GPU OFF)
 endif()
 
-if(WITH_PSLIB)
-  add_definitions(-DPADDLE_WITH_PSLIB)
-endif()
-
-if(WITH_ARM_BRPC)
-  add_definitions(-DPADDLE_WITH_ARM_BRPC)
-endif()
-
 if(WITH_FLPS)
   add_definitions(-DPADDLE_WITH_FLPS)
 endif()
@@ -201,18 +193,6 @@ if(WITH_DISTRIBUTE)
   add_definitions(-DPADDLE_WITH_DISTRIBUTE)
 endif()
 
-if(WITH_PSCORE)
-  add_definitions(-DPADDLE_WITH_PSCORE)
-endif()
-
-if(WITH_RPC)
-  add_definitions(-DPADDLE_WITH_RPC)
-endif()
-
-if(WITH_HETERPS)
-  add_definitions(-DPADDLE_WITH_HETERPS)
-endif()
-
 if(WITH_BRPC_RDMA)
   add_definitions(-DPADDLE_WITH_BRPC_RDMA)
 endif()
@@ -227,9 +207,6 @@ endif()
 
 if(WITH_CUSTOM_DEVICE AND NOT WIN32)
   add_definitions(-DPADDLE_WITH_CUSTOM_DEVICE)
-endif()
-if(WITH_GPU_GRAPH)
-  add_definitions(-DPADDLE_WITH_GPU_GRAPH)
 endif()
 
 if(WITH_CUDNN_FRONTEND)

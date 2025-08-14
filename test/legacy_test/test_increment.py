@@ -18,12 +18,12 @@ import numpy as np
 
 import paddle
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestIncrement(unittest.TestCase):
-    @test_with_pir_api
+
     def test_api(self):
+        paddle.enable_static()
         with base.program_guard(base.Program(), base.Program()):
             input = paddle.tensor.fill_constant(
                 shape=[1], dtype='int64', value=5
@@ -41,9 +41,28 @@ class TestIncrement(unittest.TestCase):
             output = paddle.tensor.math.increment(input, value=1)
             self.assertEqual((output.numpy() == expected_result).all(), True)
 
+    def test_no_inplace_increment(self):
+        with (
+            paddle.pir_utils.IrGuard(),
+            base.program_guard(base.Program(), base.Program()),
+        ):
+            x = paddle.tensor.fill_constant(shape=[1], dtype='int64', value=1)
+            x.stop_gradient = False
+            input = paddle._pir_ops.increment(x, 1.0)
+            input = paddle._pir_ops.increment(input, 1.0)
+            input = paddle._pir_ops.increment(input, 1.0)
+            out = paddle._pir_ops.increment(input, 1.0)
+
+            dx = paddle.base.gradients(out, x)
+            exe = base.Executor(base.CPUPlace())
+            result = exe.run(fetch_list=[out, dx])
+
+            self.assertEqual(result[0], 5.0)
+            self.assertEqual(result[1], 1.0)
+
 
 class TestInplaceApiWithDataTransform(unittest.TestCase):
-    @test_with_pir_api
+
     def test_increment(self):
         if base.core.is_compiled_with_cuda():
             paddle.enable_static()
@@ -55,6 +74,16 @@ class TestInplaceApiWithDataTransform(unittest.TestCase):
             (a,) = exe.run(paddle.static.default_main_program(), fetch_list=[x])
             paddle.disable_static()
             self.assertEqual(a[0], 1)
+
+
+class TestIncrement_ZeroSize(unittest.TestCase):
+
+    def test_api(self):
+        with base.dygraph.guard():
+            input = paddle.randn(shape=[0]).astype('int64')
+            expected_result = np.random.random([0]).astype('int64')
+            output = paddle.tensor.math.increment(input, value=1)
+            self.assertEqual((output.numpy() == expected_result).all(), True)
 
 
 if __name__ == "__main__":

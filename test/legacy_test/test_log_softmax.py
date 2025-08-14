@@ -15,12 +15,11 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_device_place
 
 import paddle
 import paddle.nn.functional as F
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(10)
 
@@ -46,7 +45,9 @@ def ref_log_softmax_grad(x, axis):
 class TestLogSoftmaxOp(OpTest):
     def setUp(self):
         self.op_type = 'log_softmax'
+        self.prim_op_type = "comp"
         self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
         self.dtype = 'float64'
         self.shape = [2, 3, 4, 5]
         self.axis = -1
@@ -64,7 +65,7 @@ class TestLogSoftmaxOp(OpTest):
         pass
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
         self.check_grad(
@@ -75,7 +76,9 @@ class TestLogSoftmaxOp(OpTest):
 class TestLogSoftmaxOp_ZeroDim(TestLogSoftmaxOp):
     def setUp(self):
         self.op_type = 'log_softmax'
+        self.prim_op_type = "comp"
         self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
         self.dtype = 'float64'
 
         x = np.random.uniform(0.1, 1.0, []).astype(self.dtype)
@@ -86,7 +89,7 @@ class TestLogSoftmaxOp_ZeroDim(TestLogSoftmaxOp):
         self.attrs = {'axis': -1}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
         self.check_grad(['X'], ['Out'], check_pir=True)
@@ -107,7 +110,7 @@ class TestLogSoftmaxFP16OP(TestLogSoftmaxOp):
         self.dtype = np.float16
 
     def test_check_output(self):
-        self.check_output(atol=1e-3, check_pir=True)
+        self.check_output(atol=1e-3, check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
         self.check_grad(['X'], ['Out'], max_relative_error=1e-2, check_pir=True)
@@ -131,7 +134,9 @@ class TestLogSoftmaxAxisFP16OP(TestLogSoftmaxFP16OP):
 class TestLogSoftmaxBF16Op(OpTest):
     def setUp(self):
         self.op_type = 'log_softmax'
+        self.prim_op_type = "comp"
         self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
         self.dtype = np.uint16
         self.shape = [2, 3, 4, 5]
         self.axis = -1
@@ -146,7 +151,7 @@ class TestLogSoftmaxBF16Op(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(place, check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
@@ -169,13 +174,8 @@ class TestNNLogSoftmaxAPI(unittest.TestCase):
     def setUp(self):
         self.x_shape = [2, 3, 4, 5]
         self.x = np.random.uniform(-1.0, 1.0, self.x_shape).astype(np.float32)
-        self.place = (
-            paddle.CUDAPlace(0)
-            if paddle.base.core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
+        self.place = get_device_place()
 
-    @test_with_pir_api
     def check_api(self, axis=-1):
         ref_out = np.apply_along_axis(ref_log_softmax, axis, self.x)
 
@@ -188,14 +188,13 @@ class TestNNLogSoftmaxAPI(unittest.TestCase):
             out = exe.run(feed={'x': self.x}, fetch_list=[y])
         np.testing.assert_allclose(out[0], ref_out, rtol=1e-05)
 
-        # test dygrapg api
+        # test dygraph api
         paddle.disable_static()
         x = paddle.to_tensor(self.x)
         y = logsoftmax(x)
         np.testing.assert_allclose(y.numpy(), ref_out, rtol=1e-05)
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_check_api(self):
         for axis in [-1, 1]:
             self.check_api(axis)
@@ -205,13 +204,8 @@ class TestNNFunctionalLogSoftmaxAPI(unittest.TestCase):
     def setUp(self):
         self.x_shape = [2, 3, 4, 5]
         self.x = np.random.uniform(-1, 1, self.x_shape).astype(np.float32)
-        self.place = (
-            paddle.CUDAPlace(0)
-            if paddle.base.core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
+        self.place = get_device_place()
 
-    @test_with_pir_api
     def check_api(self, axis=-1, dtype=None):
         x = self.x.copy()
         if dtype is not None:
@@ -230,7 +224,6 @@ class TestNNFunctionalLogSoftmaxAPI(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), ref_out, rtol=1e-05)
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_check_api(self):
         for axis in [-1, 1]:
             self.check_api(axis)
@@ -243,6 +236,51 @@ class TestNNFunctionalLogSoftmaxAPI(unittest.TestCase):
 
             x = paddle.static.data(name='X2', shape=[100], dtype='float32')
             self.assertRaises(TypeError, F.log_softmax, x, dtype='int32')
+
+
+def _check_cuda_memory_20GB():
+    if not hasattr(paddle.device.cuda, 'get_device_properties'):
+        return False
+    gpu_info = paddle.device.cuda.get_device_properties(0)
+    return gpu_info.total_memory >= 20 * (1024**3)  # 20GB
+
+
+@unittest.skipIf(
+    not core.is_compiled_with_cuda() or not _check_cuda_memory_20GB(),
+    "Need CUDA support and at least 20GB GPU memory",
+)
+class TestLogSoftmaxLargeOp(unittest.TestCase):
+    def test_check_run(self):
+        x = paddle.randn([4, 4096, 131072 + 2048])  # 8GB+4*4096*2048
+        paddle.nn.functional.log_softmax(x, axis=-1)
+
+
+class TestLogSoftmaxOp_ZeroSize(OpTest):
+    def setUp(self):
+        self.op_type = 'log_softmax'
+        self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
+        self.dtype = 'float64'
+        self.shape = [2, 0, 4, 5]
+        self.axis = -1
+        self.set_attrs()
+
+        x = np.random.uniform(0.1, 1.0, self.shape).astype(self.dtype)
+        # shape is same as x, size is 0.
+        out = np.random.random(self.shape).astype(self.dtype)
+
+        self.inputs = {'X': x}
+        self.outputs = {'Out': out}
+        self.attrs = {'axis': self.axis}
+
+    def set_attrs(self):
+        pass
+
+    def test_check_output(self):
+        self.check_output(check_pir=True)
+
+    def test_check_grad(self):
+        self.check_grad(['X'], ['Out'], check_pir=True)
 
 
 if __name__ == "__main__":

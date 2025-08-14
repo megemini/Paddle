@@ -14,8 +14,9 @@ limitations under the License. */
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/complex.h"
 #include "paddle/phi/common/float16.h"
+#include "paddle/phi/common/float8_e4m3fn.h"
+#include "paddle/phi/common/float8_e5m2.h"
 #include "paddle/phi/kernels/funcs/eigen/eigen_function.h"
-
 namespace phi {
 namespace funcs {
 
@@ -72,7 +73,9 @@ struct EigenBroadcastGrad<Eigen::GpuDevice, T, Rank> {
   template struct FUNCTOR<Eigen::GpuDevice, T, 3>; \
   template struct FUNCTOR<Eigen::GpuDevice, T, 4>; \
   template struct FUNCTOR<Eigen::GpuDevice, T, 5>; \
-  template struct FUNCTOR<Eigen::GpuDevice, T, 6>
+  template struct FUNCTOR<Eigen::GpuDevice, T, 6>; \
+  template struct FUNCTOR<Eigen::GpuDevice, T, 7>; \
+  template struct FUNCTOR<Eigen::GpuDevice, T, 8>
 INSTANTIATION(EigenBroadcast, bool);
 INSTANTIATION(EigenBroadcast, dtype::float16);
 INSTANTIATION(EigenBroadcast, dtype::bfloat16);
@@ -91,6 +94,11 @@ INSTANTIATION(EigenBroadcastGrad, dtype::complex<float>);
 INSTANTIATION(EigenBroadcastGrad, dtype::complex<double>);
 INSTANTIATION(EigenBroadcastGrad, int);
 INSTANTIATION(EigenBroadcastGrad, int64_t);
+INSTANTIATION(EigenBroadcastGrad, int8_t);
+INSTANTIATION(EigenBroadcastGrad, uint8_t);
+INSTANTIATION(EigenBroadcastGrad, int16_t);
+INSTANTIATION(EigenBroadcastGrad, phi::dtype::float8_e4m3fn);
+INSTANTIATION(EigenBroadcastGrad, phi::dtype::float8_e5m2);
 template struct EigenBroadcastGrad<Eigen::GpuDevice, float, 0>;
 template struct EigenBroadcastGrad<Eigen::GpuDevice, dtype::float16, 0>;
 template struct EigenBroadcastGrad<Eigen::GpuDevice, double, 0>;

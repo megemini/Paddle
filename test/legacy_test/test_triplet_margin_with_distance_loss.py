@@ -15,6 +15,7 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 
@@ -192,6 +193,7 @@ def calc_triplet_margin_distance_loss(
 
 
 class TestTripletMarginWithDistanceLossnew(unittest.TestCase):
+
     def test_TripletMarginDistanceLoss(self):
         shape = (5, 5)
         np.random.seed(1234)
@@ -199,9 +201,7 @@ class TestTripletMarginWithDistanceLossnew(unittest.TestCase):
         positive = np.random.uniform(0, 2, size=shape).astype(np.float64)
         negative = np.random.uniform(0, 2, size=shape).astype(np.float64)
 
-        places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            places.append(paddle.CUDAPlace(0))
+        places = get_places()
         reductions = ['sum', 'mean', 'none']
         for place in places:
             for reduction in reductions:
@@ -269,7 +269,7 @@ class TestTripletMarginWithDistanceLossError(unittest.TestCase):
         self.assertRaises(
             ValueError,
             paddle.nn.TripletMarginWithDistanceLoss,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         input = paddle.to_tensor([[0.1, 0.3]], dtype='float32')
         positive = paddle.to_tensor([[0.0, 1.0]], dtype='float32')
@@ -280,12 +280,13 @@ class TestTripletMarginWithDistanceLossError(unittest.TestCase):
             input=input,
             positive=positive,
             negative=negative,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         paddle.enable_static()
 
 
 class TestTripletMarginWithDistanceLossDF(unittest.TestCase):
+
     def test_TripletMarginDistanceLoss_distance_function(self):
         def distance_function_1(x1, x2):
             return 1.0 - paddle.nn.functional.cosine_similarity(x1, x2)
@@ -347,7 +348,7 @@ class TestTripletMarginWithDistanceLossDF(unittest.TestCase):
 
 
 class TestTripletMarginWithDistanceLossDFE(unittest.TestCase):
-    def test_TripletMarginWithDistanceLoss_distance_funtion_error(self):
+    def test_TripletMarginWithDistanceLoss_distance_function_error(self):
         paddle.disable_static()
 
         def distance_function(x1, x2):
@@ -399,6 +400,7 @@ class TestTripletMarginWithDistanceLossDim(unittest.TestCase):
 
 
 class TestTripletMarginWithDistanceLossSwap(unittest.TestCase):
+
     def test_TripletMarginWithDistanceLoss_swap(self):
         reduction = 'mean'
         place = paddle.CPUPlace()
@@ -485,6 +487,66 @@ class TestTripletMarginWithDistanceLossMargin(unittest.TestCase):
             negative=negative,
         )
         paddle.enable_static()
+
+
+class TestTripletMarginWithDistanceLoss_ZeroSize(unittest.TestCase):
+    def _test_dygraph(
+        self,
+        place,
+        input,
+        positive,
+        negative,
+        distance_function=None,
+        margin=0.3,
+        swap=False,
+        reduction='mean',
+        expected=None,
+    ):
+        paddle.disable_static(place)
+        input = paddle.to_tensor(input)
+        input.stop_gradient = False
+        positive = paddle.to_tensor(positive)
+        negative = paddle.to_tensor(negative)
+
+        dy_res = call_TripletMaginDistanceLoss_functional(
+            input=input,
+            positive=positive,
+            negative=negative,
+            distance_function=distance_function,
+            margin=margin,
+            swap=swap,
+            reduction=reduction,
+        )
+        dy_result = dy_res.numpy()
+        np.testing.assert_allclose(dy_result, expected, rtol=1e-5, atol=1e-8)
+        dy_res.sum().backward()
+        np.testing.assert_allclose(input.grad.shape, input.shape)
+        paddle.enable_static()
+
+    def test_TripletMarginDistanceLoss(self):
+        shape = (5, 0)
+        np.random.seed(1234)
+        input = np.random.uniform(0.1, 0.8, size=shape).astype(np.float64)
+        positive = np.random.uniform(0, 2, size=shape).astype(np.float64)
+        negative = np.random.uniform(0, 2, size=shape).astype(np.float64)
+
+        places = get_places()
+        reduction = 'sum'
+        for place in places:
+            expected = calc_triplet_margin_distance_loss(
+                input=input,
+                positive=positive,
+                negative=negative,
+                reduction=reduction,
+            )
+            self._test_dygraph(
+                place=place,
+                input=input,
+                positive=positive,
+                negative=negative,
+                reduction=reduction,
+                expected=expected,
+            )
 
 
 if __name__ == "__main__":

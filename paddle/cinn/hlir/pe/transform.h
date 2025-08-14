@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/container/flat_hash_map.h>
 
 #include <string>
 #include <vector>
@@ -21,7 +20,7 @@
 #include "paddle/cinn/ir/ir_base.h"
 #include "paddle/cinn/ir/layout.h"
 #include "paddle/cinn/ir/tensor.h"
-#include "paddle/cinn/poly/stage.h"
+#include "paddle/utils/flat_hash_map.h"
 
 namespace cinn {
 namespace hlir {
@@ -60,12 +59,6 @@ std::vector<ir::Tensor> Matmul(
     bool trans_b = false,
     float alpha = 1,
     const std::string& name = UniqName("T_Transform_Matmul_out"));
-
-// realized by sharing buffer
-ir::Tensor Reshape(const ir::Tensor& A,
-                   const std::vector<int>& new_shape,
-                   poly::StageMap stages,
-                   const std::string& name);
 
 ir::Tensor Concat(const ir::Tensor& A,
                   const ir::Tensor& B,
@@ -139,7 +132,7 @@ std::vector<ir::Expr> InferShapeLayoutTransform(
     const std::vector<Expr>& input_shapes,
     const ir::Layout& old_layout,
     const ir::Layout& new_layout,
-    absl::flat_hash_map<int, std::vector<int>>* split_index_map);
+    paddle::flat_hash_map<int, std::vector<int>>* split_index_map);
 
 /**
  * @brief Perform meta op Reverse
@@ -154,7 +147,7 @@ ir::Tensor Reverse(const ir::Tensor& input,
 /**
  * @brief Perform meta op Transpose
  * @param input The input tensor
- * @param axis tranpsoe axis
+ * @param axis transpose axis
  * @param output_name the name of the output tensor
  */
 ir::Tensor Transpose(
@@ -184,13 +177,21 @@ ir::Tensor Slice(const ir::Tensor& A,
                  const std::vector<Expr>& output_shape,
                  const std::string& output_name);
 
+ir::Tensor SliceSymbolic(const ir::Tensor& A,
+                         const std::vector<Expr>& starts,
+                         const std::vector<int>& axes,
+                         const std::vector<Expr>& strides,
+                         const std::vector<int>& decrease_axis,
+                         const std::vector<Expr>& output_shape,
+                         const std::string& output_name);
+
 /**
  * @brief Perform meta op SliceAssign
  * @param input The input tensor
  * @param assign The assign tensor
  * @param axis select axis
- * @param starts select reigon starts
- * @param strides select reigon strides
+ * @param starts select region starts
+ * @param strides select region strides
  * @param output_name the name of the output tensor
  */
 ir::Tensor SliceAssign(
@@ -204,8 +205,8 @@ ir::Tensor SliceAssign(
 /**
  * @brief Perform meta op Split
  * @param A The input tensor
- * @param axis split axis
  * @param output_shapes The output sub-tensors shape
+ * @param axis split axis
  * @param output_name the name of the output tensor
  */
 ir::Tensor Gather(const ir::Tensor& x,
@@ -215,10 +216,23 @@ ir::Tensor Gather(const ir::Tensor& x,
                   const std::string& name = UniqName("T_Transform_Gather_out"));
 
 /**
+ * @brief Perform meta op Split
+ * @param A The input tensor
+ * @param axis split axis
+ * @param output_shapes The output sub-tensors shape
+ * @param output_name the name of the output tensor
+ */
+ir::Tensor Gather(const ir::Tensor& x,
+                  const ir::Tensor& index,
+                  int axis,
+                  const std::vector<Expr>& output_shape,
+                  const std::string& name = UniqName("T_Transform_Gather_out"));
+
+/**
  * @brief Perform meta op ScatterAssign
  * @param input The input tensor
  * @param assign The assign tensor
- * @param indexs The indexs tensor
+ * @param index The index tensor
  * @param output_name the name of the output tensor
  */
 ir::Tensor ScatterAssign(
@@ -233,7 +247,7 @@ ir::Tensor ScatterAssign(
  * @brief Perform meta op ScatterAdd
  * @param input The input tensor
  * @param updates The updates tensor
- * @param indexs The indexs tensor
+ * @param index The index tensor
  * @param output_name the name of the output tensor
  */
 ir::Tensor ScatterAdd(const ir::Tensor& input,

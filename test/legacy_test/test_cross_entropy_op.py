@@ -15,11 +15,22 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, paddle_static_guard, randomize_probability
+from op_test import (
+    OpTest,
+    get_places,
+    paddle_static_guard,
+    randomize_probability,
+)
 
 import paddle
 from paddle import base
 from paddle.base import Program, core, program_guard
+
+
+def api_wrapper(x, label, soft_label=False, ignore_index=-100):
+    return paddle._legacy_C_ops.cross_entropy(
+        x, label, "soft_label", soft_label, "ignore_index", ignore_index
+    )
 
 
 class TestCrossEntropyOp(OpTest):
@@ -27,6 +38,7 @@ class TestCrossEntropyOp(OpTest):
 
     def setUp(self):
         self.op_type = "cross_entropy"
+        self.python_api = api_wrapper
         self.soft_label = False
         self.ignore_index = -100
         self.dtype = np.float64
@@ -172,13 +184,13 @@ class TestCrossEntropyOp4(TestCrossEntropyOp):
         self.X_2d = randomize_probability(self.ins_num, self.class_num).astype(
             self.dtype
         )
-        self.x = self.X_2d.reshape(self.shape + [self.class_num])
+        self.x = self.X_2d.reshape([*self.shape, self.class_num])
 
     def init_label(self):
         self.label_2d = np.random.randint(
             0, self.class_num, (self.ins_num, 1), dtype="int64"
         )
-        self.label = self.label_2d.reshape(self.shape + [1])
+        self.label = self.label_2d.reshape([*self.shape, 1])
 
     def get_cross_entropy(self):
         cross_entropy_2d = np.array(
@@ -188,7 +200,7 @@ class TestCrossEntropyOp4(TestCrossEntropyOp):
             ]
         ).astype(self.dtype)
         self.cross_entropy = np.array(cross_entropy_2d).reshape(
-            self.shape + [1]
+            [*self.shape, 1]
         )
 
     def init_attr_type(self):
@@ -229,14 +241,14 @@ class TestCrossEntropyOp5(TestCrossEntropyOp):
         self.X_2d = randomize_probability(self.ins_num, self.class_num).astype(
             self.dtype
         )
-        self.x = self.X_2d.reshape(self.shape + [self.class_num])
+        self.x = self.X_2d.reshape([*self.shape, self.class_num])
 
     def init_label(self):
         self.label_2d = np.random.uniform(
             0.1, 1.0, [self.ins_num, self.class_num]
         ).astype(self.dtype)
         self.label_2d /= self.label_2d.sum(axis=1, keepdims=True)
-        self.label = self.label_2d.reshape(self.shape + [self.class_num])
+        self.label = self.label_2d.reshape([*self.shape, self.class_num])
 
     def get_cross_entropy(self):
         cross_entropy_2d = (
@@ -245,7 +257,7 @@ class TestCrossEntropyOp5(TestCrossEntropyOp):
             .astype(self.dtype)
         )
         self.cross_entropy = np.array(cross_entropy_2d).reshape(
-            self.shape + [1]
+            [*self.shape, 1]
         )
 
     def init_attr_type(self):
@@ -272,7 +284,7 @@ class TestCrossEntropyOp6(TestCrossEntropyOp):
         self.X_2d = randomize_probability(self.ins_num, self.class_num).astype(
             self.dtype
         )
-        self.x = self.X_2d.reshape(self.shape + [self.class_num])
+        self.x = self.X_2d.reshape([*self.shape, self.class_num])
 
     def init_label(self):
         self.label_index_2d = np.random.randint(
@@ -280,7 +292,7 @@ class TestCrossEntropyOp6(TestCrossEntropyOp):
         )
         label_2d = np.zeros(self.X_2d.shape)
         label_2d[np.arange(self.ins_num), self.label_index_2d] = 1
-        self.label = label_2d.reshape(self.shape + [self.class_num]).astype(
+        self.label = label_2d.reshape([*self.shape, self.class_num]).astype(
             self.dtype
         )
 
@@ -293,7 +305,7 @@ class TestCrossEntropyOp6(TestCrossEntropyOp):
         )
         self.cross_entropy = (
             np.array(cross_entropy_2d)
-            .reshape(self.shape + [1])
+            .reshape([*self.shape, 1])
             .astype(self.dtype)
         )
 
@@ -323,9 +335,11 @@ class TestCrossEntropyOp7(TestCrossEntropyOp):
     def get_cross_entropy(self):
         self.cross_entropy = np.array(
             [
-                [-np.log(self.x[i][self.label[i][0]])]
-                if self.label[i][0] != self.ignore_index
-                else [0]
+                (
+                    [-np.log(self.x[i][self.label[i][0]])]
+                    if self.label[i][0] != self.ignore_index
+                    else [0]
+                )
                 for i in range(self.x.shape[0])
             ]
         ).astype(self.dtype)
@@ -353,9 +367,11 @@ class TestCrossEntropyOp7RemoveLastDim(TestCrossEntropyOp7):
     def get_cross_entropy(self):
         self.cross_entropy = np.array(
             [
-                [-np.log(self.x[i][self.label[i]])]
-                if self.label[i] != self.ignore_index
-                else [0]
+                (
+                    [-np.log(self.x[i][self.label[i]])]
+                    if self.label[i] != self.ignore_index
+                    else [0]
+                )
                 for i in range(self.x.shape[0])
             ]
         ).astype(self.dtype)
@@ -455,6 +471,55 @@ class TestCrossEntropyOpError(unittest.TestCase):
                     )
 
             self.assertRaises(ValueError, test_input_dims)
+
+
+class TestCrossEntropyOp_ZeroSize(TestCrossEntropyOp):
+    def setUp(self):
+        self.op_type = "cross_entropy"
+        self.python_api = api_wrapper
+        self.soft_label = False
+        self.ignore_index = -100
+        self.dtype = np.float64
+        # 0-size
+        self.batch_size = 0
+        self.class_num = 10
+
+        self.init_dtype_type()
+        self.init_attr_type()
+        self.init_bs_class_num()
+        self.init_x()
+        self.init_label()
+        self.get_cross_entropy()
+
+        self.inputs = {"X": self.x, "Label": self.label}
+        self.outputs = {"Y": self.cross_entropy}
+        self.attrs = {
+            "soft_label": self.soft_label,
+            "ignore_index": self.ignore_index,
+        }
+
+    def get_cross_entropy(self):
+        self.cross_entropy = np.random.random([0, 1]).astype(np.float64)
+
+
+class TestCrossEntropyOp_ZeroSize2(unittest.TestCase):
+    def test_dygraph_api(self):
+        for place in get_places():
+            paddle.disable_static(place)
+            x_np = np.random.random((16, 0)).astype(np.float64)
+            label_np = np.random.random((16, 0)).astype(np.float64)
+            x = paddle.to_tensor(x_np)
+            x.stop_gradient = False
+            label = paddle.to_tensor(label_np)
+            label.stop_gradient = False
+            out1 = paddle.nn.functional.cross_entropy(
+                x, label, soft_label=True, reduction="mean"
+            )
+            out2 = np.array(np.nan).astype(np.float64)
+            np.testing.assert_allclose(out1.numpy(), out2)
+            paddle.sum(out1).backward()
+            np.testing.assert_allclose(x.grad.shape, x.shape)
+            paddle.enable_static()
 
 
 if __name__ == "__main__":

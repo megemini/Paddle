@@ -37,10 +37,16 @@ __global__ void GatherTree(const T *ids_data,
     auto parent = parents_data[idx];
     for (int step = max_length - 2; step >= 0; step--) {
       PADDLE_ENFORCE((parent < beam_size),
-                     "The parents must be less than beam size, but received"
+                     "The parents must be less than beam size, but received "
                      "parents %ld is greater than or equal to beam size %ld. ",
                      parent,
                      beam_size);
+
+      PADDLE_ENFORCE(
+          (parent >= 0),
+          "The parents must be greater than or equal to 0, but received "
+          "parents %ld is less than 0. ",
+          parent);
 
       idx = step * batch_size * beam_size + batch * beam_size;
       out_data[idx + beam] = ids_data[idx + parent];
@@ -57,14 +63,17 @@ void GatherTreeKernel(const Context &dev_ctx,
   const auto *ids_data = ids.data<T>();
   const auto *parents_data = parents.data<T>();
   T *out_data = dev_ctx.template Alloc<T>(out);
+  if (out && out->numel() == 0) {
+    return;
+  }
 
   PADDLE_ENFORCE_NOT_NULL(ids_data,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "Input(Ids) of gather_tree should not be null."));
 
   PADDLE_ENFORCE_NOT_NULL(
       parents_data,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Input(Parents) of gather_tree should not be null."));
 
   auto &ids_dims = ids.dims();

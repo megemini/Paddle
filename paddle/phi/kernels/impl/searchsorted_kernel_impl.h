@@ -17,7 +17,7 @@
 #include <math.h>
 
 #include "paddle/common/ddim.h"
-#include "paddle/phi/kernels/funcs/algorithm.h"
+#include "paddle/phi/common/amp_type_traits.h"
 #include "paddle/phi/kernels/funcs/for_range.h"
 
 namespace phi {
@@ -59,6 +59,54 @@ class GpuAndCpuSearchSortedCompute {
   static HOSTDEVICE bool IsInf(int x UNUSED) { return false; }
   static HOSTDEVICE bool IsInf(int64_t x UNUSED) { return false; }
 
+  HOSTDEVICE inline size_t LowerBound(const T1* x, size_t num, const T2& val) {
+    // @{ Group LowerBound
+    // The following code is from
+    // https://en.cppreference.com/w/cpp/algorithm/lower_bound
+    using MT1 = typename phi::dtype::MPTypeTrait<T1>::Type;
+    using MT2 = typename phi::dtype::MPTypeTrait<T2>::Type;
+    MT2 val_mt = static_cast<MT2>(val);
+
+    auto* first = x;
+    int64_t count = static_cast<int64_t>(num);
+    while (count > 0) {
+      int64_t step = (count >> 1);
+      auto* it = first + step;
+      MT1 it_mt = static_cast<MT1>(*it);
+      if (it_mt < val_mt) {
+        first = ++it;
+        count -= (step + 1);
+      } else {
+        count = step;
+      }
+    }
+    return static_cast<size_t>(first - x);
+  }
+
+  HOSTDEVICE inline size_t UpperBound(const T1* x, size_t num, const T2& val) {
+    // @{ Group UpperBound
+    // The following code is from
+    // https://en.cppreference.com/w/cpp/algorithm/upper_bound
+    using MT1 = typename phi::dtype::MPTypeTrait<T1>::Type;
+    using MT2 = typename phi::dtype::MPTypeTrait<T2>::Type;
+    MT2 val_mt = static_cast<MT2>(val);
+
+    auto* first = x;
+    int64_t count = static_cast<int64_t>(num);
+    while (count > 0) {
+      auto step = (count >> 1);
+      auto* it = first + step;
+      MT1 it_mt = static_cast<MT1>(*it);
+      if (val_mt < it_mt) {
+        count = step;
+      } else {
+        first = ++it;
+        count -= (step + 1);
+      }
+    }
+    return static_cast<size_t>(first - x);
+  }
+
   HOSTDEVICE GpuAndCpuSearchSortedCompute(const T1* sequence_data,
                                           const T2* value_data,
                                           bool right,
@@ -74,19 +122,21 @@ class GpuAndCpuSearchSortedCompute {
         seq_size_(seq_size),
         out_data_(out_data) {}
   HOSTDEVICE void operator()(int64_t idx) {
+    using MT2 = typename phi::dtype::MPTypeTrait<T2>::Type;
     const T2* value_ptr = value_data_ + idx;
+    const MT2 value_mt = static_cast<MT2>(*value_ptr);
     const T1* sequence_ptr = is_1d_boundaries_
                                  ? sequence_data_
                                  : sequence_data_ + idx / val_size_ * seq_size_;
-    if (IsInf(*value_ptr) || IsNan(*value_ptr)) {
+    if (IsInf(value_mt) || IsNan(value_mt)) {
       out_data_[idx] = seq_size_;
     } else {
       if (right_) {
-        out_data_[idx] = static_cast<OutType>(phi::funcs::UpperBound<T1, T2>(
-            sequence_ptr, seq_size_, *value_ptr));
+        out_data_[idx] = static_cast<OutType>(
+            UpperBound(sequence_ptr, seq_size_, *value_ptr));
       } else {
-        out_data_[idx] = static_cast<OutType>(phi::funcs::LowerBound<T1, T2>(
-            sequence_ptr, seq_size_, *value_ptr));
+        out_data_[idx] = static_cast<OutType>(
+            LowerBound(sequence_ptr, seq_size_, *value_ptr));
       }
     }
   }
@@ -104,12 +154,12 @@ class GpuAndCpuSearchSortedCompute {
 template <typename Context, typename T1, typename OutType>
 class SearchSortedFunctor {
  public:
-  SearchSortedFunctor(const Context& context,
+  SearchSortedFunctor(const Context& dev_ctx,
                       const DenseTensor* sorted_sequence,
                       const DenseTensor* value,
                       bool right,
                       OutType* out_data)
-      : context_(context),
+      : dev_ctx_(dev_ctx),
         sorted_sequence_(sorted_sequence),
         value_(value),
         right_(right),
@@ -136,7 +186,7 @@ class SearchSortedFunctor {
       seq_size = 1;
     }
 
-    funcs::ForRange<Context> for_range(context_, value_->numel());
+    funcs::ForRange<Context> for_range(dev_ctx_, value_->numel());
     GpuAndCpuSearchSortedCompute<T1, T2, OutType>
         gpu_and_cpu_search_sorted_compute(sequence_data,
                                           value_data,
@@ -149,7 +199,7 @@ class SearchSortedFunctor {
   }
 
  private:
-  const Context& context_;
+  const Context& dev_ctx_;
   const DenseTensor* sorted_sequence_;
   const DenseTensor* value_;
   bool right_;
@@ -166,34 +216,45 @@ void VisitDataTypeForSearchSorted(DataType type, Visitor visitor) {
     visitor.template apply<int>();
   } else if (type == DataType::INT64) {
     visitor.template apply<int64_t>();
+  } else if (type == DataType::FLOAT16) {
+    visitor.template apply<phi::dtype::float16>();
+  } else if (type == DataType::BFLOAT16) {
+    visitor.template apply<phi::dtype::bfloat16>();
   } else {
     PADDLE_THROW(errors::InvalidArgument(
         "The received values data type %s can not meet input requirements. "
         "Because the given values data type of searchsorted operators must be "
-        "float32, float64, int32 or int64. Please input appropriate "
+        "bfloat16, float16, float32, float64, int32 or int64. Please input "
+        "appropriate "
         "sorted_sequence again! ",
         type));
   }
 }
 
 template <typename T, typename Context>
-void SearchsortedKernel(const Context& ctx,
+void SearchsortedKernel(const Context& dev_ctx,
                         const DenseTensor& sorted_sequence,
                         const DenseTensor& value,
                         bool out_int32,
                         bool right,
                         DenseTensor* out) {
   if (out_int32) {
-    ctx.template Alloc<int>(out);
+    dev_ctx.template Alloc<int>(out);
+    if (out && out->numel() == 0) {
+      return;
+    }
     int* out_data = out->data<int>();
     SearchSortedFunctor<Context, T, int> functor(
-        ctx, &sorted_sequence, &value, right, out_data);
+        dev_ctx, &sorted_sequence, &value, right, out_data);
     VisitDataTypeForSearchSorted(value.dtype(), functor);
   } else {
-    ctx.template Alloc<int64_t>(out);
+    dev_ctx.template Alloc<int64_t>(out);
+    if (out && out->numel() == 0) {
+      return;
+    }
     int64_t* out_data = out->data<int64_t>();
     SearchSortedFunctor<Context, T, int64_t> functor(
-        ctx, &sorted_sequence, &value, right, out_data);
+        dev_ctx, &sorted_sequence, &value, right, out_data);
     VisitDataTypeForSearchSorted(value.dtype(), functor);
   }
 }

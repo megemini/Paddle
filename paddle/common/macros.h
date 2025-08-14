@@ -14,6 +14,37 @@ limitations under the License. */
 
 #pragma once
 
+#if defined(_WIN32) && !defined(STATIC_PADDLE)
+#ifndef PADDLE_API
+#ifdef PADDLE_DLL_EXPORT
+#define PADDLE_API __declspec(dllexport)
+#else
+#define PADDLE_API __declspec(dllimport)
+#endif  // PADDLE_DLL_EXPORT
+#endif  // PADDLE_API
+#else
+#define PADDLE_API
+#endif  // _WIN32
+
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#define COMM_CONTEXT phi::distributed::NCCLCommContext
+#elif (defined(PADDLE_WITH_XPU) && defined(PADDLE_WITH_XPU_BKCL))
+#define COMM_CONTEXT phi::distributed::BKCLCommContext
+#elif defined(PADDLE_WITH_CUSTOM_DEVICE)
+#define COMM_CONTEXT phi::distributed::XCCLCommContext
+#endif
+
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#define CREATE_COMM_CONTEXT \
+  phi::distributed::CommContextManager::CreateNCCLCommContext
+#elif defined(PADDLE_WITH_XPU_BKCL)
+#define CREATE_COMM_CONTEXT \
+  phi::distributed::CommContextManager::CreateBKCLCommContext
+#elif defined(PADDLE_WITH_CUSTOM_DEVICE)
+#define CREATE_COMM_CONTEXT \
+  phi::distributed::CommContextManager::CreateXCCLCommContext
+#endif
+
 namespace common {
 
 // Disable the copy and assignment operator for a class.
@@ -85,5 +116,12 @@ namespace common {
 #endif
 #endif  // __FLT_MAX__
 #endif  // PADDLE_WITH_MUSL
+
+#define REGISTER_FILE_SYMBOLS(name) \
+  int RegisterSymbolsFor##name() { return 0; }
+
+#define DECLARE_FILE_SYMBOLS(name)       \
+  extern int RegisterSymbolsFor##name(); \
+  UNUSED static int use_file_##name = RegisterSymbolsFor##name()
 
 }  // namespace common

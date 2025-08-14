@@ -16,6 +16,7 @@
 
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/eigen/common.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
@@ -89,14 +90,14 @@ static void FullTopK(Type input_height,
             });
         // the nth-element will get the unorder elements, sort the element
         if (sorted) {
-          std::sort(col_vec.begin(),
-                    col_vec.begin() + k - 1,
-                    [&largest](const std::pair<T, Type>& l,
-                               const std::pair<T, Type>& r) {
-                      return (std::isnan(static_cast<double>(l.first)) &&
-                              !std::isnan(static_cast<double>(r.first))) ||
-                             (l.first > r.first);
-                    });
+          std::sort(
+              col_vec.begin(),
+              col_vec.begin() + k - 1,
+              [](const std::pair<T, Type>& l, const std::pair<T, Type>& r) {
+                return (std::isnan(static_cast<double>(l.first)) &&
+                        !std::isnan(static_cast<double>(r.first))) ||
+                       (l.first > r.first);
+              });
         }
       } else {
         std::nth_element(
@@ -137,6 +138,12 @@ void TopkKernel(const Context& dev_ctx,
                 bool sorted,
                 DenseTensor* out,
                 DenseTensor* indices) {
+  if (out && out->numel() == 0) {
+    dev_ctx.template Alloc<T>(out);
+    dev_ctx.template Alloc<int64_t>(indices);
+    return;
+  }
+
   const auto* input = &x;
   // Get the top k elements of each row of input tensor
   const auto& in_dims = input->dims();
@@ -147,25 +154,32 @@ void TopkKernel(const Context& dev_ctx,
     phi::funcs::set_constant(dev_ctx, indices, static_cast<int64_t>(0));
     return;
   }
-  // axis < 0, cacluate the real axis
+  // axis < 0, calculate the real axis
   if (axis < 0) {
     axis += in_dims.size();
   }
 
   int k = k_scalar.to<int>();
+  // out shape [-1]
+  if (k_scalar.FromTensor()) {
+    auto out_dims = out->dims();
+    // according to axis to set K value in the dim
+    out_dims[axis] = k;
+    out->Resize(out_dims);
+    indices->Resize(out_dims);
+  }
+  if (x.numel() == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(out->dims())), NAN, out);
+    phi::Full<int64_t, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(indices->dims())), 0, indices);
+    return;
+  }
   PADDLE_ENFORCE_GE(
       x.numel(),
       k,
       errors::InvalidArgument(
           "x has only %d element, can not find %d top values.", x.numel(), k));
-
-  if (k_scalar.FromTensor()) {
-    auto out_dims = out->dims();
-    // accroding to axis to set K value in the dim
-    out_dims[axis] = k;
-    out->Resize(out_dims);
-    indices->Resize(out_dims);
-  }
 
   T* out_data = dev_ctx.template Alloc<T>(out);
   int64_t* indices_data = dev_ctx.template Alloc<int64_t>(indices);
@@ -184,7 +198,7 @@ void TopkKernel(const Context& dev_ctx,
                          largest,
                          sorted);
   } else {
-    // if the topk dims is not last dim, will tranpose and do topk
+    // if the topk dims is not last dim, will transpose and do topk
     std::vector<int> trans;
     for (int i = 0; i < axis; i++) {
       trans.emplace_back(i);
@@ -244,12 +258,32 @@ void TopkKernel(const Context& dev_ctx,
   }
 }
 
+template <typename T, typename Context>
+void TopkV1Kernel(const Context& dev_ctx,
+                  const DenseTensor& x,
+                  const Scalar& k_scalar,
+                  DenseTensor* out,
+                  DenseTensor* indices) {
+  TopkKernel<T, Context>(dev_ctx, x, k_scalar, -1, true, true, out, indices);
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(topk,
                    CPU,
                    ALL_LAYOUT,
                    phi::TopkKernel,
+                   float,
+                   double,
+                   int32_t,
+                   int64_t,
+                   phi::dtype::float16) {
+  kernel->OutputAt(1).SetDataType(phi::DataType::INT64);
+}
+
+PD_REGISTER_KERNEL(topk_v1,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::TopkV1Kernel,
                    float,
                    double,
                    int32_t,

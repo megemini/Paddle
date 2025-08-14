@@ -16,6 +16,7 @@
 #include "paddle/phi/kernels/funcs/embedding_grad.h"
 
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_primitives.h"
 #include "paddle/phi/common/amp_type_traits.h"
@@ -25,9 +26,8 @@
 #include "paddle/phi/core/mixed_vector.h"
 #include "paddle/phi/kernels/funcs/eigen/common.h"
 #include "paddle/phi/kernels/funcs/embedding_util.h"
-#include "paddle/utils/flags.h"
 
-PD_DECLARE_int64(embedding_deterministic);
+COMMON_DECLARE_int64(embedding_deterministic);
 
 namespace phi {
 
@@ -88,9 +88,9 @@ struct EmbeddingGradCUDAFunctor {
       auto d_output_t = out_grad_;
       auto d_table_t = weight_grad_;
 
-      int N = weight_grad_->dims()[0];
-      int D = weight_grad_->dims()[1];
-      int K = input_.numel();
+      size_t N = weight_grad_->dims()[0];
+      size_t D = weight_grad_->dims()[1];
+      size_t K = input_.numel();
 
       const T* d_output = d_output_t.template data<T>();
       const auto* ids = input_.template data<IdT>();
@@ -132,14 +132,14 @@ struct EmbeddingGradCUDAFunctor {
 };
 
 template <typename T, typename Context>
-void EmbeddingGradKernel(const Context& ctx,
+void EmbeddingGradKernel(const Context& dev_ctx,
                          const DenseTensor& input,
                          const DenseTensor& weight,
                          const DenseTensor& out_grad,
                          int64_t padding_idx,
                          DenseTensor* weight_grad) {
   EmbeddingGradCUDAFunctor<T, Context> functor(
-      ctx, input, weight, out_grad, padding_idx, weight_grad);
+      dev_ctx, input, weight, out_grad, padding_idx, weight_grad);
 
   if (input.dtype() == phi::DataType::INT32) {
     functor.template apply<int>();
@@ -148,8 +148,8 @@ void EmbeddingGradKernel(const Context& ctx,
   } else if (input.dtype() == phi::DataType::INT16) {
     functor.template apply<int16_t>();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int16, int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int16, int32 and int64"));
   }
 }
 
@@ -212,7 +212,7 @@ struct EmbeddingSparseGradCUDAFunctor {
         common::flatten_to_2d(d_output_dims, d_output_dims.size() - 1);
     PADDLE_ENFORCE_EQ(d_table_value->dims(),
                       d_output_dims_2d,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "ShapeError: The shape of lookup_table@Grad and "
                           "output@Grad should be same. "
                           "But received lookup_table@Grad's shape = [%s], "
@@ -237,14 +237,14 @@ struct EmbeddingSparseGradCUDAFunctor {
 };
 
 template <typename T, typename Context>
-void EmbeddingSparseGradKernel(const Context& ctx,
+void EmbeddingSparseGradKernel(const Context& dev_ctx,
                                const DenseTensor& input,
                                const DenseTensor& weight,
                                const DenseTensor& out_grad,
                                int64_t padding_idx,
                                SelectedRows* weight_grad) {
   EmbeddingSparseGradCUDAFunctor<T, Context> functor(
-      ctx, input, weight, out_grad, padding_idx, weight_grad);
+      dev_ctx, input, weight, out_grad, padding_idx, weight_grad);
 
   if (input.dtype() == phi::DataType::INT32) {
     functor.template apply<int>();
@@ -252,8 +252,8 @@ void EmbeddingSparseGradKernel(const Context& ctx,
     functor.template apply<int64_t>();
   } else if (input.dtype() == phi::DataType::INT16) {
     functor.template apply<int16_t>();
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int16, int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int16, int32 and int64"));
   }
 }
 
@@ -266,7 +266,9 @@ PD_REGISTER_KERNEL(embedding_grad,
                    float,
                    double,
                    phi::dtype::float16,
-                   phi::dtype::bfloat16) {}
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 
 PD_REGISTER_KERNEL(embedding_sparse_grad,
                    GPU,
@@ -275,4 +277,6 @@ PD_REGISTER_KERNEL(embedding_sparse_grad,
                    float,
                    double,
                    phi::dtype::float16,
-                   phi::dtype::bfloat16) {}
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

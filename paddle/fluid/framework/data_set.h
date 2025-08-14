@@ -57,7 +57,7 @@ class Dataset {
                          const std::string tree_path UNUSED,
                          const std::vector<uint16_t> tdm_layer_counts UNUSED,
                          const uint16_t start_sample_layer UNUSED,
-                         const bool with_hierachy UNUSED,
+                         const bool with_hierarchy UNUSED,
                          const uint16_t seed_ UNUSED,
                          const uint16_t sample_slot UNUSED) {}
   // set file list
@@ -154,7 +154,7 @@ class Dataset {
   virtual void ClearLocalTables() = 0;
   // create preload readers
   virtual void CreatePreLoadReaders() = 0;
-  // destroy preload readers after prelaod done
+  // destroy preload readers after preload done
   virtual void DestroyPreLoadReaders() = 0;
   // set preload thread num
   virtual void SetPreLoadThreadNum(int thread_num) = 0;
@@ -348,7 +348,7 @@ class DatasetImpl : public Dataset {
   int64_t fleet_send_sleep_seconds_;
   std::vector<std::thread> preload_threads_;
   std::thread* release_thread_ = nullptr;
-  bool merge_by_insid_;
+  bool merge_by_ins_id_;
   bool parse_ins_id_;
   bool parse_content_;
   bool parse_logkey_;
@@ -388,7 +388,7 @@ class MultiSlotDataset : public DatasetImpl<Record> {
                          const std::string tree_path,
                          const std::vector<uint16_t> tdm_layer_counts,
                          const uint16_t start_sample_layer,
-                         const bool with_hierachy,
+                         const bool with_hierarchy,
                          const uint16_t seed_,
                          const uint16_t sample_slot);
   virtual void MergeByInsId();
@@ -445,5 +445,5 @@ class SlotRecordDataset : public DatasetImpl<SlotRecord> {
   bool enable_heterps_ = true;
 };
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace framework
+}  // namespace paddle

@@ -17,6 +17,7 @@ limitations under the License. */
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/kernels/expand_as_kernel.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/blas/blas.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/phi/kernels/funcs/matrix_solve.h"
@@ -34,7 +35,7 @@ limitations under the License. */
 namespace phi {
 
 template <typename Context, typename T>
-struct ReduceSumForSolvelGrad {
+struct ReduceSumForSolveGrad {
   void operator()(const Context& dev_ctx,
                   const DenseTensor& input,
                   DenseTensor* output,
@@ -43,7 +44,7 @@ struct ReduceSumForSolvelGrad {
 };
 
 template <typename T>
-struct ReduceSumForSolvelGrad<CPUContext, T> {
+struct ReduceSumForSolveGrad<CPUContext, T> {
   void operator()(const CPUContext& dev_ctx,
                   const DenseTensor& input,
                   DenseTensor* output,
@@ -58,7 +59,7 @@ struct ReduceSumForSolvelGrad<CPUContext, T> {
 
 #if defined(__NVCC__) || defined(__HIPCC__)
 template <typename T>
-struct ReduceSumForSolvelGrad<GPUContext, T> {
+struct ReduceSumForSolveGrad<GPUContext, T> {
   void operator()(const GPUContext& dev_ctx,
                   const DenseTensor& input,
                   DenseTensor* output,
@@ -78,6 +79,24 @@ void SolveGradKernel(const Context& dev_ctx,
                      const DenseTensor& dout,
                      DenseTensor* dx,
                      DenseTensor* dy) {
+  if (dout.numel() == 0) {
+    if (dx) {
+      dev_ctx.template Alloc<T>(dx);
+      if (dx->numel() != 0) {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      dev_ctx.template Alloc<T>(dy);
+      if (dy->numel() != 0) {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
+
   bool is_vector = false;
   is_vector = is_vector_rhs(x, y);
   DenseTensor tmp_y;
@@ -210,7 +229,7 @@ void SolveGradKernel(const Context& dev_ctx,
         if (dy_help.dims().size() != dy->dims().size()) {
           keep_dim = false;
         }
-        ReduceSumForSolvelGrad<Context, T>()(
+        ReduceSumForSolveGrad<Context, T>()(
             dev_ctx, dy_help, dy, dy_reduce_dims, keep_dim);
       }
       dy->Resize(y.dims());
@@ -257,7 +276,7 @@ void SolveGradKernel(const Context& dev_ctx,
         if (dx_help.dims().size() != dx->dims().size()) {
           keep_dim = false;
         }
-        ReduceSumForSolvelGrad<Context, T>()(
+        ReduceSumForSolveGrad<Context, T>()(
             dev_ctx, dx_help, dx, dx_reduce_dims, keep_dim);
       }
       dx->Resize(x.dims());

@@ -17,6 +17,7 @@ from paddle.distributed import fleet
 
 from .base.topology import ParallelMode
 from .meta_parallel import (
+    DualPipeVParallel,
     PipelineLayer,
     PipelineParallel,
     PipelineParallelWithInterleave,
@@ -24,6 +25,7 @@ from .meta_parallel import (
     SegmentParallel,
     ShardingParallel,
     TensorParallel,
+    VPPFhenBInBalancedMemory,
 )
 
 _grad_scalar = None
@@ -34,7 +36,7 @@ def distributed_model(model):
     Return distributed data parallel model (Only work in dygraph mode)
 
     Args:
-        model (Layer): the user-defind model which inherits Layer.
+        model (Layer): the user-defined model which inherits Layer.
 
     Returns:
         distributed data parallel model which inherits Layer.
@@ -102,9 +104,11 @@ def distributed_model(model):
                 level="O2",
                 master_weight=None,
                 save_dtype=None,
-                dtype="float16"
-                if strategy.amp_configs['use_pure_fp16']
-                else "bfloat16",
+                dtype=(
+                    "float16"
+                    if strategy.amp_configs['use_pure_fp16']
+                    else "bfloat16"
+                ),
             )
 
         init_loss_scaling = strategy.amp_configs['init_loss_scaling']
@@ -155,25 +159,33 @@ def distributed_model(model):
         assert isinstance(
             model, PipelineLayer
         ), "For pipeline parallel, the model should an instance of PipelineLayer"
-        if model.get_num_virtual_stages() == 1:
+        if strategy.hybrid_configs["pp_configs"].use_dualpipev:
+            model = DualPipeVParallel(model, fleet_env._hcg, strategy=strategy)
+        elif model.get_num_virtual_stages() == 1:
             # 1f1b pipeline
             model = PipelineParallel(model, fleet_env._hcg, strategy=strategy)
         else:
             accumulate_steps = strategy.pipeline_configs['accumulate_steps']
             pp_degree = fleet_env._hcg.get_pipe_parallel_world_size()
-            if (
-                accumulate_steps >= pp_degree
-                and accumulate_steps < pp_degree * 2
-            ):
-                # NOTE(shenliang03): Hacky for unbalanced pipeline parallel with interleave
-                # Currently, we only support pp_degree <= accumulate_steps < 2 * pp_degree
-                model = PipelineParallelWithInterleaveFthenB(
-                    model, fleet_env._hcg, strategy=strategy
-                )
-            else:
+            if accumulate_steps >= 2 * pp_degree:
                 # interleave pipeline
                 model = PipelineParallelWithInterleave(
                     model, fleet_env._hcg, strategy=strategy
+                )
+            elif pp_degree <= accumulate_steps < 2 * pp_degree:
+                if strategy.hybrid_configs[
+                    "pp_configs"
+                ].best_unbalanced_scheduler:
+                    model = VPPFhenBInBalancedMemory(
+                        model, fleet_env._hcg, strategy=strategy
+                    )
+                else:
+                    model = PipelineParallelWithInterleaveFthenB(
+                        model, fleet_env._hcg, strategy=strategy
+                    )
+            else:
+                raise ValueError(
+                    f"The accumulate_steps({accumulate_steps}) should be greater than or equal to pp_degree({pp_degree})"
                 )
 
     return model

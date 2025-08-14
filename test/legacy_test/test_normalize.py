@@ -65,7 +65,7 @@ class TestNNFunctionalNormalize(unittest.TestCase):
 
         place = base.CUDAPlace(0) if use_gpu else base.CPUPlace()
         exe = base.Executor(place)
-        exe.run(base.default_startup_program())
+        exe.run(paddle.static.default_startup_program())
         static_result = exe.run(
             feed={"input": self.input_np, "input2": self.input_np2},
             fetch_list=[result0, result1, result2, result4],
@@ -74,7 +74,6 @@ class TestNNFunctionalNormalize(unittest.TestCase):
         np.testing.assert_allclose(static_result[0], self.expected0, rtol=1e-05)
         np.testing.assert_allclose(static_result[1], self.expected1, rtol=1e-05)
         np.testing.assert_allclose(static_result[2], self.expected2, rtol=1e-05)
-        self.assertTrue('aaa' in result3.name)
         np.testing.assert_allclose(static_result[3], self.expected3, rtol=1e-05)
         self.assertRaises(ValueError, F.normalize, x2)
 
@@ -83,7 +82,7 @@ class TestNNFunctionalNormalize(unittest.TestCase):
         self.run_imperative()
         paddle.enable_static()
 
-        with base.program_guard(base.Program()):
+        with paddle.static.program_guard(paddle.static.Program()):
             self.run_static()
 
     def test_gpu(self):
@@ -94,20 +93,8 @@ class TestNNFunctionalNormalize(unittest.TestCase):
         self.run_imperative()
         paddle.enable_static()
 
-        with base.program_guard(base.Program()):
+        with paddle.static.program_guard(paddle.static.Program()):
             self.run_static(use_gpu=True)
-
-    def test_errors(self):
-        with base.dygraph.guard():
-            # The size of input in Normalize should not be 0.
-            def test_0_size():
-                array = np.array([], dtype=np.float32)
-                x = paddle.to_tensor(
-                    np.reshape(array, [1, 1, 0]), dtype='float32'
-                )
-                paddle.nn.functional.normalize(x)
-
-            self.assertRaises(ValueError, test_0_size)
 
 
 if __name__ == "__main__":

@@ -26,14 +26,17 @@ namespace analysis {
 struct Record {
   std::vector<float> data;
   std::vector<int32_t> shape;
+  Record() : data(), shape() {}
 };
 
 Record ProcessALine(const std::string &line) {
   VLOG(3) << "process a line";
   std::vector<std::string> columns;
   split(line, '\t', &columns);
-  CHECK_EQ(columns.size(), 2UL)
-      << "data format error, should be <data>\t<shape>";
+  PADDLE_ENFORCE_EQ(columns.size(),
+                    2UL,
+                    common::errors::InvalidArgument(
+                        "data format error, should be <data>\t<shape>"));
 
   Record record;
   std::vector<std::string> data_strs;
@@ -61,10 +64,9 @@ void SetConfig(AnalysisConfig *cfg) {
 }
 
 void SetInput(std::vector<std::vector<PaddleTensor>> *inputs) {
-  PADDLE_ENFORCE_EQ(
-      FLAGS_test_all_data,
-      0,
-      ::paddle::platform::errors::Fatal("Only have single batch of data."));
+  PADDLE_ENFORCE_EQ(FLAGS_test_all_data,
+                    0,
+                    ::common::errors::Fatal("Only have single batch of data."));
   std::string line;
   std::ifstream file(FLAGS_infer_data);
   std::getline(file, line);
@@ -83,11 +85,11 @@ void SetInput(std::vector<std::vector<PaddleTensor>> *inputs) {
 
 // Easy for profiling independently.
 //  ocr, mobilenet and se_resnext50
-void profile(bool use_mkldnn = false) {
+void profile(bool use_onednn = false) {
   AnalysisConfig cfg;
   SetConfig(&cfg);
-  if (use_mkldnn) {
-    cfg.EnableMKLDNN();
+  if (use_onednn) {
+    cfg.EnableONEDNN();
   }
   // cfg.pass_builder()->TurnOnDebug();
   std::vector<std::vector<PaddleTensor>> outputs;
@@ -107,11 +109,17 @@ void profile(bool use_mkldnn = false) {
 
     PADDLE_ENFORCE_GT(outputs.size(),
                       0,
-                      ::paddle::platform::errors::Fatal(
+                      ::common::errors::Fatal(
                           "The size of output should be greater than 0."));
     auto &output = outputs.back().front();
     size_t numel = output.data.length() / PaddleDtypeSize(output.dtype);
-    CHECK_EQ(numel, refer.data.size());
+    PADDLE_ENFORCE_EQ(
+        numel,
+        refer.data.size(),
+        common::errors::InvalidArgument(
+            "value of numel is wrong, expected %d but received %d",
+            refer.data.size(),
+            numel));
     for (size_t i = 0; i < numel; ++i) {
       EXPECT_NEAR(
           static_cast<float *>(output.data.data())[i], refer.data[i], 1e-5);
@@ -122,24 +130,15 @@ void profile(bool use_mkldnn = false) {
 TEST(Analyzer_vis, profile) { profile(); }
 
 #ifdef PADDLE_WITH_DNNL
-TEST(Analyzer_vis, profile_mkldnn) { profile(true /* use_mkldnn */); }
+TEST(Analyzer_vis, profile_onednn) { profile(true /* use_onednn */); }
 #endif
 
-// Check the fuse status
-TEST(Analyzer_vis, fuse_statis) {
-  AnalysisConfig cfg;
-  SetConfig(&cfg);
-  int num_ops;
-  auto predictor = CreatePaddlePredictor<AnalysisConfig>(cfg);
-  GetFuseStatis(predictor.get(), &num_ops);
-}
-
 // Compare result of NativeConfig and AnalysisConfig
-void compare(bool use_mkldnn = false) {
+void compare(bool use_onednn = false) {
   AnalysisConfig cfg;
   SetConfig(&cfg);
-  if (use_mkldnn) {
-    cfg.EnableMKLDNN();
+  if (use_onednn) {
+    cfg.EnableONEDNN();
   }
 
   std::vector<std::vector<PaddleTensor>> input_slots_all;
@@ -150,7 +149,7 @@ void compare(bool use_mkldnn = false) {
 
 TEST(Analyzer_vis, compare) { compare(); }
 #ifdef PADDLE_WITH_DNNL
-TEST(Analyzer_vis, compare_mkldnn) { compare(true /* use_mkldnn */); }
+TEST(Analyzer_vis, compare_onednn) { compare(true /* use_onednn */); }
 #endif
 
 // Compare Deterministic result

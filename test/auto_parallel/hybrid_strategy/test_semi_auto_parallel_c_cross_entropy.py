@@ -16,9 +16,12 @@ import os
 
 os.environ["PARALLEL_CROSS_ENTROPY"] = "true"
 
+import os
 import unittest
 
 import collective.test_communication_api_base as test_base
+
+os.environ['FLAGS_enable_pir_api'] = '0'
 
 
 class TestParallelCrossEntropy(test_base.CommunicationTestDistBase):
@@ -34,6 +37,11 @@ class TestParallelCrossEntropy(test_base.CommunicationTestDistBase):
         self.run_test_case(
             "semi_auto_parallel_c_cross_entropy_mp.py",
         )
+
+    def test_mp_pir(self):
+        os.environ["FLAGS_enable_pir_in_executor"] = "True"
+        self.test_mp()
+        os.environ["FLAGS_enable_pir_in_executor"] = "False"
 
 
 class TestParallelCrossEntropyHybrid(test_base.CommunicationTestDistBase):

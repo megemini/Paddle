@@ -255,47 +255,47 @@ def run_adaround(
                 fetch_op_name = quant_op_out_name
 
         # build adaround program
-        exec_strategy = static.ExecutionStrategy()
-        exec_strategy.num_iteration_per_drop_scope = 1
         startup_program = static.Program()
         train_program = static.Program()
-        with static.program_guard(train_program, startup_program):
-            with paddle.utils.unique_name.guard():
-                # initialize adaround
-                adaround = AdaRound(
-                    scale,
-                    weight_var_tensor,
-                    scope=scope,
-                    weight_var_name=weight_var_name,
-                    weight_op_type=weight_op_type,
-                    num_iterations=num_iterations,
-                )
-                orig_out_tensor = static.data(
-                    name='orig_out_tensor',
-                    shape=(-1,) + fp32_fetch_list.shape,
-                    dtype='float32',
-                )
-                adaround_out_tensor = static.data(
-                    name='adaround_out_tensor',
-                    shape=(-1,) + fp32_fetch_list.shape,
-                    dtype='float32',
-                )
-                beta_tensor = static.data(
-                    name='beta', shape=[-1, 1], dtype='float32'
-                )
-                warm_start_tensor = static.data(
-                    name='warm_start', shape=[-1, 1], dtype='bool'
-                )
+        with (
+            static.program_guard(train_program, startup_program),
+            paddle.utils.unique_name.guard(),
+        ):
+            # initialize adaround
+            adaround = AdaRound(
+                scale,
+                weight_var_tensor,
+                scope=scope,
+                weight_var_name=weight_var_name,
+                weight_op_type=weight_op_type,
+                num_iterations=num_iterations,
+            )
+            orig_out_tensor = static.data(
+                name='orig_out_tensor',
+                shape=(-1, *fp32_fetch_list.shape),
+                dtype='float32',
+            )
+            adaround_out_tensor = static.data(
+                name='adaround_out_tensor',
+                shape=(-1, *fp32_fetch_list.shape),
+                dtype='float32',
+            )
+            beta_tensor = static.data(
+                name='beta', shape=[-1, 1], dtype='float32'
+            )
+            warm_start_tensor = static.data(
+                name='warm_start', shape=[-1, 1], dtype='bool'
+            )
 
-                train_fetches_loss = adaround.get_loss(
-                    beta_tensor,
-                    warm_start_tensor,
-                    adaround_out_tensor,
-                    orig_out_tensor,
-                )
-                optimizer = paddle.optimizer.Adam(learning_rate=lr)
-                loss = train_fetches_loss['loss']
-                optimizer.minimize(loss)
+            train_fetches_loss = adaround.get_loss(
+                beta_tensor,
+                warm_start_tensor,
+                adaround_out_tensor,
+                orig_out_tensor,
+            )
+            optimizer = paddle.optimizer.Adam(learning_rate=lr)
+            loss = train_fetches_loss['loss']
+            optimizer.minimize(loss)
         exe.run(startup_program)
 
         start_time = time.time()
@@ -347,21 +347,14 @@ def run_adaround(
                 return_numpy=True,
             )
             _logger.info(
-                "Iter {:d}, lr {:.5f}, loss {:.5f}, loss_round {:.5f}, loss_recon {:.5f}, time {:.5f}s".format(
-                    i,
-                    lr,
-                    np.mean(out[0]),
-                    np.mean(out[1]),
-                    np.mean(out[2]),
-                    start_time - prev_start_time,
-                )
+                f"Iter {i:d}, lr {lr:.5f}, loss {np.mean(out[0]):.5f}, loss_round {np.mean(out[1]):.5f}, loss_recon {np.mean(out[2]):.5f}, time {start_time - prev_start_time:.5f}s"
             )
             sys.stdout.flush()
             if i == num_iterations:
                 break
-        final_weight_tensor_quant_dict[
-            weight_var_name
-        ] = adaround.update_final_weights()
+        final_weight_tensor_quant_dict[weight_var_name] = (
+            adaround.update_final_weights()
+        )
 
         if bias_correction:
             final_weight_tensor_quant_dict[weight_var_name] = bias_correction_w(

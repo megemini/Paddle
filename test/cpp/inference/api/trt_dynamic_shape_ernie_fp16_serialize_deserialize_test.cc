@@ -19,11 +19,11 @@ limitations under the License. */
 #include <io.h>
 #include <process.h>
 #endif
-#define GLOG_NO_ABBREVIATED_SEVERITIES
+
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "paddle/utils/flags.h"
+#include "paddle/common/flags.h"
 #include "test/cpp/inference/api/trt_dynamic_shape_ernie_serialize_deserialize_test.h"
 
 namespace paddle {

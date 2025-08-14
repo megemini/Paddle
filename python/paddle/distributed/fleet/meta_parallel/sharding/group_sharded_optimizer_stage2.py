@@ -74,10 +74,10 @@ class GroupShardedOptimizerStage2(Optimizer):
         optim,
         group=None,
         offload=False,
-        device="gpu",
-        pertrain_sync_models=True,
+        device="xpu" if core.is_compiled_with_xpu() else "gpu",
+        pretrain_sync_models=True,
         dp_group=None,
-        **kw
+        **kw,
     ):
         super().__init__(learning_rate=optim._learning_rate, parameters=params)
         assert (
@@ -178,7 +178,7 @@ class GroupShardedOptimizerStage2(Optimizer):
             ), "Not support! when using offload with sharding stage2, please use pure sharding stage2, exclude data parallel."
 
         # Synchronous all ranks models
-        if pertrain_sync_models:
+        if pretrain_sync_models:
             self._sync_params_and_buffers()
 
         self.param_storages = {}  # {dtype: {rank: InternalStorage}}
@@ -224,7 +224,7 @@ class GroupShardedOptimizerStage2(Optimizer):
         if offload:
             assert (
                 self._pfp16
-            ), "Only support offload strategy while using \'Adam\', \'AdamW\' and \'Momentum\' optimizer with AMP/Pure FP16"
+            ), "Only support offload strategy while using 'Adam', 'AdamW' and 'Momentum' optimizer with AMP/Pure FP16"
 
         self.offload = offload  # Using for offload
         self.offload_device = "cpu"
@@ -289,9 +289,9 @@ class GroupShardedOptimizerStage2(Optimizer):
                 "must be called manually before calling `paddle.save()` and before and inference."
             )
             if self._broadcast_order_params is None:
-                # Params' names should be like column_linear_32.w_0 patter to get the best performance.
+                # Params' names should be like column_linear_32.w_0 pattern to get the best performance.
                 warnings.warn(
-                    r"The param name passed to the optimizer doesn't follow .+_[0-9]+\..+ patter, "
+                    r"The param name passed to the optimizer doesn't follow .+_[0-9]+\..+ pattern, "
                     "overlap broadcast may harm the performance."
                 )
                 self._broadcast_order_params = self._local_params
@@ -342,7 +342,7 @@ class GroupShardedOptimizerStage2(Optimizer):
         # func 1
         self._integration_params()
 
-    # Segement helpers
+    # Segment helpers
 
     def _segment_params(self):
         """
@@ -517,7 +517,7 @@ class GroupShardedOptimizerStage2(Optimizer):
                         dtype=Type.fp32.value,
                         device=self.offload_device,
                         destination=self._rank,
-                        parm2align=self.offload_param2align,
+                        param2align=self.offload_param2align,
                         convert_cpu=True,
                     )
                     for p in cpu_master_params:
@@ -588,6 +588,12 @@ class GroupShardedOptimizerStage2(Optimizer):
                                 ),
                                 True,
                             )
+                            .cast(dtype=param.dtype)
+                        )
+                    elif self._default_device == "xpu":
+                        param.set_value(
+                            self._master_params[param.name]
+                            .to("xpu:" + str(self.dev_id))
                             .cast(dtype=param.dtype)
                         )
                     else:

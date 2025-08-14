@@ -52,6 +52,17 @@ class TestDistTensor(unittest.TestCase):
         self.assertEqual(dist_tensor_with_numpy.placements, placements)
         self.assertEqual(dist_tensor_with_tensor.placements, placements)
 
+    def test_dist_parameter(self):
+        mesh = dist.ProcessMesh([[0, 1], [2, 3]], dim_names=["x", "y"])
+        placements = [Replicate(), Replicate()]
+
+        dense_param = paddle.create_parameter(
+            [10, 5], name="linear_1.weight", dtype='float32'
+        )
+        dist_param = dist.shard_tensor(dense_param, mesh, placements)
+
+        self.assertEqual(dense_param.name + ".dist", dist_param.name)
+
 
 class TestDistTensorFromFn(unittest.TestCase):
     def run_dtensor_from_fn(self):
@@ -72,9 +83,14 @@ class TestDistTensorFromFn(unittest.TestCase):
         else:
             dist_attr.dynamic_dims = [0]
             dist_attr.chunk_id = 0
-            self.assertIsInstance(result, paddle.static.Variable)
-            self.assertEqual(result.shape, (16,))
-            self.assertEqual(result.dist_attr, dist_attr)
+            self.assertIsInstance(result, paddle.base.libpaddle.pir.Value)
+            self.assertEqual(result.shape, [16])
+            self.assertEqual(
+                result.dist_attr().dims_mapping, dist_attr.dims_mapping
+            )
+            self.assertEqual(
+                result.dist_attr().process_mesh, dist_attr.process_mesh
+            )
 
         result_zeros = dist.dtensor_from_fn(
             paddle.zeros, mesh, placements, shape=[16]
@@ -87,9 +103,14 @@ class TestDistTensorFromFn(unittest.TestCase):
         else:
             dist_attr.dynamic_dims = [0]
             dist_attr.chunk_id = 0
-            self.assertIsInstance(result, paddle.static.Variable)
-            self.assertEqual(result.shape, (16,))
-            self.assertEqual(result.dist_attr, dist_attr)
+            self.assertIsInstance(result, paddle.base.libpaddle.pir.Value)
+            self.assertEqual(result.shape, [16])
+            self.assertEqual(
+                result.dist_attr().dims_mapping, dist_attr.dims_mapping
+            )
+            self.assertEqual(
+                result.dist_attr().process_mesh, dist_attr.process_mesh
+            )
 
         result_random = dist.dtensor_from_fn(
             paddle.rand, mesh, placements, shape=[16]
@@ -102,9 +123,14 @@ class TestDistTensorFromFn(unittest.TestCase):
         else:
             dist_attr.dynamic_dims = [0]
             dist_attr.chunk_id = 0
-            self.assertIsInstance(result, paddle.static.Variable)
-            self.assertEqual(result.shape, (16,))
-            self.assertEqual(result.dist_attr, dist_attr)
+            self.assertIsInstance(result, paddle.base.libpaddle.pir.Value)
+            self.assertEqual(result.shape, [16])
+            self.assertEqual(
+                result.dist_attr().dims_mapping, dist_attr.dims_mapping
+            )
+            self.assertEqual(
+                result.dist_attr().process_mesh, dist_attr.process_mesh
+            )
 
     def test_dynamic_mode(self):
         self.run_dtensor_from_fn()

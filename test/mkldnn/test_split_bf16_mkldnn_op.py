@@ -45,7 +45,7 @@ class TestSplitSectionsBF16OneDNNOp(OpTest):
         self.init_data()
         self.inputs = {'X': self.x}
         self.attrs = {
-            'use_mkldnn': True,
+            'use_onednn': True,
             'num': self.num,
             'mkldnn_data_type': "bfloat16",
         }
@@ -60,11 +60,11 @@ class TestSplitSectionsBF16OneDNNOp(OpTest):
             self.inputs['SectionsTensorList'] = self.sections_tensor_list
 
         self.outputs = {
-            'Out': [('out%d' % i, self.out[i]) for i in range(len(self.out))]
+            'Out': [(f'out{i}', self.out[i]) for i in range(len(self.out))]
         }
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
 
 class TestSplitNumBF16OneDNNOp(TestSplitSectionsBF16OneDNNOp):

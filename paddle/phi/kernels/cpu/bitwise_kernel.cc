@@ -19,7 +19,6 @@ limitations under the License. */
 #include "paddle/phi/kernels/funcs/bitwise_functors.h"
 #include "paddle/phi/kernels/funcs/elementwise_base.h"
 
-// See Note [ Why still include the fluid headers? ]
 #include "paddle/phi/common/transform.h"
 
 namespace phi {
@@ -39,6 +38,45 @@ DEFINE_BITWISE_KERNEL(And)
 DEFINE_BITWISE_KERNEL(Or)
 DEFINE_BITWISE_KERNEL(Xor)
 #undef DEFINE_BITWISE_KERNEL
+
+#define DEFINE_BITWISE_KERNEL_WITH_INVERSE(op_type)                         \
+  template <typename T, typename Context>                                   \
+  void Bitwise##op_type##Kernel(const Context& dev_ctx,                     \
+                                const DenseTensor& x,                       \
+                                const DenseTensor& y,                       \
+                                bool is_arithmetic,                         \
+                                DenseTensor* out) {                         \
+    auto x_dims = x.dims();                                                 \
+    auto y_dims = y.dims();                                                 \
+    if (x_dims.size() >= y_dims.size()) {                                   \
+      if (is_arithmetic) {                                                  \
+        funcs::Bitwise##op_type##ArithmeticFunctor<T> func;                 \
+        funcs::ElementwiseCompute<                                          \
+            funcs::Bitwise##op_type##ArithmeticFunctor<T>,                  \
+            T>(dev_ctx, x, y, func, out);                                   \
+      } else {                                                              \
+        funcs::Bitwise##op_type##LogicFunctor<T> func;                      \
+        funcs::ElementwiseCompute<funcs::Bitwise##op_type##LogicFunctor<T>, \
+                                  T>(dev_ctx, x, y, func, out);             \
+      }                                                                     \
+    } else {                                                                \
+      if (is_arithmetic) {                                                  \
+        funcs::InverseBitwise##op_type##ArithmeticFunctor<T> inv_func;      \
+        funcs::ElementwiseCompute<                                          \
+            funcs::InverseBitwise##op_type##ArithmeticFunctor<T>,           \
+            T>(dev_ctx, x, y, inv_func, out);                               \
+      } else {                                                              \
+        funcs::InverseBitwise##op_type##LogicFunctor<T> inv_func;           \
+        funcs::ElementwiseCompute<                                          \
+            funcs::InverseBitwise##op_type##LogicFunctor<T>,                \
+            T>(dev_ctx, x, y, inv_func, out);                               \
+      }                                                                     \
+    }                                                                       \
+  }
+
+DEFINE_BITWISE_KERNEL_WITH_INVERSE(LeftShift)
+DEFINE_BITWISE_KERNEL_WITH_INVERSE(RightShift)
+#undef DEFINE_BITWISE_KERNEL_WITH_INVERSE
 
 template <typename T, typename Context>
 void BitwiseNotKernel(const Context& dev_ctx,
@@ -92,6 +130,26 @@ PD_REGISTER_KERNEL(bitwise_not,
                    ALL_LAYOUT,
                    phi::BitwiseNotKernel,
                    bool,
+                   uint8_t,
+                   int8_t,
+                   int16_t,
+                   int,
+                   int64_t) {}
+
+PD_REGISTER_KERNEL(bitwise_left_shift,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::BitwiseLeftShiftKernel,
+                   uint8_t,
+                   int8_t,
+                   int16_t,
+                   int,
+                   int64_t) {}
+
+PD_REGISTER_KERNEL(bitwise_right_shift,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::BitwiseRightShiftKernel,
                    uint8_t,
                    int8_t,
                    int16_t,

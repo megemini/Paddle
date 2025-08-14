@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
@@ -21,6 +22,8 @@ from get_test_cover_info import (
     get_xpu_op_support_types,
 )
 from op_test_xpu import XPUOpTest
+
+sys.path.append("../deprecated/legacy_test")
 from test_pool2d_op import adaptive_end_index, adaptive_start_index
 
 import paddle
@@ -169,15 +172,15 @@ def pool2D_forward_naive(
         padding_algorithm = padding_algorithm.upper()
         if padding_algorithm not in ["SAME", "VALID", "EXPLICIT"]:
             raise ValueError(
-                "Unknown Attr(padding_algorithm): '%s'. "
-                "It can only be 'SAME' or 'VALID'." % str(padding_algorithm)
+                f"Unknown Attr(padding_algorithm): '{padding_algorithm}'. "
+                "It can only be 'SAME' or 'VALID'."
             )
 
         if padding_algorithm == "VALID":
             paddings = [0, 0, 0, 0]
             if ceil_mode is not False:
                 raise ValueError(
-                    "When Attr(pool_padding) is \"VALID\", Attr(ceil_mode)"
+                    'When Attr(pool_padding) is "VALID", Attr(ceil_mode)'
                     " must be False. "
                     "Received ceil_mode: True."
                 )
@@ -292,7 +295,7 @@ class XPUTestPool2D_Op(XPUOpTestWrapper):
             self.place = paddle.XPUPlace(0)
             self.use_cudnn = False
             self.init_kernel_type()
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.init_test_case()
             self.padding_algorithm = "EXPLICIT"
             self.init_paddings()
@@ -328,7 +331,7 @@ class XPUTestPool2D_Op(XPUOpTestWrapper):
                 'pooling_type': self.pool_type,
                 'global_pooling': self.global_pool,
                 'use_cudnn': self.use_cudnn,
-                'use_mkldnn': self.use_mkldnn,
+                'use_onednn': self.use_onednn,
                 'data_format': self.data_format,
                 'exclusive': self.exclusive,
                 'adaptive': self.adaptive,

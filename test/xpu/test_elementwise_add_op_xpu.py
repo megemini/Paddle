@@ -13,11 +13,13 @@
 # limitations under the License.
 
 
+import copy
 import unittest
 
 import numpy as np
 from get_test_cover_info import (
     XPUOpTestWrapper,
+    check_run_big_shape_test,
     create_test_class,
     get_xpu_op_support_types,
 )
@@ -26,6 +28,7 @@ from op_test_xpu import XPUOpTest
 
 import paddle
 from paddle import base
+from paddle.base import core
 
 paddle.enable_static()
 
@@ -46,7 +49,7 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
                 'X': OpTest.np_dtype_to_base_dtype(self.x),
                 'Y': OpTest.np_dtype_to_base_dtype(self.y),
             }
-            self.attrs = {'axis': self.axis, 'use_mkldnn': self.use_mkldnn}
+            self.attrs = {'axis': self.axis, 'use_onednn': self.use_onednn}
             self.outputs = {'Out': self.out}
 
         def test_check_output(self):
@@ -64,7 +67,7 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
                     max_relative_error=self.max_relative_error,
                 )
 
-        def test_check_grad_ingore_x(self):
+        def test_check_grad_ignore_x(self):
             if paddle.is_compiled_with_xpu():
                 place = paddle.XPUPlace(0)
                 self.check_grad_with_place(
@@ -75,7 +78,7 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
                     max_relative_error=self.max_relative_error,
                 )
 
-        def test_check_grad_ingore_y(self):
+        def test_check_grad_ignore_y(self):
             if paddle.is_compiled_with_xpu():
                 place = paddle.XPUPlace(0)
                 self.check_grad_with_place(
@@ -116,6 +119,30 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
         def init_input_output(self):
             self.x = np.random.uniform(-1, 1, [13, 17]).astype(self.dtype)
             self.y = np.random.uniform(-1, 1, []).astype(self.dtype)
+            self.out = self.x + self.y
+
+    class TestElementwiseAddOp_ZeroSize1(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(0, 3, 4).astype(self.dtype)
+            self.y = np.random.rand(1).astype(self.dtype)
+            self.out = self.x + self.y
+
+    class TestElementwiseAddOp_ZeroSize2(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(0, 3, 4).astype(self.dtype)
+            self.y = np.random.rand(0, 3, 4).astype(self.dtype)
+            self.out = self.x + self.y
+
+    class TestElementwiseAddOp_ZeroSize3(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(3, 0, 4).astype(self.dtype)
+            self.y = np.random.rand(1, 1, 4).astype(self.dtype)
+            self.out = self.x + self.y
+
+    class TestElementwiseAddOp_ZeroSize4(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(3, 0, 4).astype(self.dtype)
+            self.y = np.random.rand(1, 0, 4).astype(self.dtype)
             self.out = self.x + self.y
 
     @skip_check_grad_ci(
@@ -259,6 +286,41 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
         def init_axis(self):
             self.axis = 2
 
+    @check_run_big_shape_test()
+    class TestElementwiseAddOpLargeShape1(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(8192, 1920).astype(self.dtype)
+            self.y = np.random.rand(1920).astype(self.dtype)
+            self.out = self.x + self.y
+
+    @check_run_big_shape_test()
+    class TestElementwiseAddOpLargeShape2(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(1, 8192, 5, 128).astype(self.dtype)
+            self.y = np.random.rand(1, 8192, 5, 128).astype(self.dtype)
+            self.out = self.x + self.y
+
+    @check_run_big_shape_test()
+    class TestElementwiseAddOpLargeShape3(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(1024, 5120).astype(self.dtype)
+            self.y = np.random.rand(5120).astype(self.dtype)
+            self.out = self.x + self.y
+
+    @check_run_big_shape_test()
+    class TestElementwiseAddOpLargeShape4(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(8192, 3456).astype(self.dtype)
+            self.y = np.random.rand(3456).astype(self.dtype)
+            self.out = self.x + self.y
+
+    @check_run_big_shape_test()
+    class TestElementwiseAddOpLargeShape5(TestElementwiseAddOp):
+        def init_input_output(self):
+            self.x = np.random.rand(1, 8192, 31776).astype(self.dtype)
+            self.y = np.random.rand(31776).astype(self.dtype)
+            self.out = self.x + self.y
+
     class TestAddOp(unittest.TestCase):
         def test_name(self):
             with base.program_guard(base.Program()):
@@ -266,7 +328,8 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
                 y = paddle.static.data(name='y', shape=[2, 3], dtype='float32')
 
                 y_1 = paddle.add(x, y, name='add_res')
-                self.assertEqual(('add_res' in y_1.name), True)
+                if not paddle.framework.use_pir_api():
+                    self.assertEqual(('add_res' in y_1.name), True)
 
         def test_declarative(self):
             with base.program_guard(base.Program()):
@@ -283,7 +346,7 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
 
                 place = base.XPUPlace(0)
                 exe = base.Executor(place)
-                z_value = exe.run(feed=gen_data(), fetch_list=[z.name])
+                z_value = exe.run(feed=gen_data(), fetch_list=[z])
                 z_expected = np.array([3.0, 8.0, 6.0])
                 self.assertEqual((z_value == z_expected).all(), True)
 
@@ -291,8 +354,8 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
             with base.dygraph.guard():
                 np_x = np.array([2, 3, 4]).astype('float32')
                 np_y = np.array([1, 5, 2]).astype('float32')
-                x = base.dygraph.to_variable(np_x)
-                y = base.dygraph.to_variable(np_y)
+                x = paddle.to_tensor(np_x)
+                y = paddle.to_tensor(np_y)
                 z = paddle.add(x, y)
                 np_z = z.numpy()
                 z_expected = np.array([3.0, 8.0, 6.0])
@@ -300,8 +363,127 @@ class XPUTestElementwiseAddOp(XPUOpTestWrapper):
 
 
 support_types = get_xpu_op_support_types('elementwise_add')
-for stype in support_types:
+real_types = [t for t in support_types if t != 'complex64']
+for stype in real_types:
     create_test_class(globals(), XPUTestElementwiseAddOp, stype)
+
+if 'complex64' in support_types:
+
+    class TestElementwiseAddOpComplex(OpTest):
+        def setUp(self):
+            self.op_type = "elementwise_add"
+            self.python_api = paddle.add
+            self.init_dtype()
+            self.init_input_output()
+            self.init_axis()
+            self.inputs = {
+                'X': OpTest.np_dtype_to_base_dtype(self.x),
+                'Y': OpTest.np_dtype_to_base_dtype(self.y),
+            }
+            self.outputs = {'Out': self.out}
+
+        def test_check_output(self):
+            if paddle.is_compiled_with_xpu():
+                place = paddle.XPUPlace(0)
+                self.check_output_with_place(place)
+
+        def test_check_grad_normal(self):
+            if paddle.is_compiled_with_xpu():
+                place = paddle.XPUPlace(0)
+                self.check_grad_with_place(
+                    place,
+                    ['X', 'Y'],
+                    'Out',
+                )
+
+        def test_check_grad_ignore_x(self):
+            if paddle.is_compiled_with_xpu():
+                place = paddle.XPUPlace(0)
+                self.check_grad_with_place(
+                    place,
+                    ['Y'],
+                    'Out',
+                    no_grad_set=set("X"),
+                )
+
+        def test_check_grad_ignore_y(self):
+            if paddle.is_compiled_with_xpu():
+                place = paddle.XPUPlace(0)
+                self.check_grad_with_place(
+                    place,
+                    ['X'],
+                    'Out',
+                    no_grad_set=set("Y"),
+                )
+
+        def init_input_output(self):
+            self.x = (
+                np.random.rand(2, 3, 4) + 1j * np.random.rand(2, 3, 4)
+            ).astype(self.dtype)
+            self.y = (
+                np.random.rand(2, 3, 4) + 1j * np.random.rand(2, 3, 4)
+            ).astype(self.dtype)
+            self.out = self.x + self.y
+
+        def init_dtype(self):
+            self.dtype = np.complex64
+
+        def init_axis(self):
+            self.axis = -1
+
+    class TestElementwiseAddOpComplex2(TestElementwiseAddOpComplex):
+        def init_input_output(self):
+            self.x = (
+                np.random.rand(2, 3, 4) + 1j * np.random.rand(2, 3, 4)
+            ).astype(self.dtype)
+            self.y = (np.random.rand(1, 1) + 1j * np.random.rand(1, 1)).astype(
+                self.dtype
+            )
+            self.out = self.x + self.y
+
+    class TestElementwiseAddOpComplex3(TestElementwiseAddOpComplex):
+        def init_input_output(self):
+            self.x = (
+                np.random.rand(10, 2, 3) + 1j * np.random.rand(10, 2, 3)
+            ).astype(self.dtype)
+            self.y = (np.random.rand(1, 1) + 1j * np.random.rand(1, 1)).astype(
+                self.dtype
+            )
+            self.out = self.x + self.y
+
+
+@unittest.skipIf(
+    core.get_xpu_device_version(0) != core.XPUVersion.XPU3,
+    "only supported on XPU3",
+)
+class TestTensorFloat32Bfloat16OrFloat16Add(unittest.TestCase):
+    def _float32_bfloat16_or_float16_add(self, y_dtype):
+        paddle.disable_static()
+        test_num = 5
+        val_range = 10000
+        shapes = []
+        for i in range(test_num):
+            shape = [
+                np.random.randint(1, val_range),
+                np.random.randint(1, val_range),
+            ]
+            shapes.append(shape)
+
+        for i, shape in enumerate(shapes):
+            x = paddle.randn(list(shape), dtype=paddle.float32)
+            x_copy = copy.deepcopy(x)
+            y = paddle.randn(list(shape), dtype=y_dtype)
+            x.add_(y)
+            x_copy.add_(paddle.cast(y, paddle.float32))
+            np.testing.assert_equal(x.numpy(), x_copy.numpy())
+            del x, x_copy
+
+    def test_float32_bfloat16_add(self):
+        self._float32_bfloat16_or_float16_add(y_dtype=paddle.bfloat16)
+
+    def test_float32_float16_add(self):
+        self._float32_bfloat16_or_float16_add(y_dtype=paddle.float16)
+
 
 if __name__ == '__main__':
     unittest.main()

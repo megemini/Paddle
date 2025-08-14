@@ -14,13 +14,13 @@
 
 #pragma once
 
-#include "paddle/pir/core/op_base.h"
+#include "paddle/pir/include/core/op_base.h"
 
 namespace paddle {
 namespace dialect {
 class InplaceTrait : public pir::OpTraitBase<InplaceTrait> {
  public:
-  explicit InplaceTrait(pir::Operation *op)
+  explicit InplaceTrait(const pir::Operation *op)
       : pir::OpTraitBase<InplaceTrait>(op) {}
 };
 

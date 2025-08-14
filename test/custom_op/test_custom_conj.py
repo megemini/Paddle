@@ -41,10 +41,7 @@ custom_ops = load(
 
 
 def is_complex(dtype):
-    return (
-        dtype == paddle.base.core.VarDesc.VarType.COMPLEX64
-        or dtype == paddle.base.core.VarDesc.VarType.COMPLEX128
-    )
+    return dtype == paddle.complex64 or dtype == paddle.complex128
 
 
 def to_complex(dtype):
@@ -75,22 +72,30 @@ def conj_dynamic(func, dtype, np_input):
 def conj_static(func, shape, dtype, np_input):
     paddle.enable_static()
     paddle.set_device("cpu")
-    with static.scope_guard(static.Scope()):
-        with static.program_guard(static.Program()):
-            x = static.data(name="x", shape=shape, dtype=dtype)
-            x.stop_gradient = False
-            out = func(x)
-            sum_out = paddle.sum(out)
-            static.append_backward(sum_out)
+    with (
+        static.scope_guard(static.Scope()),
+        static.program_guard(static.Program()),
+    ):
+        x = static.data(name="x", shape=shape, dtype=dtype)
+        x.stop_gradient = False
+        out = func(x)
+        sum_out = paddle.sum(out)
+        static.append_backward(sum_out)
 
-            exe = static.Executor()
-            exe.run(static.default_startup_program())
+        exe = static.Executor()
+        exe.run(static.default_startup_program())
 
-            out_v, x_grad_v = exe.run(
-                static.default_main_program(),
-                feed={"x": np_input},
-                fetch_list=[out.name, x.name + "@GRAD"],
-            )
+        if paddle.framework.in_pir_mode():
+            ops = static.default_main_program().global_block().ops
+            fetch_list = [out, ops[-1].result(0)]
+        else:
+            fetch_list = [out.name, x.name + "@GRAD"]
+
+        out_v, x_grad_v = exe.run(
+            static.default_main_program(),
+            feed={"x": np_input},
+            fetch_list=fetch_list,
+        )
     paddle.disable_static()
     return out_v, x_grad_v
 

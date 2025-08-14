@@ -18,14 +18,12 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     test_ast_only,
-    test_legacy_and_pt,
-    test_legacy_and_pt_and_pir,
     test_pir_only,
+    test_pt_only,
 )
 from test_fetch_feed import Linear
 
 import paddle
-from paddle import base
 
 SEED = 2020
 
@@ -55,7 +53,7 @@ def nested_output(x, y):
 
 def fake_data(shape):
     x_data = np.random.random(shape).astype('float32')
-    return base.dygraph.to_variable(x_data)
+    return paddle.to_tensor(x_data)
 
 
 class TestWithNestedInput(Dy2StTestBase):
@@ -89,7 +87,6 @@ class TestWithNestedInput(Dy2StTestBase):
 
         return out.numpy()
 
-    @test_legacy_and_pt_and_pir
     def test_nest(self):
         dygraph_res = self._run(to_static=False)
         static_res = self._run(to_static=True)
@@ -115,7 +112,6 @@ class TestWithNestedOutput(Dy2StTestBase):
 
         return out
 
-    @test_legacy_and_pt_and_pir
     def test_nest(self):
         dygraph_res = self._run(to_static=False)
         dygraph_res = paddle.utils.flatten(dygraph_res)
@@ -136,13 +132,13 @@ class TestWithNestedOutput(Dy2StTestBase):
 
 class TestWithTrainAndEval(Dy2StTestBase):
     @test_ast_only
-    @test_legacy_and_pt
+    @test_pt_only
     def test_legacy_ir_switch_eval_and_train(self):
         # TODO(cleanup-legacy-ir): Remove this test case
         linear_net = Linear()
         linear_net = paddle.jit.to_static(linear_net, full_graph=True)
         x_data = np.random.random((4, 10)).astype('float32')
-        x = base.dygraph.to_variable(x_data)
+        x = paddle.to_tensor(x_data)
         linear_net(x)
 
         _, train_partial_layer = linear_net.forward.program_cache.last()[-1]
@@ -200,7 +196,7 @@ class TestWithTrainAndEval(Dy2StTestBase):
 
 class TestWithNoGrad(Dy2StTestBase):
     @test_ast_only
-    @test_legacy_and_pt
+    @test_pt_only
     def test_legacy_ir_with_no_grad(self):
         # TODO(cleanup-legacy-ir): Remove this test case
         linear_net = Linear()
@@ -211,7 +207,6 @@ class TestWithNoGrad(Dy2StTestBase):
         with paddle.no_grad():
             linear_net.train()
             linear_net(x)
-            # BUG: 我们希望这里 是 ASTStaticFunction(StaticFunction):
             _, partial_layer = linear_net.forward.program_cache.last()[-1]
             self.assertEqual(
                 partial_layer.program, partial_layer._train_program
@@ -228,7 +223,6 @@ class TestWithNoGrad(Dy2StTestBase):
         with paddle.no_grad():
             linear_net.train()
             linear_net(x)
-            # BUG: 我们希望这里 是 ASTStaticFunction(StaticFunction):
             _, partial_layer = linear_net.forward.program_cache.last()[-1]
             self.assertEqual(partial_layer.program, partial_layer.train_program)
 
@@ -249,7 +243,6 @@ class GPT2LMHeadModel(paddle.nn.Layer):
 
 
 class TestPruneUnusedParamInProgram(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_prune(self):
         input_ids = np.array([[15, 11, 6, 3, 18, 13]]).astype("float32")
 

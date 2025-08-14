@@ -21,13 +21,13 @@
 #include <list>
 #include <memory>
 
-#include "paddle/fluid/platform/macros.h"
-#include "paddle/fluid/platform/profiler/cpu_utilization.h"
+#include "paddle/common/macros.h"
 #include "paddle/fluid/platform/profiler/event_node.h"
 #include "paddle/fluid/platform/profiler/event_python.h"
 #include "paddle/fluid/platform/profiler/tracer_base.h"
+#include "paddle/phi/core/platform/profiler/cpu_utilization.h"
 
-PHI_DECLARE_int64(host_trace_level);
+COMMON_DECLARE_int64(host_trace_level);
 
 namespace paddle {
 namespace platform {
@@ -47,8 +47,8 @@ struct ProfilerOptions {
 class Profiler {
  public:
   static uint32_t
-      span_indx;  // index of profiler range, when user profiles multiple ranges
-                  // such as [2,4], [6,8], the first range is index 0.
+      span_index;  // index of profiler range, when user profiles multiple
+                   // ranges such as [2,4], [6,8], the first range is index 0.
   static const char* version;  // profiler version.
   static std::unique_ptr<Profiler> Create(
       const ProfilerOptions& options,

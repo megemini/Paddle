@@ -12,10 +12,9 @@ limitations under the License. */
 
 #include <cstring>
 
-#include "paddle/fluid/platform/profiler/extra_info.h"
+#include "paddle/phi/core/platform/profiler/extra_info.h"
 
-namespace paddle {
-namespace platform {
+namespace paddle::platform {
 
 DeserializationReader::DeserializationReader(const std::string& filename)
     : filename_(filename) {
@@ -44,12 +43,12 @@ std::unique_ptr<ProfilerResult> DeserializationReader::Parse() {
     return nullptr;
   }
   // restore extra info
-  ExtraInfo extrainfo;
-  for (auto indx = 0; indx < node_trees_proto_->extra_info_size(); indx++) {
-    ExtraInfoMap extra_info_map = node_trees_proto_->extra_info(indx);
-    extrainfo.AddExtraInfo(extra_info_map.key(),
-                           std::string("%s"),
-                           extra_info_map.value().c_str());
+  ExtraInfo extra_info;
+  for (auto index = 0; index < node_trees_proto_->extra_info_size(); index++) {
+    ExtraInfoMap extra_info_map = node_trees_proto_->extra_info(index);
+    extra_info.AddExtraInfo(extra_info_map.key(),
+                            std::string("%s"),
+                            extra_info_map.value().c_str());
   }
 
   // restore NodeTrees
@@ -131,22 +130,22 @@ std::unique_ptr<ProfilerResult> DeserializationReader::Parse() {
 // restore gpuDeviceProp
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   std::map<uint32_t, gpuDeviceProp> device_property_map;
-  for (auto indx = 0; indx < node_trees_proto_->device_property_size();
-       indx++) {
+  for (auto index = 0; index < node_trees_proto_->device_property_size();
+       index++) {
     const DevicePropertyProto& device_property_proto =
-        node_trees_proto_->device_property(indx);
+        node_trees_proto_->device_property(index);
     device_property_map[device_property_proto.id()] =
         RestoreDeviceProperty(device_property_proto);
   }
   ProfilerResult* profiler_result_ptr =
-      new ProfilerResult(std::move(tree), extrainfo, device_property_map);
+      new ProfilerResult(std::move(tree), extra_info, device_property_map);
 #else
   ProfilerResult* profiler_result_ptr =
-      new ProfilerResult(std::move(tree), extrainfo);
+      new ProfilerResult(std::move(tree), extra_info);
 #endif
-  // restore version and span indx
+  // restore version and span index
   profiler_result_ptr->SetVersion(node_trees_proto_->version());
-  profiler_result_ptr->SetSpanIndx(node_trees_proto_->span_indx());
+  profiler_result_ptr->SetSpanIndex(node_trees_proto_->span_index());
   return std::unique_ptr<ProfilerResult>(profiler_result_ptr);
 }
 
@@ -163,18 +162,20 @@ gpuDeviceProp DeserializationReader::RestoreDeviceProperty(
           device_property_proto.name().c_str(),
           device_property_proto.name().length() + 1);
   device_property.totalGlobalMem = device_property_proto.total_global_memory();
-  device_property.major = device_property_proto.compute_major();
-  device_property.minor = device_property_proto.compute_minor();
-  device_property.multiProcessorCount = device_property_proto.sm_count();
+  device_property.major = device_property_proto.compute_major();  // NOLINT
+  device_property.minor = device_property_proto.compute_minor();  // NOLINT
+  device_property.multiProcessorCount =
+      device_property_proto.sm_count();  // NOLINT
 #if defined(PADDLE_WITH_CUDA)
   device_property.maxThreadsPerBlock =
-      device_property_proto.max_threads_per_block();
+      device_property_proto.max_threads_per_block();  // NOLINT
   device_property.maxThreadsPerMultiProcessor =
-      device_property_proto.max_threads_per_multiprocessor();
-  device_property.regsPerBlock = device_property_proto.regs_per_block();
+      device_property_proto.max_threads_per_multiprocessor();  // NOLINT
+  device_property.regsPerBlock =
+      device_property_proto.regs_per_block();  // NOLINT
   device_property.regsPerMultiprocessor =
-      device_property_proto.regs_per_multiprocessor();
-  device_property.warpSize = device_property_proto.warp_size();
+      device_property_proto.regs_per_multiprocessor();           // NOLINT
+  device_property.warpSize = device_property_proto.warp_size();  // NOLINT
   device_property.sharedMemPerBlock =
       device_property_proto.shared_memory_per_block();
   device_property.sharedMemPerMultiprocessor =
@@ -364,5 +365,4 @@ MemsetEventInfo DeserializationReader::HandleMemsetEventInfoProto(
   return memset_info;
 }
 
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::platform

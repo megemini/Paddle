@@ -13,13 +13,13 @@
 // limitations under the License.
 
 #include "paddle/phi/kernels/layer_norm_kernel.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/layer_norm_impl.cu.h"
 #include "paddle/phi/kernels/funcs/layer_norm_util.h"
-#include "paddle/utils/flags.h"
 
-PD_DECLARE_bool(use_fast_math);
+COMMON_DECLARE_bool(use_fast_math);
 
 namespace phi {
 
@@ -132,7 +132,7 @@ struct LayerNormDataReader<T, U, 1> {
 };
 
 template <typename T, typename U, bool IsSameType, int VecSize>
-struct LayerNormDataWritter {
+struct LayerNormDataWriter {
   __device__ inline void operator()(
       T *__restrict__ row_dst,
       const U *__restrict__ buffer,
@@ -159,7 +159,7 @@ struct LayerNormDataWritter {
           temp_dst[j] = static_cast<T>((buffer[i * VecSize + j] - row_mean) *
                                        row_inv_var);
         }
-        v_dst[threadIdx.x + blockDim.x * i] = temp_dst;
+        v_dst[threadIdx.x + static_cast<int64_t>(blockDim.x) * i] = temp_dst;
       }
     } else {
       const VecScaleT *__restrict__ v_scale =
@@ -168,7 +168,7 @@ struct LayerNormDataWritter {
           reinterpret_cast<const VecScaleT *__restrict__>(bias);
       if (valid_scale && valid_bias) {
         for (int i = 0; i < write_times; ++i) {
-          int idx = threadIdx.x + blockDim.x * i;
+          int64_t idx = threadIdx.x + static_cast<int64_t>(blockDim.x) * i;
           VecT temp_dst;
           VecScaleT temp_v_scale = v_scale[idx];
           VecScaleT temp_v_bias = v_bias[idx];
@@ -184,7 +184,7 @@ struct LayerNormDataWritter {
       } else {
         if (valid_scale) {
           for (int i = 0; i < write_times; ++i) {
-            int idx = threadIdx.x + blockDim.x * i;
+            int64_t idx = threadIdx.x + static_cast<int64_t>(blockDim.x) * i;
             VecT temp_dst;
             VecScaleT temp_v_scale = v_scale[idx];
 #pragma unroll
@@ -215,7 +215,7 @@ struct LayerNormDataWritter {
 };
 
 template <typename T, typename U, bool IsSameType>
-struct LayerNormDataWritter<T, U, IsSameType, 1> {
+struct LayerNormDataWriter<T, U, IsSameType, 1> {
   __device__ __forceinline__ void operator()(
       T *__restrict__ row_dst,
       U *__restrict__ buffer,
@@ -232,19 +232,19 @@ struct LayerNormDataWritter<T, U, IsSameType, 1> {
     if ((!valid_scale) && (!valid_bias)) {
       if (threadIdx.x < last_tid_idx) {
         for (int i = 0; i < cols_this_thread; ++i) {
-          row_dst[threadIdx.x + last_tid_idx * i] =
+          row_dst[threadIdx.x + static_cast<int64_t>(last_tid_idx) * i] =
               (buffer[i] - row_mean) * row_inv_var;
         }
       } else {
         for (int i = 0; i < cols_this_thread; ++i) {
-          row_dst[last_tid_idx * write_times + i] =
+          row_dst[static_cast<int64_t>(last_tid_idx) * write_times + i] =
               (buffer[i] - row_mean) * row_inv_var;
         }
       }
     } else if (valid_scale && valid_bias) {
       if (threadIdx.x < last_tid_idx) {
         for (int i = 0; i < cols_this_thread; ++i) {
-          int idx = threadIdx.x + last_tid_idx * i;
+          int64_t idx = threadIdx.x + static_cast<int64_t>(last_tid_idx) * i;
           row_dst[idx] =
               static_cast<T>(static_cast<U>(scale[idx]) *
                                  (buffer[i] - row_mean) * row_inv_var +
@@ -252,7 +252,7 @@ struct LayerNormDataWritter<T, U, IsSameType, 1> {
         }
       } else {
         for (int i = 0; i < cols_this_thread; ++i) {
-          int idx = last_tid_idx * write_times + i;
+          int64_t idx = static_cast<int64_t>(last_tid_idx) * write_times + i;
           row_dst[idx] =
               static_cast<T>(static_cast<U>(scale[idx]) *
                                  (buffer[i] - row_mean) * row_inv_var +
@@ -263,13 +263,13 @@ struct LayerNormDataWritter<T, U, IsSameType, 1> {
       if (valid_scale) {
         if (threadIdx.x < last_tid_idx) {
           for (int i = 0; i < cols_this_thread; ++i) {
-            int idx = threadIdx.x + last_tid_idx * i;
+            int64_t idx = threadIdx.x + static_cast<int64_t>(last_tid_idx) * i;
             row_dst[idx] = static_cast<T>(static_cast<U>(scale[idx]) *
                                           (buffer[i] - row_mean) * row_inv_var);
           }
         } else {
           for (int i = 0; i < cols_this_thread; ++i) {
-            int idx = last_tid_idx * write_times + i;
+            int64_t idx = static_cast<int64_t>(last_tid_idx) * write_times + i;
             row_dst[idx] = static_cast<T>(static_cast<U>(scale[idx]) *
                                           (buffer[i] - row_mean) * row_inv_var);
           }
@@ -277,13 +277,13 @@ struct LayerNormDataWritter<T, U, IsSameType, 1> {
       } else {
         if (threadIdx.x < last_tid_idx) {
           for (int i = 0; i < cols_this_thread; ++i) {
-            int idx = threadIdx.x + last_tid_idx * i;
+            int64_t idx = threadIdx.x + static_cast<int64_t>(last_tid_idx) * i;
             row_dst[idx] = static_cast<T>((buffer[i] - row_mean) * row_inv_var +
                                           static_cast<U>(bias[idx]));
           }
         } else {
           for (int i = 0; i < cols_this_thread; ++i) {
-            int idx = last_tid_idx * write_times + i;
+            int64_t idx = static_cast<int64_t>(last_tid_idx) * write_times + i;
             row_dst[idx] = static_cast<T>((buffer[i] - row_mean) * row_inv_var +
                                           static_cast<U>(bias[idx]));
           }
@@ -343,17 +343,17 @@ __global__ void LayerNormFwdWithWelford(
       mean[row_offset] = warp_mean;
       var[row_offset] = row_variance;
     }
-    LayerNormDataWritter<T, U, IsSameType, VecSize>()(row_dst,
-                                                      buffer,
-                                                      scale,
-                                                      bias,
-                                                      warp_mean,
-                                                      row_inv_var,
-                                                      read_times,
-                                                      cols_this_thread,
-                                                      last_tid_idx,
-                                                      valid_scale,
-                                                      valid_bias);
+    LayerNormDataWriter<T, U, IsSameType, VecSize>()(row_dst,
+                                                     buffer,
+                                                     scale,
+                                                     bias,
+                                                     warp_mean,
+                                                     row_inv_var,
+                                                     read_times,
+                                                     cols_this_thread,
+                                                     last_tid_idx,
+                                                     valid_scale,
+                                                     valid_bias);
   }
 }
 
@@ -389,7 +389,8 @@ void LaunchLayerNormKernel(const Context &dev_ctx,
                    : addr;
         addr = valid_bias ? (addr | reinterpret_cast<uint64_t>(void_bias_data))
                           : addr;
-        data_vec_size = phi::GetVectorizedSize<T>(reinterpret_cast<T *>(addr));
+        data_vec_size =
+            std::min(4, phi::GetVectorizedSize<T>(reinterpret_cast<T *>(addr)));
       } else {
         uint64_t bias_addr = reinterpret_cast<uint64_t>(void_bias_data);
         uint64_t attr_addr = valid_scale
@@ -401,6 +402,7 @@ void LaunchLayerNormKernel(const Context &dev_ctx,
         data_vec_size = std::min(
             phi::GetVectorizedSize<T>(reinterpret_cast<T *>(addr)),
             phi::GetVectorizedSize<U>(reinterpret_cast<U *>(attr_addr)));
+        data_vec_size = std::min(4, data_vec_size);
       }
     }
     for (int size = data_vec_size; size > 0; size /= 2) {
@@ -453,16 +455,17 @@ void LaunchLayerNormKernel(const Context &dev_ctx,
 #endif  // PADDLE_WITH_CUDA
 
 template <typename T, typename U>
-void LayerNormDirectCUDAFunctor<T, U>::operator()(gpuStream_t stream,
-                                                  const T *input,
-                                                  std::vector<int> input_shape,
-                                                  const U *bias,
-                                                  const U *scale,
-                                                  T *output,
-                                                  U *mean,
-                                                  U *variance,
-                                                  int begin_norm_axis,
-                                                  float eps) {
+void LayerNormDirectCUDAFunctor<T, U>::operator()(
+    gpuStream_t stream,
+    const T *input,
+    std::vector<int64_t> input_shape,
+    const U *bias,
+    const U *scale,
+    T *output,
+    U *mean,
+    U *variance,
+    int begin_norm_axis,
+    float eps) {
   const auto x_dims = common::make_ddim(input_shape);
   auto matrix_dim = common::flatten_to_2d(x_dims, begin_norm_axis);
   int64_t batch_size = static_cast<int64_t>(matrix_dim[0]);
@@ -473,7 +476,7 @@ void LayerNormDirectCUDAFunctor<T, U>::operator()(gpuStream_t stream,
         <<<batch_size, kBlockDim, 0, stream>>>(
             input, scale, bias, output, mean, variance, eps, feature_size));
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Product from begin_norm_axis to end in layer_norm must be larger "
           "than 1"));
       break;
@@ -505,6 +508,7 @@ void LayerNormKernel(const Context &dev_ctx,
   auto *y_data = dev_ctx.template Alloc<T>(y);
   auto *mean_data = dev_ctx.template Alloc<U>(mean);
   auto *var_data = dev_ctx.template Alloc<U>(var);
+  if (x.numel() == 0) return;
 
   bool valid_scale = (scale != nullptr);
   bool valid_bias = (bias != nullptr);
@@ -516,11 +520,11 @@ void LayerNormKernel(const Context &dev_ctx,
   if (valid_scale) {
     scale_bias_dtype = scale->dtype();
     if (valid_bias) {
-      PADDLE_ENFORCE_EQ(
-          scale->dtype(),
-          bias->dtype(),
-          phi::errors::InvalidArgument("This Scale and Bias of layer_norm op "
-                                       "should have the same data type."));
+      PADDLE_ENFORCE_EQ(scale->dtype(),
+                        bias->dtype(),
+                        common::errors::InvalidArgument(
+                            "This Scale and Bias of layer_norm op "
+                            "should have the same data type."));
     }
   } else {
     scale_bias_dtype = valid_bias ? bias->dtype() : x_dtype;
@@ -530,7 +534,7 @@ void LayerNormKernel(const Context &dev_ctx,
   if (!is_scale_bias_same_dtype_with_x) {
     PADDLE_ENFORCE_EQ(scale_bias_dtype,
                       phi::CppTypeToDataType<U>::Type(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Unsupported data type of Scale and Bias"));
   }
 
@@ -555,7 +559,7 @@ void LayerNormKernel(const Context &dev_ctx,
               epsilon,                                                     \
               feature_size));                                              \
       default:                                                             \
-        PADDLE_THROW(phi::errors::InvalidArgument(                         \
+        PADDLE_THROW(common::errors::InvalidArgument(                      \
             "Product from begin_norm_axis to end must be larger than 1")); \
         break;                                                             \
     }                                                                      \
@@ -614,7 +618,7 @@ void LayerNormKernel(const Context &dev_ctx,
       switch (feature_size) {
         PADDLE_LAUNCH_FAST_LAYERNORM_FWD(T);
         default:
-          PADDLE_THROW(phi::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "Only when feature_size is from 256 to 4096 and is diviaible by "
               "256 is supported "
               "now"));
@@ -624,7 +628,7 @@ void LayerNormKernel(const Context &dev_ctx,
       switch (feature_size) {
         PADDLE_LAUNCH_FAST_LAYERNORM_FWD(U);
         default:
-          PADDLE_THROW(phi::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "Only when feature_size is from 256 to 4096 and is diviaible by "
               "is supported "
               "now"));

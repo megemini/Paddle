@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle.base import core
 
 np.random.seed(10)
 
@@ -28,9 +28,7 @@ class TestBucketizeAPI(unittest.TestCase):
     def setUp(self):
         self.sorted_sequence = np.array([2, 4, 8, 16]).astype("float64")
         self.x = np.array([[0, 8, 4, 16], [-1, 2, 8, 4]]).astype("float64")
-        self.place = [paddle.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.place.append(paddle.CUDAPlace(0))
+        self.place = get_places()
 
     def test_api_static(self):
         paddle.enable_static()

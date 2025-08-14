@@ -27,3 +27,160 @@ if((WITH_GPU) AND (LINUX))
   set_tests_properties(test_semi_auto_parallel_c_cross_entropy
                        PROPERTIES TIMEOUT "120" LABELS "RUN_TYPE=HYBRID")
 endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_cross_mesh_reshard MODULES test_cross_mesh_reshard ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_cross_mesh_reshard PROPERTIES TIMEOUT "120" LABELS
+                                                          "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_parallel_llama_model_amp MODULES
+    test_semi_auto_parallel_llama_model_amp ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_semi_auto_parallel_llama_model_amp
+                       PROPERTIES TIMEOUT "180" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_parallel_hybrid_sharding_strategy MODULES
+    test_semi_auto_parallel_hybrid_sharding_strategy ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_semi_auto_parallel_hybrid_sharding_strategy
+                       PROPERTIES TIMEOUT "120" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_global_mesh_reshard MODULES test_global_mesh_reshard ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_global_mesh_reshard PROPERTIES TIMEOUT "120" LABELS
+                                                           "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_parallel_global_input MODULES
+    test_semi_auto_parallel_global_input ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_semi_auto_parallel_global_input
+                       PROPERTIES TIMEOUT "120" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_parallel_multi_inputs MODULES
+    test_semi_auto_parallel_multi_inputs ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_semi_auto_parallel_multi_inputs
+                       PROPERTIES TIMEOUT "120" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_parallel_llama_model_vpp MODULES
+    test_semi_auto_parallel_llama_model_vpp ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_semi_auto_parallel_llama_model_vpp
+                       PROPERTIES TIMEOUT "180" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_parallel_llama_model_pir
+    MODULES
+    test_semi_auto_parallel_llama_model_pir
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=1"
+  )
+  set_tests_properties(test_semi_auto_parallel_llama_model_pir
+                       PROPERTIES TIMEOUT "180" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_pir_reshard_nd_mesh_func MODULES test_pir_reshard_nd_mesh_func ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_pir_reshard_nd_mesh_func
+                       PROPERTIES TIMEOUT "35" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_llama_acc_align
+    MODULES
+    test_semi_auto_llama_acc_align
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=1"
+  )
+  set_tests_properties(test_semi_auto_llama_acc_align
+                       PROPERTIES TIMEOUT "300" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_semi_auto_llama_save_load
+    MODULES
+    test_semi_auto_llama_save_load
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=1"
+  )
+  set_tests_properties(test_semi_auto_llama_save_load
+                       PROPERTIES TIMEOUT "180" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_parallel_api_with_llama_1d MODULES test_parallel_api_with_llama_1d
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_parallel_api_with_llama_1d
+                       PROPERTIES TIMEOUT "400" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_parallel_api_with_llama_2d MODULES test_parallel_api_with_llama_2d
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_parallel_api_with_llama_2d
+                       PROPERTIES TIMEOUT "400" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_parallel_api_with_llama_2d_sep MODULES
+    test_parallel_api_with_llama_2d_sep ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_parallel_api_with_llama_2d_sep
+                       PROPERTIES TIMEOUT "400" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_parallel_api_with_llama_3d MODULES test_parallel_api_with_llama_3d
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_parallel_api_with_llama_3d
+                       PROPERTIES TIMEOUT "400" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_to_distributed_api_for_llama MODULES test_to_distributed_api_for_llama
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_to_distributed_api_for_llama
+                       PROPERTIES TIMEOUT "180" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_parallel_api_with_llama_lora MODULES test_parallel_api_with_llama_lora
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_parallel_api_with_llama_lora
+                       PROPERTIES TIMEOUT "360" LABELS "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_process_mesh MODULES test_process_mesh ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_process_mesh PROPERTIES TIMEOUT "150" LABELS
+                                                    "RUN_TYPE=HYBRID")
+endif()
+if((WITH_GPU) AND (LINUX))
+  py_test_modules(
+    test_get_group_in_different_hybrid_configs MODULES
+    test_get_group_in_different_hybrid_configs ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=../..:${PADDLE_BINARY_DIR}/python")
+  set_tests_properties(test_get_group_in_different_hybrid_configs
+                       PROPERTIES TIMEOUT "150" LABELS "RUN_TYPE=HYBRID")
+endif()

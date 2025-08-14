@@ -16,7 +16,6 @@ from op_test import OpTest
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -31,7 +30,7 @@ class Decoder:
         bs, seq_len, n_label = inputs.shape
         inputs_t = np.transpose(inputs, (1, 0, 2))
         trans_exp = np.expand_dims(self.transitions, axis=0)
-        historys = []
+        histories = []
         left_length = np.array(length)
         max_seq_len = np.amax(left_length)
         left_length = np.expand_dims(left_length, 1)
@@ -49,7 +48,7 @@ class Decoder:
             alpha_exp = np.expand_dims(alpha, 2)
             alpha_trn_sum = alpha_exp + trans_exp
             max_res = np.amax(alpha_trn_sum, 1), np.argmax(alpha_trn_sum, 1)
-            historys = historys + [max_res[1]] if i >= 1 else []
+            histories = [*histories, max_res[1]] if i >= 1 else []
             alpha_nxt = max_res[0] + logit
             mask = left_length > 0
             alpha = mask * alpha_nxt + (1 - mask) * alpha
@@ -61,7 +60,7 @@ class Decoder:
         last_ids_update = last_ids * (left_length >= 0)
         batch_path = [last_ids_update]
         batch_offset = np.arange(bs) * n_label
-        for hist in reversed(historys):
+        for hist in reversed(histories):
             left_length = left_length + 1
             gather_idx = batch_offset + last_ids
             last_ids_update = np.take(hist, gather_idx) * (left_length > 0)
@@ -100,7 +99,7 @@ class TestViterbiOp(OpTest):
         self.outputs = {'Scores': scores, 'Path': path}
 
     def test_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 class TestViterbiAPI(unittest.TestCase):
@@ -122,10 +121,11 @@ class TestViterbiAPI(unittest.TestCase):
         decoder = Decoder(self.transitions, self.use_tag)
         self.scores, self.path = decoder(self.input, self.length)
 
-    @test_with_pir_api
     def check_static_result(self, place):
         bz, length, ntags = self.bz, self.len, self.ntags
-        with base.program_guard(base.Program(), base.Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             Input = paddle.static.data(
                 name="Input", shape=[bz, length, ntags], dtype="float32"
             )

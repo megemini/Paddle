@@ -15,6 +15,7 @@
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 from test_imperative_base import new_program_scope
 
 import paddle
@@ -44,29 +45,25 @@ class TestImperativeOptimizerBase(unittest.TestCase):
         self.batch_num = 20
 
     def get_optimizer_dygraph(self, parameter_list):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def get_optimizer(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def reader_decorator(self, reader):
-        def _reader_imple():
+        def _reader_simple():
             for item in reader():
                 image = np.array(item[0]).reshape(1, 784)
                 label = np.array(item[1]).astype('int64').reshape(1)
                 yield image, label
 
-        return _reader_imple
+        return _reader_simple
 
     def _check_exception(self, exception_message, place=None):
         seed = 90
         batch_size = 128
         if place is None:
-            place = (
-                base.CUDAPlace(0)
-                if core.is_compiled_with_cuda()
-                else base.CPUPlace()
-            )
+            place = get_device_place()
 
         with base.dygraph.guard(place):
             try:
@@ -84,11 +81,7 @@ class TestImperativeOptimizerBase(unittest.TestCase):
         batch_size = 128
 
         if place is None:
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
 
         with base.dygraph.guard(place):
             paddle.seed(seed)
@@ -139,11 +132,7 @@ class TestImperativeOptimizerBase(unittest.TestCase):
             paddle.framework.random._manual_program_seed(seed)
 
             if place is None:
-                place = (
-                    base.CPUPlace()
-                    if not core.is_compiled_with_cuda()
-                    else base.CUDAPlace(0)
-                )
+                place = get_device_place()
 
             exe = base.Executor(place)
 
@@ -234,7 +223,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 
@@ -258,7 +247,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 
@@ -289,7 +278,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 
@@ -324,7 +313,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 

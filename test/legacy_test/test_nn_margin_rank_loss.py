@@ -15,11 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle import base
-from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
+from paddle.base.framework import in_pir_mode
 
 
 def calc_margin_rank_loss(x, y, label, margin=0.0, reduction='none'):
@@ -41,12 +40,8 @@ def create_test_case(margin, reduction):
             self.label_data = np.random.choice([-1, 1], size=[10, 10]).astype(
                 "float64"
             )
-            self.places = []
-            self.places.append(base.CPUPlace())
-            if core.is_compiled_with_cuda():
-                self.places.append(paddle.CUDAPlace(0))
+            self.places = get_places()
 
-        @test_with_pir_api
         def run_static_functional_api(self, place):
             paddle.enable_static()
             expected = calc_margin_rank_loss(
@@ -117,7 +112,8 @@ def create_test_case(margin, reduction):
                     fetch_list=[result],
                 )
                 np.testing.assert_allclose(result_numpy, expected, rtol=1e-05)
-                self.assertTrue('loss' in result.name)
+                if not in_pir_mode():
+                    self.assertTrue('loss' in result.name)
 
         def run_dynamic_functional_api(self, place):
             paddle.disable_static(place)
@@ -192,11 +188,73 @@ for margin in [0.0, 0.2]:
         create_test_case(margin, reduction)
 
 
+def create_test_case_zero_size(margin, reduction):
+    class MarginRankingLossCls_ZeroSize(unittest.TestCase):
+        def init_shape(self):
+            self.x_shape = (1, 10)
+            self.y_shape = (0, 10)
+            self.label_shape = (1, 10)
+
+        def setUp(self):
+            self.init_shape()
+            self.x_data = np.random.rand(*self.x_shape).astype("float64")
+            self.y_data = np.random.rand(*self.y_shape).astype("float64")
+            self.label_data = np.random.choice(
+                [-1, 1], size=self.label_shape
+            ).astype("float64")
+            self.places = get_places()
+
+        def run_dynamic_functional_api(self, place):
+            paddle.disable_static(place)
+            x = paddle.to_tensor(self.x_data)
+            x.stop_gradient = False
+            y = paddle.to_tensor(self.y_data)
+            label = paddle.to_tensor(self.label_data)
+
+            result = paddle.nn.functional.margin_ranking_loss(
+                x, y, label, margin, reduction
+            )
+            expected = calc_margin_rank_loss(
+                self.x_data,
+                self.y_data,
+                self.label_data,
+                margin=margin,
+                reduction=reduction,
+            )
+            np.testing.assert_allclose(result.numpy(), expected, rtol=1e-05)
+            loss = paddle.sum(result)
+            loss.backward()
+            np.testing.assert_allclose(x.grad.shape, x.shape)
+            paddle.enable_static()
+
+        def test_case(self):
+            for place in self.places:
+                self.run_dynamic_functional_api(place)
+
+    cls_name = f"TestMarginRankLossCase_ZeroSize_{margin}_{reduction}"
+    MarginRankingLossCls_ZeroSize.__name__ = cls_name
+    globals()[cls_name] = MarginRankingLossCls_ZeroSize
+
+    class MarginRankingLossCls_ZeroSize2(MarginRankingLossCls_ZeroSize):
+        def init_shape(self):
+            self.x_shape = (0, 10)
+            self.y_shape = (0, 10)
+            self.label_shape = (0, 10)
+
+    cls_name = f"TestMarginRankLossCase_ZeroSize2_{margin}_{reduction}"
+    MarginRankingLossCls_ZeroSize2.__name__ = cls_name
+    globals()[cls_name] = MarginRankingLossCls_ZeroSize2
+
+
+for margin in [0.0, 0.2]:
+    for reduction in ['none', 'mean', 'sum']:
+        create_test_case_zero_size(margin, reduction)
+
+
 # test case the raise message
 class MarginRakingLossError(unittest.TestCase):
     paddle.enable_static()
 
-    @test_with_pir_api
     def test_errors(self):
         def test_margin_value_error():
             margin_rank_loss = paddle.nn.loss.MarginRankingLoss(

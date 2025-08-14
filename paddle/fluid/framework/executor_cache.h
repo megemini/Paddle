@@ -23,19 +23,19 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/common/macros.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
-#include "paddle/fluid/framework/parallel_executor.h"
 #include "paddle/fluid/framework/program_desc.h"
-#include "paddle/fluid/platform/macros.h"
-#include "paddle/fluid/string/string_helper.h"
+#include "paddle/fluid/framework/scope.h"
+#include "paddle/utils/string/string_helper.h"
 
 #include "paddle/fluid/ir_adaptor/translator/program_translator.h"
-#include "paddle/pir/core/dialect.h"
-#include "paddle/pir/core/ir_context.h"
-#include "paddle/pir/core/program.h"
+#include "paddle/pir/include/core/dialect.h"
+#include "paddle/pir/include/core/ir_context.h"
+#include "paddle/pir/include/core/program.h"
 
-PHI_DECLARE_bool(enable_pir_in_executor);
-PHI_DECLARE_bool(enable_pir_with_pt_in_dy2st);
+COMMON_DECLARE_bool(enable_pir_in_executor);
+COMMON_DECLARE_bool(enable_pir_with_pt_in_dy2st);
 
 namespace paddle {
 namespace framework {
@@ -47,15 +47,6 @@ class InterpreterCore;
 
 namespace details {
 void AppendSkipDeletionVars(const std::vector<std::string>& append_vars,
-                            std::vector<std::string>* all_vars);
-
-void ParseSafeEagerDeletionSkipVars(
-    const ProgramDesc& program,
-    int64_t forward_op_nums,
-    const std::vector<std::string>& output_var_names,
-    std::vector<std::string>* skip_eager_delete_vars);
-
-void AppendSkipDeletionVars(const std::vector<std::string>& append_vars,
                             std::set<std::string>* all_vars);
 
 // TODO(Aurelius84) : Need remove skip_no_need_buffer after cinn fix this
@@ -64,106 +55,6 @@ std::set<std::string> ParseSafeEagerDeletionSkipVarsSet(
     const ProgramDesc& backward_program, bool skip_no_need_buffer = false);
 
 }  // namespace details
-
-class ExecutorInfo {
- public:
-  struct CacheValue {
-    std::shared_ptr<ParallelExecutor> executor_{nullptr};
-    std::shared_ptr<ir::Graph> graph_{nullptr};
-
-    std::vector<std::string> skip_eager_delete_vars_;
-  };
-
-  bool IsAvailable(bool is_grad) {
-    const auto& executor =
-        is_grad ? backward_info_.executor_ : forward_info_.executor_;
-    return executor != nullptr;
-  }
-
-  CacheValue& GetMutable(bool is_grad) {
-    return is_grad ? backward_info_ : forward_info_;
-  }
-
- private:
-  CacheValue forward_info_;
-  CacheValue backward_info_;
-};
-
-class ExecutorInfoCache {
- public:
-  static ExecutorInfoCache& Instance();
-
-  const BuildStrategy& GetBuildStrategy(int64_t program_id) {
-    // If not found, insert build_strategy with default value.
-    return strategy_map_[program_id];
-  }
-
-  void SetBuildStrategy(int64_t program_id,
-                        const BuildStrategy& build_strategy) {
-    PADDLE_ENFORCE_EQ(
-        strategy_map_.count(program_id),
-        0,
-        platform::errors::PreconditionNotMet(
-            "program_id: %s already exist in ExecutorInfoCache", program_id));
-    strategy_map_[program_id] = build_strategy;
-  }
-
-  bool Has(int64_t program_id, bool is_grad) {
-    return info_map_.find(program_id) != info_map_.end() &&
-           info_map_[program_id].IsAvailable(is_grad);
-  }
-
-  ExecutorInfo::CacheValue& GetMutable(int64_t program_id, bool is_grad) {
-    return info_map_[program_id].GetMutable(is_grad);
-  }
-
-  void UpdateSkipEagerDeleteVars(int64_t program_id,
-                                 bool is_grad,
-                                 const std::vector<std::string>& skip_vars) {
-    auto& cached_value = GetMutable(program_id, is_grad);
-    cached_value.skip_eager_delete_vars_ = std::move(skip_vars);
-  }
-
-  std::vector<std::string>& SkipEagerDeleteVars(int64_t program_id,
-                                                bool is_grad) {
-    auto& cached_value = GetMutable(program_id, is_grad);
-    return cached_value.skip_eager_delete_vars_;
-  }
-
-  size_t Size() const { return info_map_.size(); }
-
-  void Finalize() {
-    // NOTE(Aurelius84): DO NOT perform finalize in destructor
-    // to avoid problems caused by destructor order of static
-    // object.
-    info_map_.clear();
-    strategy_map_.clear();
-  }
-
- private:
-  std::unordered_map<int64_t, ExecutorInfo> info_map_;
-  std::unordered_map<int64_t, BuildStrategy> strategy_map_;
-};
-
-using CacheInfo =
-    std::pair<std::shared_ptr<ParallelExecutor>, bool /*is_new_created*/>;
-
-using PEAndGraphPair =
-    std::pair<std::shared_ptr<ParallelExecutor>, std::shared_ptr<ir::Graph>>;
-
-CacheInfo GetExecutorInfoFromCache(const ProgramDesc& program_desc,
-                                   const platform::Place& place,
-                                   int64_t start_op_index,
-                                   int64_t end_op_index,
-                                   bool is_grad,
-                                   int64_t program_id,
-                                   framework::Scope* scope);
-
-PEAndGraphPair CreateFixOrderExecutorInfo(const ProgramDesc& program_desc,
-                                          const platform::Place& place,
-                                          int64_t start_op_index,
-                                          int64_t end_op_index,
-                                          framework::Scope* scope);
 
 int64_t hash_with_seed(int64_t value, int64_t seed);
 
@@ -175,7 +66,7 @@ class InterpreterCoreInfo {
     std::unique_ptr<::pir::Program> ir_prog_{nullptr};
   };
 
-  bool IsAvailable(bool is_grad) {
+  bool IsAvailable(bool is_grad) const {
     const auto& core = is_grad ? backward_info_.core_ : forward_info_.core_;
     return core != nullptr;
   }
@@ -189,54 +80,89 @@ class InterpreterCoreInfo {
   CacheValue backward_info_;
 };
 
+class InterpreterCoreInfoCacheKey {
+ public:
+  InterpreterCoreInfoCacheKey(int64_t program_id,
+                              const framework::Scope* scope,
+                              int64_t place_hash_key,
+                              bool use_cuda_graph = false,
+                              int64_t cuda_graph_dispatch_key = 0,
+                              bool is_grad = false,
+                              bool in_pir_mode = false)
+      : program_id_(program_id),
+        scope_(scope),
+        place_hash_key_(place_hash_key),
+        use_cuda_graph_(use_cuda_graph),
+        cuda_graph_dispatch_key_(cuda_graph_dispatch_key),
+        is_grad_(is_grad),
+        in_pir_mode_(in_pir_mode) {}
+  int64_t hash() const {
+    int64_t hash_result = program_id_;
+    if (in_pir_mode_) {
+      int64_t scope_i = reinterpret_cast<int64_t>(scope_);
+      hash_result = hash_with_seed(hash_result, scope_i);
+      hash_result = hash_with_seed(hash_result, place_hash_key_);
+      // CUDA Graph is available in pir mode only
+      hash_result =
+          hash_with_seed(hash_result, static_cast<int64_t>(use_cuda_graph_));
+      hash_result = hash_with_seed(hash_result, cuda_graph_dispatch_key_);
+    }
+    return hash_result;
+  }
+
+  bool is_grad() const { return is_grad_; }
+
+  InterpreterCoreInfoCacheKey with_pir_mode(bool in_pir_mode) const {
+    // Create a new key with the specified PIR mode if the current key's
+    // PIR mode is different from the specified one. Otherwise, return
+    // the current key itself. This function is used to switch legacy IR
+    // and PT mode.
+    if (in_pir_mode == in_pir_mode_) {
+      return *this;
+    }
+    return InterpreterCoreInfoCacheKey(program_id_,
+                                       scope_,
+                                       place_hash_key_,
+                                       use_cuda_graph_,
+                                       cuda_graph_dispatch_key_,
+                                       is_grad_,
+                                       in_pir_mode);
+  }
+
+ private:
+  int64_t program_id_;
+  const framework::Scope* scope_;
+  int64_t place_hash_key_;
+  bool use_cuda_graph_;
+  int64_t cuda_graph_dispatch_key_;
+  bool is_grad_;
+  bool in_pir_mode_;
+};
+
 class InterpreterCoreInfoCache {
  public:
   static InterpreterCoreInfoCache& Instance();
-
-  bool Has(int64_t program_id,
-           const framework::Scope* scope,
-           const std::vector<int64_t>& seeds,
-           bool is_grad) {
-    if (FLAGS_enable_pir_in_executor || FLAGS_enable_pir_with_pt_in_dy2st) {
-      int64_t scope_i = reinterpret_cast<int64_t>(scope);
-      program_id = hash_with_seed(program_id, scope_i);
-      for (int64_t seed : seeds) {
-        program_id = hash_with_seed(program_id, seed);
-      }
-    }
-    return info_map_.find(program_id) != info_map_.end() &&
-           info_map_[program_id].IsAvailable(is_grad);
+  bool Has(const InterpreterCoreInfoCacheKey& key) const {
+    int64_t hash_key = key.hash();
+    return info_map_.find(hash_key) != info_map_.end() &&
+           info_map_.at(hash_key).IsAvailable(key.is_grad());
   }
 
-  InterpreterCoreInfo::CacheValue& GetMutable(int64_t program_id,
-                                              const framework::Scope* scope,
-                                              const std::vector<int64_t>& seeds,
-                                              bool is_grad) {
-    if (FLAGS_enable_pir_in_executor || FLAGS_enable_pir_with_pt_in_dy2st) {
-      int64_t scope_i = reinterpret_cast<int64_t>(scope);
-      program_id = hash_with_seed(program_id, scope_i);
-      for (int64_t seed : seeds) {
-        program_id = hash_with_seed(program_id, seed);
-      }
-    }
-    return info_map_[program_id].GetMutable(is_grad);
+  InterpreterCoreInfo::CacheValue& GetMutable(
+      const InterpreterCoreInfoCacheKey& key) {
+    int64_t hash_key = key.hash();
+    return info_map_[hash_key].GetMutable(key.is_grad());
   }
 
-  void UpdateSkipEagerDeleteVars(int64_t program_id,
-                                 const framework::Scope* scope,
-                                 const std::vector<int64_t>& seeds,
-                                 bool is_grad,
+  void UpdateSkipEagerDeleteVars(const InterpreterCoreInfoCacheKey& key,
                                  const std::set<std::string>& skip_vars) {
-    auto& cached_value = GetMutable(program_id, scope, seeds, is_grad);
+    auto& cached_value = GetMutable(key);
     cached_value.skip_eager_delete_vars_ = std::move(skip_vars);
   }
 
   std::set<std::string>& GetSkipEagerDeleteVars(
-      int64_t program_id,
-      const framework::Scope* scope,
-      const std::vector<int64_t>& seeds,
-      bool is_grad) {
-    auto& cached_value = GetMutable(program_id, scope, seeds, is_grad);
+      const InterpreterCoreInfoCacheKey& key) {
+    auto& cached_value = GetMutable(key);
     return cached_value.skip_eager_delete_vars_;
   }
 
@@ -255,24 +181,29 @@ class InterpreterCoreInfoCache {
 
 std::shared_ptr<InterpreterCore> CreateProgramInterpreterCoreInfoToCache(
     const ProgramDesc& program_desc,
-    const platform::Place& place,
-    bool is_grad,
-    int64_t program_id,
+    const phi::Place& place,
     framework::Scope* scope,
-    const std::vector<int64_t>& seeds);
+    const InterpreterCoreInfoCacheKey& key);
 
 std::shared_ptr<InterpreterCore> CreatePirInterpreterCoreInfoToCache(
     std::unique_ptr<::pir::Program> ir_prog,
-    const platform::Place& place,
-    bool is_grad,
-    int64_t program_id,
+    const phi::Place& place,
     framework::Scope* scope,
-    const std::vector<int64_t>& seeds);
+    const InterpreterCoreInfoCacheKey& key,
+    bool used_for_sot);
 
-std::unique_ptr<::pir::Program> ApplyIrPass(::pir::Program* program,
-                                            phi::Place place);
+std::unique_ptr<::pir::Program> ApplyIrPass(
+    ::pir::Program* program,
+    phi::Place place,
+    const std::set<std::string>& no_need_buffer_names);
 
-std::unique_ptr<::pir::Program> ConstructFowardIrProgram(
+std::unique_ptr<::pir::Program> ApplyRemoveShadowFeedPass(
+    const std::unique_ptr<::pir::Program> program,
+    const pir::Block* block,
+    const phi::Place& place,
+    const paddle::framework::Scope* scope);
+
+std::unique_ptr<::pir::Program> ConstructForwardIrProgram(
     const paddle::framework::BlockDesc* forward_global_block,
     const paddle::framework::BlockDesc* backward_global_block,
     const std::vector<std::string>& output_names,

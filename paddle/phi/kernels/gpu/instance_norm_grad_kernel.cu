@@ -305,6 +305,7 @@ template <typename T, typename Context>
 void InstanceNormGradKernel(const Context &dev_ctx,
                             const DenseTensor &x,
                             const paddle::optional<DenseTensor> &scale,
+                            const paddle::optional<DenseTensor> &bias UNUSED,
                             const DenseTensor &saved_mean,
                             const DenseTensor &saved_variance,
                             const DenseTensor &d_y,
@@ -326,16 +327,30 @@ void InstanceNormGradKernel(const Context &dev_ctx,
   x_tmp.ShareDataWith(x).Resize({1, NxC, H, W, D});
   d_y_tmp.ShareDataWith(d_y).Resize({1, NxC, H, W, D});
 
+  phi::funcs::SetConstant<GPUContext, AccT> set_constant;
+
   dev_ctx.template Alloc<T>(d_x);
+  if (x.numel() == 0) {
+    if (d_scale) {
+      dev_ctx.template Alloc<AccT>(d_scale);
+      set_constant(dev_ctx, d_scale, static_cast<AccT>(0));
+    }
+    if (d_bias) {
+      dev_ctx.template Alloc<AccT>(d_bias);
+      set_constant(dev_ctx, d_bias, static_cast<AccT>(0));
+    }
+    return;
+  }
   if (d_scale && d_bias) {
     dev_ctx.template Alloc<AccT>(d_scale);
     dev_ctx.template Alloc<AccT>(d_bias);
   }
+
   if (scale_ptr) {
     PADDLE_ENFORCE_EQ(
         scale_ptr->dims().size(),
         1UL,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The `shape` in InstanceNormOp is invalid: "
             "the size of scale's dimensions must be equal to 1. But "
             "received: the size of scale's dimensions"
@@ -343,7 +358,7 @@ void InstanceNormGradKernel(const Context &dev_ctx,
             scale_ptr->dims().size()));
     PADDLE_ENFORCE_EQ(scale_ptr->dims()[0],
                       C,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The `shape` in InstanceNormOp is invalid: "
                           "the first dimension of scale must be equal to "
                           "Channels([%d]). But received: "
@@ -353,8 +368,6 @@ void InstanceNormGradKernel(const Context &dev_ctx,
                           scale_ptr->dims()[0],
                           scale_ptr->dims()));
   }
-
-  phi::funcs::SetConstant<GPUContext, AccT> set_constant;
 
   const int n = x.numel();
   const int block = 512;
@@ -384,14 +397,6 @@ void InstanceNormGradKernel(const Context &dev_ctx,
   std::vector<int> strides;
   dims = {1, NxC, H, W, D};
   strides = {NxC * H * W * D, H * W * D, W * D, D, 1};
-
-  if ((H * W * D) == 1) {
-    phi::Copy(dev_ctx, d_y, dev_ctx.GetPlace(), false, d_x);
-    phi::funcs::SetConstant<GPUContext, BatchNormParamType<T>> functor;
-    functor(dev_ctx, d_scale, static_cast<BatchNormParamType<T>>(0));
-    functor(dev_ctx, d_bias, static_cast<BatchNormParamType<T>>(0));
-    return;
-  }
 
 #ifdef PADDLE_WITH_HIP
   miopenTensorDescriptor_t data_desc_;

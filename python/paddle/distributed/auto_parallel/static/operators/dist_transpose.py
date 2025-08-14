@@ -61,22 +61,22 @@ class DistributedTranspose2(DistributedOperatorImplContainer):
 
         # step2: infer spmd
         rule = get_phi_spmd_rule("transpose")
-        # tensor order following order in PHI defition
+        # tensor order following order in PHI definition
         fw_results = rule.infer_forward(x_spec, axes)
         bw_results = rule.infer_backward(x_spec, output_spec, axes)
 
         # step3: update dist_attr
-        # tensor order following order in PHI defition
+        # tensor order following order in PHI definition
         changed = update_op_dims_mapping(
             dist_op, [x_name], [out_name], fw_results, bw_results
         )
 
         # step4: update xshape
-        infered_input_dims_mappings, _ = merge_forward_backward_dims_mapping(
+        inferred_input_dims_mappings, _ = merge_forward_backward_dims_mapping(
             fw_results, bw_results
         )
         dist_op.dist_attr.set_output_dims_mapping(
-            xshape_name, [-1] + infered_input_dims_mappings[0]
+            xshape_name, [-1] + inferred_input_dims_mappings[0]
         )
 
         return changed

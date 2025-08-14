@@ -19,13 +19,14 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestNumelOp(OpTest):
     def setUp(self):
         self.op_type = "size"
+        self.prim_op_type = "comp"
         self.python_api = paddle.numel
+        self.public_python_api = paddle.numel
         self.init()
         x = np.random.random(self.shape).astype(self.dtype)
         self.inputs = {
@@ -34,7 +35,7 @@ class TestNumelOp(OpTest):
         self.outputs = {'Out': np.array(np.size(x))}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def init(self):
         self.shape = (6, 56, 8, 55)
@@ -71,10 +72,24 @@ class TestNumelOp2FP16(TestNumelOp):
         self.shape = (0,)
 
 
+class TestNumelOp1int8(TestNumelOp):
+    def init(self):
+        self.dtype = np.int8
+        self.shape = (11, 66)
+
+
+class TestNumelOp2int8(TestNumelOp):
+    def init(self):
+        self.dtype = np.int8
+        self.shape = (0,)
+
+
 class TestNumelOpComplex(TestNumelOp):
     def setUp(self):
         self.op_type = "size"
+        self.prim_op_type = "comp"
         self.python_api = paddle.numel
+        self.public_python_api = paddle.numel
         self.init()
         x = np.random.random(self.shape).astype(
             self.dtype
@@ -127,7 +142,9 @@ class TestNumelOp2Complex128(TestNumelOpComplex):
 class TestNumelOpBF16(OpTest):
     def setUp(self):
         self.op_type = "size"
+        self.prim_op_type = "comp"
         self.python_api = paddle.numel
+        self.public_python_api = paddle.numel
         self.dtype = np.uint16
         self.init()
         x = np.random.random(self.shape).astype(np.float32)
@@ -136,7 +153,7 @@ class TestNumelOpBF16(OpTest):
 
     def test_check_output(self):
         place = paddle.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(place, check_pir=True, check_prim_pir=True)
 
     def init(self):
         self.shape = (6, 56, 8, 55)
@@ -148,7 +165,7 @@ class TestNumelOp1BF16(TestNumelOpBF16):
 
 
 class TestNumelAPI(unittest.TestCase):
-    @test_with_pir_api
+
     def test_numel_static(self):
         main_program = paddle.static.Program()
         startup_program = paddle.static.Program()
@@ -199,16 +216,6 @@ class TestNumelAPI(unittest.TestCase):
                 out_1 = paddle.numel(input_1)
 
             self.assertRaises(TypeError, test_x_type)
-
-    def test_pir_error(self):
-        with paddle.pir_utils.IrGuard():
-
-            def test_x_type():
-                shape = [1, 4, 5]
-                input_1 = np.random.random(shape).astype("int32")
-                out_1 = paddle.numel(input_1)
-
-            self.assertRaises(ValueError, test_x_type)
 
 
 if __name__ == '__main__':

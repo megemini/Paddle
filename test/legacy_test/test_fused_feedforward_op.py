@@ -14,16 +14,14 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest
+from op_test import OpTest, get_device_place
 
 import paddle
 import paddle.incubate.nn.functional as incubate_f
 import paddle.nn.functional as F
-from paddle.base.framework import default_main_program
 from paddle.nn.layer import transformer
 from paddle.nn.layer.common import Dropout, Linear
 from paddle.nn.layer.norm import LayerNorm
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestFusedFFNOp(OpTest):
@@ -159,7 +157,7 @@ class TestFusedFFNOp(OpTest):
         return out, x.grad
 
     def test_out_and_grad(self):
-        default_main_program().random_seed = 42
+        paddle.seed(42)
         base_out, base_grad = self.Base()
         fused_out, fused_grad = self.FusedFFN()
         np.testing.assert_allclose(
@@ -233,7 +231,7 @@ class APITestStaticFusedFFN(unittest.TestCase):
     ):
         main = paddle.static.Program()
         startup = paddle.static.Program()
-        main.random_seed = 42
+        paddle.seed(42)
         with paddle.static.program_guard(main, startup):
             x = paddle.static.data(
                 name='x',
@@ -281,7 +279,7 @@ class APITestStaticFusedFFN(unittest.TestCase):
                 pre_layer_norm=False,
             )
 
-            exe = paddle.static.Executor(paddle.CUDAPlace(0))
+            exe = paddle.static.Executor(get_device_place())
 
             fetch = exe.run(
                 feed={
@@ -314,7 +312,7 @@ class APITestStaticFusedFFN(unittest.TestCase):
     ):
         main = paddle.static.Program()
         startup = paddle.static.Program()
-        main.random_seed = 42
+        paddle.seed(42)
         with paddle.static.program_guard(main, startup):
             x = paddle.static.data(
                 name='x',
@@ -359,7 +357,7 @@ class APITestStaticFusedFFN(unittest.TestCase):
                 bias=ln2_bias,
             )
 
-            exe = paddle.static.Executor(paddle.CUDAPlace(0))
+            exe = paddle.static.Executor(get_device_place())
 
             fetch = exe.run(
                 feed={
@@ -378,7 +376,6 @@ class APITestStaticFusedFFN(unittest.TestCase):
 
         return fetch
 
-    @test_with_pir_api
     def test_static(self):
         paddle.enable_static()
 
@@ -429,7 +426,7 @@ class APITestStaticFusedFFN(unittest.TestCase):
 
 
 class TestFusedFFNOpError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -497,6 +494,15 @@ class TestFusedFFNOpError(unittest.TestCase):
                 )
 
             self.assertRaises(ValueError, test_dropout_mode)
+
+
+class APITestStaticFusedFFNZeroSizeTensor(unittest.TestCase):
+    def setUp(self):
+        self.dtype = "float32"
+        self.layer_norm_dtype = "float32"
+        self.batch_size = 1
+        self.d_model = 8
+        self.dim_feedforward = 0
 
 
 if __name__ == "__main__":

@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle import base
 
 
 class TensorFill_Test(unittest.TestCase):
@@ -26,12 +26,8 @@ class TensorFill_Test(unittest.TestCase):
 
     def test_tensor_fill_true(self):
         typelist = ['float32', 'float64', 'int32', 'int64', 'float16']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-            places.append(base.CUDAPinnedPlace())
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -50,12 +46,8 @@ class TensorFill_Test(unittest.TestCase):
 
     def test_tensor_fill_backward(self):
         typelist = ['float32']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-            places.append(base.CUDAPinnedPlace())
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:

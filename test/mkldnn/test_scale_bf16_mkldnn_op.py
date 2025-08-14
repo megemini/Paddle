@@ -35,8 +35,8 @@ class TestScaleOpBF16(OpTest):
         self.x_bf16 = convert_float_to_uint16(self.x_fp32)
         self.scale = -2.3
         self.inputs = {'X': self.x_bf16}
-        self.attrs = {'scale': self.scale, 'use_mkldnn': True, 'bias': 0.4}
-        self.use_mkldnn = True
+        self.attrs = {'scale': self.scale, 'use_onednn': True, 'bias': 0.4}
+        self.use_onednn = True
         self.outputs = {
             'Out': (self.x_fp32 * self.attrs['scale']) + self.attrs['bias']
         }
@@ -54,7 +54,7 @@ class TestScaleOpBF16(OpTest):
         self.dx = self.out * scale
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False)
+        self.check_output(check_dygraph=False, check_pir_onednn=True)
 
     def test_check_grad(self):
         self.calculate_grads()
@@ -65,6 +65,7 @@ class TestScaleOpBF16(OpTest):
             check_dygraph=False,
             user_defined_grads=[self.dx],
             user_defined_grad_outputs=[convert_float_to_uint16(self.out)],
+            check_pir_onednn=True,
         )
 
 
@@ -77,11 +78,11 @@ class TestScaleOpBF16BiasNotAfterScale(TestScaleOpBF16):
         self.inputs = {'X': self.x_bf16}
         self.attrs = {
             'scale': self.scale,
-            'use_mkldnn': True,
+            'use_onednn': True,
             'bias': 0.0,
             'bias_after_scale': False,
         }
-        self.use_mkldnn = True
+        self.use_onednn = True
         self.outputs = {
             'Out': (self.x_fp32 + self.attrs['bias']) * self.attrs['scale']
         }
@@ -98,7 +99,7 @@ class TestScaleOpBF16ScaleTensor(TestScaleOpBF16):
             'X': self.x_bf16,
             'ScaleTensor': convert_float_to_uint16(self.scale_tensor),
         }
-        self.attrs = {'use_mkldnn': True}
+        self.attrs = {'use_onednn': True}
         self.outputs = {'Out': self.x_fp32 * self.scale}
 
 
@@ -116,7 +117,7 @@ class TestScaleOpBF16ScaleTensorNotBiasAfterScale(TestScaleOpBF16):
         self.attrs = {
             'bias': -1.1,
             'bias_after_scale': False,
-            'use_mkldnn': True,
+            'use_onednn': True,
         }
         self.outputs = {'Out': (self.x_fp32 + self.attrs['bias']) * self.scale}
 

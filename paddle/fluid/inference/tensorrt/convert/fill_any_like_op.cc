@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class FillAnyLikeOpConverter : public OpConverter {
  public:
@@ -41,6 +39,11 @@ class FillAnyLikeOpConverter : public OpConverter {
       LOG(WARNING) << "the fill_any_like has int64 dtype, it "
                       "will be cast to int32.";
       value_tensor = Add1DConstantLayer(static_cast<int32_t>(value),
+                                        output_name + "_value_tensor_");
+    } else if (dtype == 0) {
+      LOG(WARNING) << "the fill_any_like has int32 dtype and 0 dtype, it "
+                      "will be cast to bool.";
+      value_tensor = Add1DConstantLayer(static_cast<bool>(value),
                                         output_name + "_value_tensor_");
     } else {
       value_tensor = Add1DConstantLayer(value, output_name + "_value_tensor_");
@@ -77,12 +80,10 @@ class FillAnyLikeOpConverter : public OpConverter {
     layer->setInput(2, *sizes_tensor);
     layer->setInput(3, *strides_tensor);
 
-    RreplenishLayerAndOutput(layer, "fill_any_like", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "fill_any_like", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(fill_any_like, FillAnyLikeOpConverter);

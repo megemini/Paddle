@@ -53,17 +53,17 @@ struct HardLabelCrossEntropyCPUFunctorImpl {
       for (int j = 0; j < num_remain; j++) {
         int lbl = static_cast<int>(label_data[i * num_remain + j]);  // NOLINT
         if (lbl != ignore_index_) {
-          PADDLE_ENFORCE_GE(
-              lbl,
-              0,
-              phi::errors::OutOfRange("label value should >= 0 when label "
-                                      "value(%f) not equal to ignore_index(%f)",
-                                      lbl,
-                                      ignore_index_));
+          PADDLE_ENFORCE_GE(lbl,
+                            0,
+                            common::errors::OutOfRange(
+                                "label value should >= 0 when label "
+                                "value(%f) not equal to ignore_index(%f)",
+                                lbl,
+                                ignore_index_));
           PADDLE_ENFORCE_LT(
               lbl,
               axis_dim_,
-              phi::errors::OutOfRange(
+              common::errors::OutOfRange(
                   "label value should less than the shape of axis dimension "
                   "when label value(%f) not equal to ignore_index(%f), But "
                   "received label value as %ld and shape of axis dimension "
@@ -93,7 +93,7 @@ struct HardLabelCrossEntropyCPUFunctorImpl {
 
 template <typename DeviceContext, typename T>
 void CrossEntropyFunctor<DeviceContext, T>::operator()(
-    const DeviceContext& ctx,
+    const DeviceContext& dev_ctx,
     phi::DenseTensor* out,
     const phi::DenseTensor* prob,
     const phi::DenseTensor* labels,
@@ -110,7 +110,7 @@ void CrossEntropyFunctor<DeviceContext, T>::operator()(
     auto lbl = EigenMatrix<T>::From(*labels);
     auto loss = EigenMatrix<T>::From(*out);
 
-    loss.device(*ctx.eigen_device()) =
+    loss.device(*dev_ctx.eigen_device()) =
         -((lbl * in.log().unaryExpr(phi::funcs::TolerableValue<T>()))
               .reshape(batch_axis_remain)
               .sum(Eigen::DSizes<int, 1>(1)));

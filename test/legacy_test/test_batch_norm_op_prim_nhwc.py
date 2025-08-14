@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
@@ -42,6 +43,7 @@ class TestBatchNormOpNHWCTestMode(TestBatchNormOp):
         self.epsilon = 1e-05
         self.data_format = "NHWC"
         self.use_global_stats = True
+        self.check_cpu_prim_pir_grad = True
 
 
 class TestBatchNormOpNHWCTestModeFp64(TestBatchNormOp):
@@ -85,6 +87,10 @@ class TestBatchNormOpNHWCTestModebf16(TestBatchNormOp):
         self.fw_comp_rtol = 1e-3
         self.rev_comp_atol = 1e-3
         self.rev_comp_rtol = 1e-3
+        # prim bf16 has diff in windows
+        if sys.platform == "win32":
+            self.rev_comp_atol = 5e-3
+            self.rev_comp_rtol = 5e-3
         self.cinn_atol = 1e-3
         self.cinn_rtol = 1e-3
         self.dtype = "uint16"
@@ -124,6 +130,10 @@ class TestBatchNormOpNHWCFp64(TestBatchNormOp):
         self.epsilon = 1e-05
         self.data_format = "NHWC"
         self.use_global_stats = None
+        self.check_prim_pir = True
+        # TODO(liangshuhao): uncomment when pd_op.variance has grad op
+        # self.check_prim_pir_grad = True
+        # self.check_cpu_prim_pir_grad = True
 
 
 class TestBatchNormOpNHWCFp16(TestBatchNormOp):
@@ -152,6 +162,10 @@ class TestBatchNormOpNHWCbf16(TestBatchNormOp):
         self.fw_comp_rtol = 1e-3
         self.rev_comp_atol = 1e-3
         self.rev_comp_rtol = 1e-3
+        # prim bf16 has diff in windows
+        if sys.platform == "win32":
+            self.rev_comp_atol = 5e-3
+            self.rev_comp_rtol = 5e-3
         self.cinn_atol = 1e-3
         self.cinn_rtol = 1e-3
         self.dtype = "uint16"
@@ -161,8 +175,6 @@ class TestBatchNormOpNHWCbf16(TestBatchNormOp):
         self.epsilon = 1e-05
         self.data_format = "NHWC"
         self.use_global_stats = None
-        # Todo(CZ): open this
-        self.check_prim_pir = False
 
 
 class TestBatchNormOpNHWCShape2(TestBatchNormOp):
@@ -206,6 +218,36 @@ class TestBatchNormOpNHWCEps2(TestBatchNormOp):
         self.training = True
         self.momentum = 0.1
         self.epsilon = 1e-06
+        self.data_format = "NHWC"
+        self.use_global_stats = None
+
+
+class TestBatchNormOpNHWCShape3(TestBatchNormOp):
+    def initConfig(self):
+        self.fw_comp_atol = 1e-5
+        self.fw_comp_rtol = 1e-5
+        self.rev_comp_atol = 1e-5
+        self.rev_comp_rtol = 1e-5
+        self.dtype = "float32"
+        self.shape = [4, 128, 32]
+        self.training = True
+        self.momentum = 0.1
+        self.epsilon = 1e-05
+        self.data_format = "NHWC"
+        self.use_global_stats = None
+
+
+class TestBatchNormOpNHWCShape4(TestBatchNormOp):
+    def initConfig(self):
+        self.fw_comp_atol = 1e-5
+        self.fw_comp_rtol = 1e-5
+        self.rev_comp_atol = 1e-5
+        self.rev_comp_rtol = 1e-5
+        self.dtype = "float32"
+        self.shape = [4, 256]
+        self.training = True
+        self.momentum = 0.1
+        self.epsilon = 1e-05
         self.data_format = "NHWC"
         self.use_global_stats = None
 

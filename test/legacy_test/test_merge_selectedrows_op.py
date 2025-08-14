@@ -16,16 +16,14 @@ import unittest
 
 import numpy as np
 from op import Operator
+from op_test import get_places
 
 from paddle.base import core
 
 
 class TestMergeSelectedRows(unittest.TestCase):
     def get_places(self):
-        places = [core.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(core.CUDAPlace(0))
-        return places
+        return get_places()
 
     def check_with_place(self, place):
         scope = core.Scope()

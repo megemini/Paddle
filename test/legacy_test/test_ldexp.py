@@ -15,10 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_devices, get_places
 
 import paddle
-from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def _run_ldexp_dynamic(x, y, device='cpu'):
@@ -81,17 +80,13 @@ def _run_ldexp_static(x, y, device='cpu'):
 def check_dtype(input, desired_dtype):
     if input.dtype != desired_dtype:
         raise ValueError(
-            "The expected data type to be obtained is {}, but got {}".format(
-                desired_dtype, input.dtype
-            )
+            f"The expected data type to be obtained is {desired_dtype}, but got {input.dtype}"
         )
 
 
 class TestLdexpAPIWithDynamic(unittest.TestCase):
     def setUp(self):
-        self.places = ['cpu']
-        if core.is_compiled_with_cuda():
-            self.places.append('gpu')
+        self.places = get_devices()
 
     def test_ldexp_dynamic(self):
         np.random.seed(7)
@@ -141,11 +136,8 @@ class TestLdexpAPIWithDynamic(unittest.TestCase):
 
 class TestLdexpAPIWithStatic(unittest.TestCase):
     def setUp(self):
-        self.places = ['cpu']
-        if core.is_compiled_with_cuda():
-            self.places.append('gpu')
+        self.places = get_devices()
 
-    @test_with_pir_api
     def test_ldexp_static(self):
         np.random.seed(7)
         for place in self.places:
@@ -209,6 +201,28 @@ class TestLdexpError(unittest.TestCase):
         x = (np.random.rand(*dims) * 10).astype(np.float64)
         y = (np.random.randint(-10, 10, dims)).astype(np.int32)
         self.assertRaises(TypeError, paddle.ldexp, paddle.to_tensor(x), y)
+
+
+class TestLdexpAPI_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.places = get_places()
+
+    def test_ldexp_dynamic(self):
+        for place in self.places:
+            with paddle.base.dygraph.guard(place):
+                dims = [2, 0]
+                x = np.random.rand(*dims) * 10
+                y = (np.random.randint(-10, 10, dims)).astype(np.int32)
+                x_ = paddle.to_tensor(x)
+                y_ = paddle.to_tensor(y)
+                x_.stop_gradient = False
+                y_.stop_gradient = False
+                res = paddle.ldexp(x_, y_)
+                np.testing.assert_allclose(res, np.ldexp(x, y))
+
+                loss = paddle.sum(res)
+                loss.backward()
+                np.testing.assert_allclose(x_.grad.shape, x_.shape)
 
 
 if __name__ == '__main__':

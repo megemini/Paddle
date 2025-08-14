@@ -14,12 +14,13 @@ if(WITH_GPU OR WITH_ROCM)
     list(APPEND BACKENDS_SRCS gpu/cuda/cuda_info.cc gpu/cuda/cuda_graph.cc)
   endif()
   if(WITH_ROCM)
-    list(APPEND BACKENDS_SRCS gpu/rocm/rocm_info.cc)
+    list(APPEND BACKENDS_SRCS gpu/rocm/rocm_info.cc gpu/rocm/hip_graph.cc)
   endif()
 endif()
 
 if(WITH_XPU)
-  list(APPEND BACKENDS_SRCS xpu/xpu_context.cc xpu/xpu_info.cc)
+  list(APPEND BACKENDS_SRCS xpu/xpu_context.cc xpu/xpu_info.cc
+       xpu/enforce_xpu.cc)
   list(
     APPEND
     BACKENDS_SRCS
@@ -28,10 +29,9 @@ if(WITH_XPU)
     xpu/xpu2_op_list.cc
     xpu/xpu3_op_list.cc
     xpu/xpu_l3_strategy.cc)
-  list(APPEND BACKENDS_DEPS phi_dynload_xpti)
 endif()
 
-if(WITH_MKLDNN)
+if(WITH_ONEDNN)
   list(APPEND BACKENDS_SRCS onednn/onednn_context.cc)
   list(APPEND BACKENDS_SRCS onednn/axpy_handler.cc)
   list(APPEND BACKENDS_SRCS onednn/matmul_utils.cc)
@@ -59,10 +59,3 @@ if(WITH_CUSTOM_DEVICE)
 endif()
 
 collect_srcs(backends_srcs SRCS ${BACKENDS_SRCS})
-
-if(WITH_CUSTOM_DEVICE)
-  cc_test(
-    capi_test
-    SRCS custom/capi_test.cc
-    DEPS phi common)
-endif()

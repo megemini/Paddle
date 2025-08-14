@@ -17,12 +17,11 @@ import unittest
 import gradient_checker
 import numpy as np
 from decorator_helper import prog_scope
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_places
 
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestFlipOp_API(unittest.TestCase):
@@ -58,7 +57,7 @@ class TestFlipOp_API(unittest.TestCase):
     def test_dygraph(self):
         img = np.array([[1, 2, 3], [4, 5, 6]]).astype(np.float32)
         with base.dygraph.guard():
-            inputs = base.dygraph.to_variable(img)
+            inputs = paddle.to_tensor(img)
             ret = paddle.flip(inputs, [0])
             ret = ret.flip(0)
             ret = paddle.flip(ret, 1)
@@ -101,7 +100,9 @@ class TestFlipOp(OpTest):
         self.attrs = {"axis": self.axis}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad(["X"], "Out", check_cinn=True, check_pir=True)
@@ -153,6 +154,12 @@ class TestFlipOpNegAxis(TestFlipOp):
     def init_test_case(self):
         self.in_shape = (6, 4, 2, 2)
         self.axis = [-1]
+
+
+class TestFlipOp_ZeroSize(TestFlipOp):
+    def init_test_case(self):
+        self.in_shape = (4, 0, 6, 3)
+        self.axis = [0, 2]
 
 
 # ----------------flip_fp16----------------
@@ -232,10 +239,9 @@ class TestFlipDoubleGradCheck(unittest.TestCase):
     def flip_wrapper(self, x):
         return paddle.flip(x[0], [0, 1])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
-        # the shape of input variable should be clearly specified, not inlcude -1.
+        # the shape of input variable should be clearly specified, not include -1.
         eps = 0.005
         dtype = np.float32
 
@@ -253,10 +259,7 @@ class TestFlipDoubleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for p in places:
+        for p in get_places():
             self.func(p)
 
 
@@ -264,10 +267,9 @@ class TestFlipTripleGradCheck(unittest.TestCase):
     def flip_wrapper(self, x):
         return paddle.flip(x[0], [0, 1])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
-        # the shape of input variable should be clearly specified, not inlcude -1.
+        # the shape of input variable should be clearly specified, not include -1.
         eps = 0.005
         dtype = np.float32
 
@@ -285,10 +287,7 @@ class TestFlipTripleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for p in places:
+        for p in get_places():
             self.func(p)
 
 

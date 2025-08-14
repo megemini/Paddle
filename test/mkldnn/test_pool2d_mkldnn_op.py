@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
+
+sys.path.append("../deprecated/legacy_test")
 from test_pool2d_op import (
     TestCase1,
     TestCase2,
@@ -27,9 +30,10 @@ from test_pool2d_op import (
 
 
 def create_test_mkldnn_use_ceil_class(parent):
-    class TestMKLDNNPool2DUseCeilCase(parent):
+    class TestONEDNNPool2DUseCeilCase(parent):
         def init_kernel_type(self):
-            self.use_mkldnn = True
+            self.use_onednn = True
+            self.check_pir_onednn = True
 
         def init_ceil_mode(self):
             self.ceil_mode = True
@@ -37,9 +41,9 @@ def create_test_mkldnn_use_ceil_class(parent):
         def init_data_type(self):
             self.dtype = np.float32
 
-    cls_name = "{}_{}".format(parent.__name__, "MKLDNNCeilModeCast")
-    TestMKLDNNPool2DUseCeilCase.__name__ = cls_name
-    globals()[cls_name] = TestMKLDNNPool2DUseCeilCase
+    cls_name = "{}_{}".format(parent.__name__, "ONEDNNCeilModeCast")
+    TestONEDNNPool2DUseCeilCase.__name__ = cls_name
+    globals()[cls_name] = TestONEDNNPool2DUseCeilCase
 
 
 create_test_mkldnn_use_ceil_class(TestPool2D_Op)
@@ -48,16 +52,17 @@ create_test_mkldnn_use_ceil_class(TestCase2)
 
 
 def create_test_mkldnn_class(parent):
-    class TestMKLDNNCase(parent):
+    class TestONEDNNCase(parent):
         def init_kernel_type(self):
-            self.use_mkldnn = True
+            self.use_onednn = True
+            self.check_pir_onednn = True
 
         def init_data_type(self):
             self.dtype = np.float32
 
-    cls_name = "{}_{}".format(parent.__name__, "MKLDNNOp")
-    TestMKLDNNCase.__name__ = cls_name
-    globals()[cls_name] = TestMKLDNNCase
+    cls_name = "{}_{}".format(parent.__name__, "ONEDNNOp")
+    TestONEDNNCase.__name__ = cls_name
+    globals()[cls_name] = TestONEDNNCase
 
 
 create_test_mkldnn_class(TestPool2D_Op)
@@ -77,7 +82,8 @@ class TestAvgPoolAdaptive(TestPool2D_Op):
         self.pool2D_forward_naive = avg_pool2D_forward_naive
 
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
     def init_test_case(self):
         self.ksize = [1, 1]
@@ -127,7 +133,8 @@ class TestAsymPad(TestPool2D_Op):
         self.shape = [2, 3, 7, 7]
 
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
     def init_data_type(self):
         self.dtype = np.float32

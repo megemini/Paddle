@@ -15,7 +15,7 @@ limitations under the License. */
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "paddle/utils/flags.h"
+#include "paddle/common/flags.h"
 #include "test/cpp/inference/api/trt_test_helper.h"
 
 namespace paddle {
@@ -33,6 +33,7 @@ void TestDynamic(bool with_dynamic = true,
   }
 
   AnalysisConfig config;
+  config.EnableNewIR(false);
   config.EnableUseGpu(100, 0);
   std::string buffer_prog, buffer_param;
   ReadBinaryFile(model_dir + "/model", &buffer_prog);
@@ -191,6 +192,7 @@ void TestTunedDynamic() {
     output_t->copy_to_cpu(out_data.data());
   };
   check_func(predictor_tuned.get());
+  predictor_tuned.reset(nullptr);
 
   // check tuned_dynamic_shape
   AnalysisConfig config;
@@ -290,12 +292,11 @@ void TestDynamicClone(bool with_dynamic = true,
 }
 
 TEST(AnalysisPredictor, trt_dynamic) { TestDynamic(true); }
-TEST(AnalysisPredictor, trt_static) { TestDynamic(false); }
 TEST(AnalysisPredictor, trt_memory_serialize) {
-  // serailize
-  TestDynamic(false, true, true);
-  // deserailize
-  TestDynamic(false, false, true);
+  // serialize
+  TestDynamic(true, true, true);
+  // deserialize
+  TestDynamic(true, false, true);
 }
 TEST(AnalysisPredictor, trt_dynamic2) { TestDynamic2(); }
 

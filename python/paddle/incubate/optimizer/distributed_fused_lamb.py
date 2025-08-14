@@ -89,10 +89,13 @@ def init_communicator(block, rank, ranks, ring_id):
         type='fill_constant', outputs={'Out': tmp_var}, attrs={'value': 1}
     )
     block.append_op(
-        type='c_allreduce_sum',
-        inputs={'X': tmp_var},
-        outputs={'Out': tmp_var},
-        attrs={'ring_id': ring_id, 'use_calc_stream': True},
+        type='all_reduce',
+        inputs={'x': tmp_var},
+        outputs={'out': tmp_var},
+        attrs={
+            'ring_id': ring_id,
+            'reduce_type': paddle.distributed.ReduceOp.SUM,
+        },
     )
     block.append_op(
         type='c_sync_calc_stream',
@@ -105,10 +108,12 @@ def init_communicator(block, rank, ranks, ring_id):
 def broadcast_parameters(block, parameters, ring_id):
     for p in parameters:
         block.append_op(
-            type='c_broadcast',
-            inputs={'X': p},
-            outputs={'Out': p},
-            attrs={'ring_id': ring_id, 'use_calc_stream': True},
+            type='broadcast',
+            inputs={'x': p},
+            outputs={'out': p},
+            attrs={
+                'ring_id': ring_id,
+            },
         )
 
 
@@ -247,14 +252,14 @@ class DistributedFusedLamb(Optimizer):
         assert master_param is not None
 
         master_param_t = scope.find_var(master_param).get_tensor()
-        assert master_param_t._dtype() == core.VarDesc.VarType.FP32
+        assert master_param_t._dtype() == paddle.float32
 
         param_t = scope.find_var(name).get_tensor()
-        if param_t._dtype() == core.VarDesc.VarType.FP32:
+        if param_t._dtype() == paddle.float32:
             assert param_t._ptr() == master_param_t._ptr()
             return param_t, None
         else:
-            assert param_t._dtype() == core.VarDesc.VarType.FP16
+            assert param_t._dtype() == paddle.float16
             assert param_t.shape() == master_param_t.shape()
             return param_t, master_param_t
 
@@ -265,15 +270,16 @@ class DistributedFusedLamb(Optimizer):
         flattened = []
         for p, g in params_grads:
             flattened.extend([p, g])
-        with flattened[0].block.program._optimized_guard(flattened), name_scope(
-            "optimizer"
+        with (
+            flattened[0].block.program._optimized_guard(flattened),
+            name_scope("optimizer"),
         ):
             self._apply_gradients_impl(params_grads)
 
     def _apply_gradients_impl(self, params_grads):
         for p, g in params_grads:
             assert (
-                g.type == core.VarDesc.VarType.LOD_TENSOR
+                g.type == core.VarDesc.VarType.DENSE_TENSOR
             ), "Only support dense gradient"
             g.persistable = True  # the gradient must be persistable for fusion
 
@@ -485,9 +491,9 @@ class DistributedFusedLamb(Optimizer):
                 'FP32AccFusedGrad': fp32_acc_fused_grad,
                 'FP16AccFusedGrad': fp16_acc_fused_grad,
                 'AccStep': acc_step,
-                'StopUpdate': self._stop_update
-                if self._stop_update is not None
-                else [],
+                'StopUpdate': (
+                    self._stop_update if self._stop_update is not None else []
+                ),
                 'Step': [step],
             },
             attrs={

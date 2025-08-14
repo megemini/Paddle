@@ -24,8 +24,7 @@
 #include "paddle/phi/kernels/reduce_scatter_kernel.h"
 #include "paddle/phi/kernels/transpose_kernel.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 bool SToPReshardFunction::IsSuitable(const DistTensor& in,
                                      const TensorDistAttr& out_dist_attr) {
@@ -48,7 +47,7 @@ void SToPReshardFunction::Eval(DeviceContext* dev_ctx,
                                const DistTensor& in,
                                const TensorDistAttr& out_dist_attr,
                                DistTensor* out) {
-  VLOG(3) << "Call SToPReshardFunction Eval";
+  VLOG(3) << "Call " << Name();
 
   // step 1, create tmp dist attr and tmp dist tensor
   TensorDistAttr tmp_attr(out_dist_attr);
@@ -85,7 +84,7 @@ void SToPReshardFunctionCrossMesh::Eval(DeviceContext* dev_ctx,
                                         const DistTensor& in,
                                         const TensorDistAttr& out_dist_attr,
                                         DistTensor* out) {
-  VLOG(3) << "Call SToPReshardFunctionCrossMesh Eval";
+  VLOG(3) << "Call " << Name();
   const auto& out_process_mesh = out_dist_attr.process_mesh();
 
   DistTensor tmp_result;
@@ -100,7 +99,7 @@ void SToPReshardFunctionCrossMesh::Eval(DeviceContext* dev_ctx,
     SToPReshardFunction s_to_p_func;
     PADDLE_ENFORCE(
         s_to_p_func.IsSuitable(tmp_result, out_dist_attr),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Invoke the s to p reshard function is not valid from %s to %s.",
             tmp_result.dist_attr(),
             out_dist_attr));
@@ -111,5 +110,4 @@ void SToPReshardFunctionCrossMesh::Eval(DeviceContext* dev_ctx,
   }
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

@@ -18,7 +18,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/api/paddle_analysis_config.h"
 #include "test/cpp/inference/api/tester_helper.h"
 
-PD_DEFINE_bool(enable_mkldnn, true, "Enable MKLDNN");
+PD_DEFINE_bool(enable_mkldnn, true, "Enable ONEDNN");
 
 namespace paddle {
 namespace inference {
@@ -29,7 +29,11 @@ void SetConfig(AnalysisConfig *cfg, std::string model_path) {
   cfg->DisableGpu();
   cfg->SwitchIrOptim(true);
   cfg->SetCpuMathLibraryNumThreads(FLAGS_cpu_num_threads);
-  if (FLAGS_enable_mkldnn) cfg->EnableMKLDNN();
+  cfg->EnableNewIR();
+  cfg->EnableNewExecutor();
+  cfg->SetOptimizationLevel(3);
+
+  if (FLAGS_enable_mkldnn) cfg->EnableONEDNN();
 }
 
 template <typename T>
@@ -39,7 +43,11 @@ class TensorReader {
                size_t beginning_offset,
                std::vector<int> shape,
                std::string name)
-      : file_(file), position_(beginning_offset), shape_(shape), name_(name) {
+      : file_(file),
+        position_(beginning_offset),
+        shape_(shape),
+        name_(name),
+        numel_(0) {
     numel_ = std::accumulate(
         shape_.begin(), shape_.end(), size_t{1}, std::multiplies<size_t>());
   }
@@ -115,11 +123,11 @@ void SetInput(std::vector<std::vector<PaddleTensor>> *inputs,
 TEST(Analyzer_quant_image_classification, quantization) {
   AnalysisConfig fp32_cfg;
   SetConfig(&fp32_cfg, FLAGS_fp32_model);
-  fp32_cfg.EnableMKLDNN();
+  fp32_cfg.EnableONEDNN();
 
   AnalysisConfig int8_cfg;
   SetConfig(&int8_cfg, FLAGS_int8_model);
-  if (FLAGS_enable_int8_qat) int8_cfg.EnableMkldnnInt8();
+  if (FLAGS_enable_int8_qat) int8_cfg.EnableOnednnInt8();
 
   // read data from file and prepare batches with test data
   std::vector<std::vector<PaddleTensor>> input_slots_all;

@@ -18,8 +18,7 @@ limitations under the License. */
 
 #include "paddle/common/macros.h"
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 
 class TensorAssign {
  public:
@@ -78,7 +77,7 @@ struct cpu_gather_scatter_functor {
                   const std::string& method_name,
                   const func_t& reduce_op,
                   bool include_self,
-                  const phi::DeviceContext& ctx UNUSED) {
+                  const phi::DeviceContext& dev_ctx UNUSED) {
     if (index.numel() == 0) {
       return;
     }
@@ -93,7 +92,7 @@ struct cpu_gather_scatter_functor {
     auto src_dims = src.dims();
     if (self_size == 0 || src_size == 0 || index_size == 0) {
       VLOG(3) << "zero size input found";
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "self_size, src_size, index_size cannot be 0");
       return;
     }
@@ -141,12 +140,64 @@ struct cpu_gather_scatter_functor {
           // multiply the replaced_select_dim_size.
           int64_t replace_index_self, replace_index_src;
           if (is_scatter_like) {
+            // scatter
+            PADDLE_ENFORCE_GE(
+                index,
+                -self_select_dim_size,
+                common::errors::OutOfRange(
+                    "Variable value (index) of OP(take_along_axis) "
+                    "expected >= %d and < %d, but got %ld."
+                    "Please check the input "
+                    "value.",
+                    -self_select_dim_size,
+                    self_select_dim_size,
+                    index));
+            PADDLE_ENFORCE_LT(
+                index,
+                self_select_dim_size,
+                common::errors::OutOfRange(
+                    "Variable value (index) of OP(take_along_axis) "
+                    "expected >= %d and < %d, but got %ld."
+                    "Please check the input "
+                    "value.",
+                    -self_select_dim_size,
+                    self_select_dim_size,
+                    index));
+            if (index < 0) {
+              index += self_select_dim_size;
+            }
             replace_index_self = k + index * outer_dim_size_self +
                                  i * outer_dim_size_self * self_select_dim_size;
 
             replace_index_src = k + j * outer_dim_size_src +
                                 i * outer_dim_size_src * src_select_dim_size;
           } else {
+            // gather
+            PADDLE_ENFORCE_GE(
+                index,
+                -src_select_dim_size,
+                common::errors::OutOfRange(
+                    "Variable value (index) of OP(take_along_axis) "
+                    "expected >= %ld and < %ld, but got %ld. "
+                    "Please check the input "
+                    "value.",
+                    -src_select_dim_size,
+                    src_select_dim_size,
+                    index));
+            PADDLE_ENFORCE_LT(
+                index,
+                src_select_dim_size,
+                common::errors::OutOfRange(
+                    "Variable value (index) of OP(take_along_axis) "
+                    "expected >= %ld and < %ld, but got %ld. "
+                    "Please check the input "
+                    "value.",
+                    -src_select_dim_size,
+                    src_select_dim_size,
+                    index));
+            if (index < 0) {
+              index += src_select_dim_size;
+            }
             replace_index_self = index_idx;
 
             replace_index_src = k + index * outer_dim_size_src +
@@ -186,7 +237,7 @@ void cpu_gather_kernel(phi::DenseTensor self,
                        const phi::DenseTensor& index,
                        phi::DenseTensor result,
                        bool include_self,
-                       const phi::DeviceContext& ctx) {
+                       const phi::DeviceContext& dev_ctx) {
   cpu_gather_scatter_functor<tensor_t,
                              index_t,
                              /*is_scatter_like=*/false>()(result,
@@ -196,7 +247,7 @@ void cpu_gather_kernel(phi::DenseTensor self,
                                                           "gather_out_cpu",
                                                           tensor_assign,
                                                           include_self,
-                                                          ctx);
+                                                          dev_ctx);
 }
 
 template <typename tensor_t, typename index_t>
@@ -205,7 +256,7 @@ void cpu_scatter_assign_kernel(phi::DenseTensor self,
                                const phi::DenseTensor& index,
                                phi::DenseTensor src,
                                bool include_self,
-                               const phi::DeviceContext& ctx) {
+                               const phi::DeviceContext& dev_ctx) {
   cpu_gather_scatter_functor<tensor_t,
                              index_t,
                              /*is_scatter_like=*/true>()(self,
@@ -215,7 +266,7 @@ void cpu_scatter_assign_kernel(phi::DenseTensor self,
                                                          "scatter_assign_cpu",
                                                          tensor_assign,
                                                          include_self,
-                                                         ctx);
+                                                         dev_ctx);
 }
 
 template <typename tensor_t, typename index_t>
@@ -224,11 +275,17 @@ void cpu_scatter_add_kernel(phi::DenseTensor self,
                             const phi::DenseTensor& index,
                             phi::DenseTensor src,
                             bool include_self,
-                            const phi::DeviceContext& ctx) {
+                            const phi::DeviceContext& dev_ctx) {
   cpu_gather_scatter_functor<tensor_t,
                              index_t,
-                             /*is_scatter_like=*/true>()(
-      self, dim, index, src, "scatter_add_cpu", reduce_add, include_self, ctx);
+                             /*is_scatter_like=*/true>()(self,
+                                                         dim,
+                                                         index,
+                                                         src,
+                                                         "scatter_add_cpu",
+                                                         reduce_add,
+                                                         include_self,
+                                                         dev_ctx);
 }
 
 template <typename tensor_t, typename index_t>
@@ -237,11 +294,17 @@ void cpu_scatter_mul_kernel(phi::DenseTensor self,
                             const phi::DenseTensor& index,
                             phi::DenseTensor src,
                             bool include_self,
-                            const phi::DeviceContext& ctx) {
+                            const phi::DeviceContext& dev_ctx) {
   cpu_gather_scatter_functor<tensor_t,
                              index_t,
-                             /*is_scatter_like=*/true>()(
-      self, dim, index, src, "scatter_mul_cpu", reduce_mul, include_self, ctx);
+                             /*is_scatter_like=*/true>()(self,
+                                                         dim,
+                                                         index,
+                                                         src,
+                                                         "scatter_mul_cpu",
+                                                         reduce_mul,
+                                                         include_self,
+                                                         dev_ctx);
 }
 
 template <typename tensor_t, typename index_t>
@@ -250,11 +313,17 @@ void cpu_scatter_mean_kernel(phi::DenseTensor self,
                              const phi::DenseTensor& index,
                              phi::DenseTensor src,
                              bool include_self,
-                             const phi::DeviceContext& ctx) {
+                             const phi::DeviceContext& dev_ctx) {
   cpu_gather_scatter_functor<tensor_t,
                              index_t,
-                             /*is_scatter_like=*/true>()(
-      self, dim, index, src, "scatter_mean_cpu", reduce_add, include_self, ctx);
+                             /*is_scatter_like=*/true>()(self,
+                                                         dim,
+                                                         index,
+                                                         src,
+                                                         "scatter_mean_cpu",
+                                                         reduce_add,
+                                                         include_self,
+                                                         dev_ctx);
 }
 
 template <typename tensor_t, typename index_t>
@@ -263,11 +332,17 @@ void cpu_scatter_max_kernel(phi::DenseTensor self,
                             const phi::DenseTensor& index,
                             phi::DenseTensor src,
                             bool include_self,
-                            const phi::DeviceContext& ctx) {
+                            const phi::DeviceContext& dev_ctx) {
   cpu_gather_scatter_functor<tensor_t,
                              index_t,
-                             /*is_scatter_like=*/true>()(
-      self, dim, index, src, "scatter_max_cpu", reduce_max, include_self, ctx);
+                             /*is_scatter_like=*/true>()(self,
+                                                         dim,
+                                                         index,
+                                                         src,
+                                                         "scatter_max_cpu",
+                                                         reduce_max,
+                                                         include_self,
+                                                         dev_ctx);
 }
 
 template <typename tensor_t, typename index_t>
@@ -276,11 +351,17 @@ void cpu_scatter_min_kernel(phi::DenseTensor self,
                             const phi::DenseTensor& index,
                             phi::DenseTensor src,
                             bool include_self,
-                            const phi::DeviceContext& ctx) {
+                            const phi::DeviceContext& dev_ctx) {
   cpu_gather_scatter_functor<tensor_t,
                              index_t,
-                             /*is_scatter_like=*/true>()(
-      self, dim, index, src, "scatter_min_cpu", reduce_min, include_self, ctx);
+                             /*is_scatter_like=*/true>()(self,
+                                                         dim,
+                                                         index,
+                                                         src,
+                                                         "scatter_min_cpu",
+                                                         reduce_min,
+                                                         include_self,
+                                                         dev_ctx);
 }
 
 template <typename tensor_t, typename index_t>
@@ -289,7 +370,7 @@ void cpu_scatter_input_grad_kernel(phi::DenseTensor self UNUSED,
                                    const phi::DenseTensor& index,
                                    phi::DenseTensor grad,
                                    bool include_self UNUSED,
-                                   const phi::DeviceContext& ctx UNUSED) {
+                                   const phi::DeviceContext& dev_ctx UNUSED) {
   auto* index_data = index.data<index_t>();
   auto* grad_data = grad.data<tensor_t>();
 
@@ -325,16 +406,17 @@ void cpu_scatter_input_grad_kernel(phi::DenseTensor self UNUSED,
 }
 
 template <typename tensor_t, typename index_t>
-void cpu_scatter_mul_min_max_input_grad_kernel(phi::DenseTensor self UNUSED,
-                                               int dim,
-                                               const phi::DenseTensor& index,
-                                               const phi::DenseTensor& out,
-                                               const phi::DenseTensor& x,
-                                               const phi::DenseTensor& value,
-                                               phi::DenseTensor grad,
-                                               const std::string& reduce,
-                                               bool include_self UNUSED,
-                                               const phi::DeviceContext& ctx) {
+void cpu_scatter_mul_min_max_input_grad_kernel(
+    phi::DenseTensor self UNUSED,
+    int dim,
+    const phi::DenseTensor& index,
+    const phi::DenseTensor& out,
+    const phi::DenseTensor& x,
+    const phi::DenseTensor& value,
+    phi::DenseTensor grad,
+    const std::string& reduce,
+    bool include_self UNUSED,
+    const phi::DeviceContext& dev_ctx) {
   auto* index_data = index.data<index_t>();
   auto* grad_data = grad.data<tensor_t>();
   auto* out_data = out.data<tensor_t>();
@@ -406,7 +488,8 @@ void cpu_scatter_mean_input_grad_kernel(phi::DenseTensor self UNUSED,
                                         const phi::DenseTensor& index,
                                         phi::DenseTensor grad,
                                         bool include_self UNUSED,
-                                        const phi::DeviceContext& ctx UNUSED) {
+                                        const phi::DeviceContext& dev_ctx
+                                            UNUSED) {
   auto* index_data = index.data<index_t>();
   auto* grad_data = grad.data<tensor_t>();
 
@@ -453,7 +536,7 @@ void cpu_scatter_value_grad_kernel(phi::DenseTensor self,
                                    const phi::DenseTensor& index,
                                    phi::DenseTensor grad,
                                    bool include_self UNUSED,
-                                   const phi::DeviceContext& ctx UNUSED) {
+                                   const phi::DeviceContext& dev_ctx UNUSED) {
   auto* self_data = self.data<tensor_t>();
   auto* index_data = index.data<index_t>();
   auto* grad_data = grad.data<tensor_t>();
@@ -513,7 +596,7 @@ void cpu_scatter_add_mean_value_grad_kernel(
     phi::DenseTensor grad,
     const std::string& reduce,
     bool include_self,
-    const phi::DeviceContext& ctx UNUSED) {
+    const phi::DeviceContext& dev_ctx UNUSED) {
   auto* self_data = self.data<tensor_t>();
   auto* index_data = index.data<index_t>();
   auto* grad_data = grad.data<tensor_t>();
@@ -592,16 +675,17 @@ void cpu_scatter_add_mean_value_grad_kernel(
 }
 
 template <typename tensor_t, typename index_t>
-void cpu_scatter_mul_min_max_value_grad_kernel(phi::DenseTensor self,
-                                               int dim,
-                                               const phi::DenseTensor& index,
-                                               const phi::DenseTensor& out,
-                                               const phi::DenseTensor& x,
-                                               const phi::DenseTensor& value,
-                                               phi::DenseTensor grad,
-                                               const std::string& reduce,
-                                               bool include_self,
-                                               const phi::DeviceContext& ctx) {
+void cpu_scatter_mul_min_max_value_grad_kernel(
+    phi::DenseTensor self,
+    int dim,
+    const phi::DenseTensor& index,
+    const phi::DenseTensor& out,
+    const phi::DenseTensor& x,
+    const phi::DenseTensor& value,
+    phi::DenseTensor grad,
+    const std::string& reduce,
+    bool include_self,
+    const phi::DeviceContext& dev_ctx) {
   auto* self_data = self.data<tensor_t>();
   auto* index_data = index.data<index_t>();
   auto* grad_data = grad.data<tensor_t>();
@@ -705,5 +789,4 @@ Instantiate_Template_Function(cpu_gather_kernel)                  // NOLINT
     Instantiate_Template_Function_With_Out(
         cpu_scatter_mul_min_max_value_grad_kernel)  // NOLINT
 
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

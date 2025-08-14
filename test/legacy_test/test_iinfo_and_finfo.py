@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import unittest
-from distutils.version import StrictVersion
 
 import numpy as np
 
@@ -38,6 +37,8 @@ class TestIInfoAndFInfoAPI(unittest.TestCase):
             'complex128',
             'bool',
         ]:
+            if isinstance(dtype, paddle.base.core.DataType):
+                dtype = paddle.pir.core.datatype_to_vartype[dtype]
             with self.assertRaises(ValueError):
                 _ = paddle.iinfo(dtype)
 
@@ -54,6 +55,8 @@ class TestIInfoAndFInfoAPI(unittest.TestCase):
             ('int8', np.int8),
             ('uint8', np.uint8),
         ]:
+            if isinstance(paddle_dtype, paddle.base.core.DataType):
+                paddle_dtype = paddle.pir.core.datatype_to_vartype[paddle_dtype]
             xinfo = paddle.iinfo(paddle_dtype)
             xninfo = np.iinfo(np_dtype)
             self.assertEqual(xinfo.bits, xninfo.bits)
@@ -77,7 +80,7 @@ class TestIInfoAndFInfoAPI(unittest.TestCase):
             self.assertAlmostEqual(xinfo.eps, xninfo.eps)
             self.assertAlmostEqual(xinfo.tiny, xninfo.tiny)
             self.assertAlmostEqual(xinfo.resolution, xninfo.resolution)
-            if StrictVersion(np.__version__) >= StrictVersion('1.22.0'):
+            if np.lib.NumpyVersion(np.__version__) >= "1.22.0":
                 self.assertAlmostEqual(
                     xinfo.smallest_normal, xninfo.smallest_normal
                 )
@@ -97,7 +100,7 @@ class TestIInfoAndFInfoAPI(unittest.TestCase):
             self.assertAlmostEqual(xinfo.eps, xninfo.eps, places=16)
             self.assertAlmostEqual(xinfo.tiny, xninfo.tiny, places=16)
             self.assertAlmostEqual(xinfo.resolution, xninfo.resolution)
-            if StrictVersion(np.__version__) >= StrictVersion('1.22.0'):
+            if np.lib.NumpyVersion(np.__version__) >= "1.22.0":
                 self.assertAlmostEqual(
                     xinfo.smallest_normal, xninfo.smallest_normal, places=16
                 )
@@ -131,6 +134,49 @@ class TestIInfoAndFInfoAPI(unittest.TestCase):
         self.assertAlmostEqual(xinfo.tiny, 1.1754943508222875e-38)
         self.assertAlmostEqual(xinfo.resolution, 0.01)
         self.assertAlmostEqual(xinfo.smallest_normal, 1.1754943508222875e-38)
+
+    def test_finfo_alias(self):
+        # dtype and type alias
+        for alias_param in ["dtype", "type"]:
+            for paddle_dtype, np_dtype in [
+                (paddle.float32, np.float32),
+                (paddle.float64, np.float64),
+                ('float32', np.float32),
+                ('float64', np.float64),
+            ]:
+                xinfo = paddle.finfo(**{alias_param: paddle_dtype})
+                xninfo = np.finfo(np_dtype)
+                self.assertEqual(xinfo.dtype, xninfo.dtype)
+                self.assertEqual(xinfo.bits, xninfo.bits)
+                self.assertAlmostEqual(xinfo.max, xninfo.max)
+                self.assertAlmostEqual(xinfo.min, xninfo.min)
+                self.assertAlmostEqual(xinfo.eps, xninfo.eps)
+                self.assertAlmostEqual(xinfo.tiny, xninfo.tiny)
+                self.assertAlmostEqual(xinfo.resolution, xninfo.resolution)
+                if np.lib.NumpyVersion(np.__version__) >= "1.22.0":
+                    self.assertAlmostEqual(
+                        xinfo.smallest_normal, xninfo.smallest_normal
+                    )
+
+            for paddle_dtype, np_dtype in [
+                (paddle.complex64, np.complex64),
+                (paddle.complex128, np.complex128),
+                ('complex64', np.complex64),
+                ('complex128', np.complex128),
+            ]:
+                xinfo = paddle.finfo(**{alias_param: paddle_dtype})
+                xninfo = np.finfo(np_dtype)
+                self.assertEqual(xinfo.dtype, xninfo.dtype)
+                self.assertEqual(xinfo.bits, xninfo.bits)
+                self.assertAlmostEqual(xinfo.max, xninfo.max, places=16)
+                self.assertAlmostEqual(xinfo.min, xninfo.min, places=16)
+                self.assertAlmostEqual(xinfo.eps, xninfo.eps, places=16)
+                self.assertAlmostEqual(xinfo.tiny, xninfo.tiny, places=16)
+                self.assertAlmostEqual(xinfo.resolution, xninfo.resolution)
+                if np.lib.NumpyVersion(np.__version__) >= "1.22.0":
+                    self.assertAlmostEqual(
+                        xinfo.smallest_normal, xninfo.smallest_normal, places=16
+                    )
 
 
 if __name__ == '__main__':

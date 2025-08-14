@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle import base
 
 
 def numpy_cov(np_arr, rowvar=True, ddof=1, fweights=None, aweights=None):
@@ -37,11 +37,8 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_default(self):
         typelist = ['float64']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -60,11 +57,8 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_rowvar(self):
         typelist = ['float64']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -87,11 +81,8 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_ddof(self):
         typelist = ['float64']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -114,11 +105,8 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_fweights(self):
         typelist = ['float64']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -145,11 +133,8 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_aweights(self):
         typelist = ['float64']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -176,11 +161,8 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_weights(self):
         typelist = ['float64']
-        places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
 
-        for idx, p in enumerate(places):
+        for idx, p in enumerate(get_places()):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
@@ -266,7 +248,7 @@ class Cov_Test5(Cov_Test3):
         self.aw_s = 1.0
 
 
-# The value of Input(fweights) cannot be negtive
+# The value of Input(fweights) cannot be negative
 class Cov_Test6(Cov_Test3):
     def setUp(self):
         self.shape = [5, 10]
@@ -296,7 +278,7 @@ class Cov_Test8(Cov_Test3):
         self.aw_s = 1.0
 
 
-# The value of Input(aweights) cannot be negtive
+# The value of Input(aweights) cannot be negative
 class Cov_Test9(Cov_Test3):
     def setUp(self):
         self.shape = [5, 10]
@@ -304,6 +286,35 @@ class Cov_Test9(Cov_Test3):
         self.aweightshape = [10]
         self.fw_s = 1.0
         self.aw_s = -1.0
+
+
+class Cov_Test_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.shape = [0, 4]
+
+    def test_tensor_cov_default(self):
+        typelist = ['float64']
+
+        for idx, p in enumerate(get_places()):
+            if idx == 0:
+                paddle.set_device('cpu')
+            else:
+                paddle.set_device('gpu')
+
+            for dtype in typelist:
+                np_arr = np.random.rand(*self.shape).astype(dtype)
+                tensor = paddle.to_tensor(np_arr, place=p)
+                tensor.stop_gradient = False
+                cov = paddle.linalg.cov(
+                    tensor, rowvar=True, ddof=True, fweights=None, aweights=None
+                )
+                np_cov = numpy_cov(
+                    np_arr, rowvar=True, ddof=1, fweights=None, aweights=None
+                )
+                np.testing.assert_allclose(np_cov, cov.numpy(), rtol=1e-05)
+                loss = paddle.sum(cov)
+                loss.backward()
+                np.testing.assert_equal(tensor.grad.shape, tensor.shape)
 
 
 if __name__ == '__main__':

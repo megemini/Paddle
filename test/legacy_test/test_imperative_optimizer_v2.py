@@ -16,15 +16,41 @@ import itertools
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 from test_imperative_base import new_program_scope
 
 import paddle
 from paddle import base
+from paddle.autograd.backward_utils import ValueDict
 from paddle.base import core
 from paddle.distributed.fleet.meta_optimizers import DGCMomentumOptimizer
 
 # Note(wangzhongpu)
 # In dygraph, don't support ModelAverage, DGCMomentumOptimizer, ExponentialMovingAverage, PipelineOptimizer, LookaheadOptimizer, RecomputeOptimizer.
+
+
+def create_parameter_mapping(startup_program, main_program):
+    startup_params = {}
+    main_params = {}
+    parameter_mapping = ValueDict()
+    for op in startup_program.global_block().ops:
+        if op.name() == "builtin.set_parameter":
+            name = op.attrs()["parameter_name"]
+            param = op.operand(0).source()
+            startup_params[name] = param
+
+    for op in main_program.global_block().ops:
+        if op.name() == "builtin.parameter":
+            name = op.attrs()["parameter_name"]
+            param = op.result(0)
+            main_params[name] = param
+
+    assert len(startup_params) == len(main_params)
+    for name, startup_param in startup_params.items():
+        assert name in main_params
+        main_param = main_params[name]
+        parameter_mapping[main_param] = startup_param
+    return parameter_mapping
 
 
 class MLP(paddle.nn.Layer):
@@ -45,34 +71,36 @@ class TestImperativeOptimizerBase(unittest.TestCase):
         self.batch_num = 20
 
     def get_optimizer_dygraph(self, parameter_list):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def get_optimizer(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def reader_decorator(self, reader):
-        def _reader_imple():
+        def _reader_simple():
             for item in reader():
                 image = np.array(item[0]).reshape(1, 784)
                 label = np.array(item[1]).astype('int64').reshape(1)
                 yield image, label
 
-        return _reader_imple
+        return _reader_simple
 
     def _check_exception(self, exception_message, place=None):
         seed = 90
         batch_size = 128
         if place is None:
-            place = (
-                base.CUDAPlace(0)
-                if core.is_compiled_with_cuda()
-                else base.CPUPlace()
-            )
+            place = get_device_place()
 
         try:
             paddle.disable_static()
             paddle.seed(seed)
-            paddle.framework.random._manual_program_seed(seed)
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                    paddle.framework.random._manual_program_seed(seed)
+                paddle.framework.random._manual_program_seed(seed)
+            else:
+                paddle.framework.random._manual_program_seed(seed)
             mlp = MLP()
             optimizer = self.get_optimizer_dygraph(
                 parameter_list=mlp.parameters()
@@ -87,15 +115,17 @@ class TestImperativeOptimizerBase(unittest.TestCase):
         batch_size = 128
 
         if place is None:
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
 
         paddle.disable_static(place)
         paddle.seed(seed)
-        paddle.framework.random._manual_program_seed(seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                paddle.framework.random._manual_program_seed(seed)
+            paddle.framework.random._manual_program_seed(seed)
+        else:
+            paddle.framework.random._manual_program_seed(seed)
 
         mlp = MLP()
         optimizer = self.get_optimizer_dygraph(parameter_list=mlp.parameters())
@@ -149,14 +179,16 @@ class TestImperativeOptimizerBase(unittest.TestCase):
         paddle.enable_static()
         with new_program_scope():
             paddle.seed(seed)
-            paddle.framework.random._manual_program_seed(seed)
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                    paddle.framework.random._manual_program_seed(seed)
+                paddle.framework.random._manual_program_seed(seed)
+            else:
+                paddle.framework.random._manual_program_seed(seed)
 
             if place is None:
-                place = (
-                    base.CPUPlace()
-                    if not core.is_compiled_with_cuda()
-                    else base.CUDAPlace(0)
-                )
+                place = get_device_place()
 
             exe = base.Executor(place)
 
@@ -180,16 +212,30 @@ class TestImperativeOptimizerBase(unittest.TestCase):
             # initialize params and fetch them
             static_param_init_value = {}
             static_param_name_list = []
+            static_params = []
             for param in mlp.parameters():
                 static_param_name_list.append(param.name)
+                static_params.append(param)
+
+            if paddle.framework.use_pir_api():
+                parameter_mapping = create_parameter_mapping(
+                    paddle.static.default_startup_program(),
+                    paddle.static.default_main_program(),
+                )
+                startup_params = [
+                    parameter_mapping[param] for param in static_params
+                ]
+            else:
+                startup_params = static_params
 
             out = exe.run(
-                base.default_startup_program(),
-                fetch_list=static_param_name_list,
+                paddle.static.default_startup_program(),
+                fetch_list=startup_params,
             )
 
-            for i in range(len(static_param_name_list)):
-                static_param_init_value[static_param_name_list[i]] = out[i]
+            for i in range(len(static_params)):
+                param_name = static_param_name_list[i]
+                static_param_init_value[param_name] = out[i]
 
             for batch_id, data in enumerate(train_reader()):
                 if batch_id >= self.batch_num:
@@ -204,8 +250,8 @@ class TestImperativeOptimizerBase(unittest.TestCase):
                     .reshape([128, 1])
                 )
 
-                fetch_list = [avg_loss.name]
-                fetch_list.extend(static_param_name_list)
+                fetch_list = [avg_loss]
+                fetch_list.extend(static_params)
                 out = exe.run(
                     base.default_main_program(),
                     feed={"pixel": static_x_data, "label": y_data},
@@ -532,7 +578,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 
@@ -556,7 +602,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 
@@ -584,7 +630,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
             a = np.random.uniform(-0.1, 0.1, [10, 10]).astype("float32")
 
             linear = paddle.nn.Linear(10, 10)
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
             b = linear(a)
 
             loss = paddle.mean(b)
@@ -610,7 +656,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 
@@ -646,7 +692,7 @@ class TestOptimizerLearningRate(unittest.TestCase):
 
             linear = paddle.nn.Linear(10, 10)
 
-            a = base.dygraph.to_variable(a)
+            a = paddle.to_tensor(a)
 
             b = linear(a)
 
@@ -790,6 +836,7 @@ class TestImperativeLambOptimizer(TestImperativeOptimizerBase):
         return optimizer
 
     # should fix: may fail in CI-windows
+
     def _test_lamb(self):
         self._check_mlp()
 
@@ -830,7 +877,7 @@ class TestImperativePipelineOptimizer(TestImperativeOptimizerBase):
         optimizer = paddle.incubate.optimizer.PipelineOptimizer(optimizer)
         return optimizer
 
-    def test_pipline(self):
+    def test_pipeline(self):
         exception_message = "In dygraph, don't support PipelineOptimizer."
         self._check_exception(exception_message)
 
@@ -877,7 +924,7 @@ class TestImperativeOptimizerList(unittest.TestCase):
             )
 
             in_np = np.random.uniform(-0.1, 0.1, [10, 10]).astype("float32")
-            in_data = base.dygraph.to_variable(in_np)
+            in_data = paddle.to_tensor(in_np)
 
             y = linear_1(in_data)
             y = linear_2(y)

@@ -12,18 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 
-import decorator
+import contextlib
+import functools
+import inspect
+from typing import Callable, TypeVar
+
+from typing_extensions import ParamSpec
+
+_InputT = ParamSpec("_InputT")
+_RetT1 = TypeVar("_RetT1")
+_RetT2 = TypeVar("_RetT2")
 
 __all__ = []
 
 
-def wrap_decorator(decorator_func):
-    @decorator.decorator
-    def __impl__(func, *args, **kwargs):
-        wrapped_func = decorator_func(func)
-        return wrapped_func(*args, **kwargs)
+def copy_signature(
+    src: Callable[_InputT, _RetT1], dst: Callable[_InputT, _RetT1]
+):
+    src_signature = inspect.signature(src)
+    dst.__signature__ = src_signature.replace(
+        parameters=list(src_signature.parameters.values())
+    )
+
+
+def wrap_decorator(
+    decorator_func: Callable[
+        [Callable[_InputT, _RetT1]], Callable[_InputT, _RetT2]
+    ],
+) -> Callable[[Callable[_InputT, _RetT1]], Callable[_InputT, _RetT2]]:
+    @functools.wraps(decorator_func)
+    def __impl__(func: Callable[_InputT, _RetT1]) -> Callable[_InputT, _RetT2]:
+        decorated = decorator_func(func)
+
+        @functools.wraps(func)
+        def wrapper(*args: _InputT.args, **kwargs: _InputT.kwargs) -> _RetT2:
+            return decorated(*args, **kwargs)
+
+        copy_signature(func, wrapper)
+        return wrapper
 
     return __impl__
 

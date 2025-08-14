@@ -96,6 +96,7 @@ list(
   reverse_roll_op.cc
   tanhshrink_op.cc
   take_along_axis_op.cc
+  linear_interp_v2_op.cc
   logsigmoid_op.cc
   preln_layernorm_shift_partition_op.cc
   trans_layernorm_op.cc
@@ -107,11 +108,15 @@ list(
   skip_groupnorm_act_op.cc
   preln_groupnorm_act_op.cc
   expand_v2_op.cc
+  argsort_op.cc
   cumsum_op.cc
   temporal_shift_op.cc
   einsum_op.cc
   unbind_op.cc
+  index_put_op.cc
+  isnan_v2_op.cc
   assign_op.cc
+  p_norm_op.cc
   flip_op.cc
   quantize_linear_op.cc
   dequantize_linear_op.cc
@@ -126,8 +131,9 @@ if(CUSPARSELT_FOUND AND ${TENSORRT_MAJOR_VERSION} GREATER_EQUAL 8)
   list(APPEND CONVERT_FILES sparse_fc_op.cc sparse_multihead_matmul_op.cc)
 endif()
 
-if(${TENSORRT_MAJOR_VERSION} GREATER_EQUAL 8 AND ${TENSORRT_MINOR_VERSION}
-                                                 GREATER_EQUAL 2)
+set(TENSORRT_VERSION_NUMBER
+    "${TENSORRT_MAJOR_VERSION}${TENSORRT_MINOR_VERSION}")
+if(${TENSORRT_VERSION_NUMBER} GREATER_EQUAL 82)
   list(APPEND CONVERT_FILES set_value_op.cc)
 endif()
 
@@ -138,7 +144,7 @@ nv_library(
        tensorrt_plugin
        operator
        scope
-       framework_proto
+       phi
        tensorrt_op_teller
        op_registry)
 
@@ -163,7 +169,6 @@ elseif(WITH_CINN)
          common
          custom_operator
          init_phi
-         fleet_executor
          python)
 else()
   nv_test(
@@ -175,7 +180,6 @@ else()
          common
          custom_operator
          init_phi
-         fleet_executor
          python)
 endif()
 

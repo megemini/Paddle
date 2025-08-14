@@ -85,13 +85,9 @@ def _all_gather(tensor, group=None, use_calc_stream=True):
             if group is None
             else group.nranks
         )
-        return paddle._legacy_C_ops.c_allgather(
+        return paddle._C_ops.all_gather(
             tensor,
-            'use_calc_stream',
-            use_calc_stream,
-            'ring_id',
             ring_id,
-            'nranks',
             nranks,
         )
 
@@ -263,7 +259,7 @@ def prepare_forward(gate, num_expert, world_size, moe_group):
 class MoELayer(nn.Layer):
     """MoE Layer
     Args:
-        d_model (int): Model dimention.
+        d_model (int): Model dimension.
         experts (nn.LayerList): Expert networks list.
         gate (dict|NaiveGate|SwitchGate|NaiveGate):
 
@@ -395,14 +391,12 @@ class MoELayer(nn.Layer):
                 )
             else:
                 raise AssertionError(
-                    "We only support naive gate,                                 gshard gate and switch gate,                                 but you choose {} gate.".format(
-                        str(gate)
-                    )
+                    f"We only support naive gate,                                 gshard gate and switch gate,                                 but you choose {gate} gate."
                 )
         elif isinstance(gate, NaiveGate):
             self.top_k = gate.top_k
         elif isinstance(gate, BaseGate):
-            raise TypeError("Unimplemented gate type: ", type(gate))
+            raise TypeError(f"Unimplemented gate type: {type(gate)}")
         else:
             raise TypeError("gate's type must be either dict or moe.BaseGate")
         self.gate = gate

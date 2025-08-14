@@ -145,12 +145,12 @@ class TestBilinearInterpOneDNNOp(OpTest):
             'out_w': self.out_w,
             'scale': self.scale,
             'data_layout': self.data_layout,
-            'use_mkldnn': self.use_onednn,
+            'use_onednn': self.use_onednn,
         }
         self.outputs = {'Out': output_np}
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False)
+        self.check_output(check_dygraph=False, check_pir_onednn=True)
 
 
 class TestBilinearInterpOpOneDNNNHWC(TestBilinearInterpOneDNNOp):

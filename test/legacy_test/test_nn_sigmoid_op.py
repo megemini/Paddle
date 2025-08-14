@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 from paddle import base, nn
-from paddle.base import core
 from paddle.nn import functional
 
 
@@ -49,7 +49,12 @@ class TestNNSigmoidAPI(unittest.TestCase):
         exe = paddle.static.Executor(place)
         out = exe.run(main_program, feed={'x': self.x}, fetch_list=[y])
         np.testing.assert_allclose(out[0], self.y, rtol=1e-05)
-        self.assertTrue(y.name.startswith("api_sigmoid"))
+
+        if paddle.framework.in_pir_mode():
+            y_name = y.get_defining_op().name()
+            self.assertTrue(y_name.startswith("pd_op.sigmoid"))
+        else:
+            self.assertTrue(y.name.startswith("api_sigmoid"))
 
     def check_dynamic_api(self, place):
         paddle.disable_static(place)
@@ -59,10 +64,7 @@ class TestNNSigmoidAPI(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), self.y, rtol=1e-05)
 
     def test_check_api(self):
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for place in places:
+        for place in get_places():
             self.check_dynamic_api(place)
             self.check_static_api(place)
 
@@ -96,9 +98,10 @@ class TestNNFunctionalSigmoidAPI(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), self.y, rtol=1e-05)
 
     def test_check_api(self):
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for place in places:
+        for place in get_places():
             self.check_static_api(place)
             self.check_dynamic_api()
+
+
+if __name__ == '__main__':
+    unittest.main()

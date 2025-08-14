@@ -17,6 +17,7 @@ import unittest
 import numpy as np
 from get_test_cover_info import (
     XPUOpTestWrapper,
+    check_run_big_shape_test,
     create_test_class,
     get_xpu_op_support_types,
 )
@@ -36,7 +37,7 @@ class XPUTestUnsqueeze2Op(XPUOpTestWrapper):
         def setUp(self):
             self.op_type = "unsqueeze2"
             self.__class__.op_type = "unsqueeze2"
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.init_dtype()
             self.init_test_case()
             self.inputs = {
@@ -103,7 +104,7 @@ class XPUTestUnsqueeze2Op(XPUOpTestWrapper):
         def setUp(self):
             self.op_type = "unsqueeze2"
             self.__class__.op_type = "unsqueeze2"
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.init_dtype()
             self.init_test_case()
 
@@ -174,7 +175,7 @@ class XPUTestUnsqueeze2Op(XPUOpTestWrapper):
         def setUp(self):
             self.op_type = "unsqueeze2"
             self.__class__.op_type = "unsqueeze2"
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.init_test_case()
             self.init_dtype()
 
@@ -233,6 +234,34 @@ class XPUTestUnsqueeze2Op(XPUOpTestWrapper):
             self.ori_shape = (10, 2, 5)
             self.axes = (3, 1, 1)
             self.new_shape = (10, 1, 1, 2, 5, 1)
+
+    @check_run_big_shape_test()
+    class TestUnsqueeze2OpLargeShape1(TestUnsqueeze2Op):
+        def init_test_case(self):
+            self.ori_shape = (8192,)
+            self.axes = (0,)
+            self.new_shape = (1, 8192)
+
+    @check_run_big_shape_test()
+    class TestUnsqueeze2OpLargeShape2(TestUnsqueeze2Op):
+        def init_test_case(self):
+            self.ori_shape = (8192, 64)
+            self.axes = (1,)
+            self.new_shape = (8192, 1, 64)
+
+    @check_run_big_shape_test()
+    class TestUnsqueeze2OpLargeShape3(TestUnsqueeze2Op):
+        def init_test_case(self):
+            self.ori_shape = (1, 8192, 128)
+            self.axes = (2,)
+            self.new_shape = (1, 8192, 1, 128)
+
+    @check_run_big_shape_test()
+    class TestUnsqueeze2OpLargeShape4(TestUnsqueeze2Op):
+        def init_test_case(self):
+            self.ori_shape = (1, 8192)
+            self.axes = (-1,)
+            self.new_shape = (1, 8192, 1)
 
 
 support_types = get_xpu_op_support_types("unsqueeze2")

@@ -50,7 +50,7 @@ inline void StridedMemcpy(const phi::DeviceContext& dev_ctx,
 }
 
 template <typename Context>
-inline void CopyWithContext(const Context& ctx,
+inline void CopyWithContext(const Context& dev_ctx,
                             const Place& dst_place,
                             void* dst,
                             const Place& src_place,
@@ -58,15 +58,16 @@ inline void CopyWithContext(const Context& ctx,
                             size_t num) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
     defined(PADDLE_WITH_CUSTOM_DEVICE)
-  memory_utils::Copy(dst_place, dst, src_place, src, num, ctx.stream());
+  memory_utils::Copy(dst_place, dst, src_place, src, num, dev_ctx.stream());
 #else
   PADDLE_THROW(
-      phi::errors::PreconditionNotMet("Paddle is not compiled with GPU."));
+      common::errors::PreconditionNotMet("Paddle is not compiled with GPU."));
 #endif
 }
 
 template <>
-inline void CopyWithContext<phi::CPUContext>(const phi::CPUContext& ctx UNUSED,
+inline void CopyWithContext<phi::CPUContext>(const phi::CPUContext& dev_ctx
+                                                 UNUSED,
                                              const Place& dst_place,
                                              void* dst,
                                              const Place& src_place,
@@ -83,7 +84,7 @@ inline void CopyWithContext<phi::CPUContext>(const phi::CPUContext& ctx UNUSED,
 // NOTE: The src and dst tensor should have the same elements
 // except the specified axis.
 template <typename T, typename Context>
-inline void StridedNumelCopyWithAxis(const Context& ctx,
+inline void StridedNumelCopyWithAxis(const Context& dev_ctx,
                                      int64_t axis,
                                      T* dst,
                                      const phi::DDim& dst_stride_numel,
@@ -93,11 +94,11 @@ inline void StridedNumelCopyWithAxis(const Context& ctx,
   int64_t before = dst_stride_numel[0] / dst_stride_numel[axis];
   int64_t src_after = src_stride_numel[axis];
   int64_t dst_after = dst_stride_numel[axis];
-  auto place = ctx.GetPlace();
+  auto place = dev_ctx.GetPlace();
 
   PADDLE_ENFORCE_EQ(src_stride_numel.size(),
                     dst_stride_numel.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Source and destination tensor should have the same "
                         "dimension size, but source tensor dimension size is "
                         "%u, destination tensor size is %u.",
@@ -109,7 +110,7 @@ inline void StridedNumelCopyWithAxis(const Context& ctx,
       PADDLE_ENFORCE_EQ(
           src_stride_numel[i] / src_stride_numel[axis],
           dst_stride_numel[i] / dst_stride_numel[axis],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Source and destination tensor should have the same number of "
               "elements except the specified axis, but the source elements "
               "number is %d, destination elements number is %d.",
@@ -121,7 +122,7 @@ inline void StridedNumelCopyWithAxis(const Context& ctx,
       PADDLE_ENFORCE_EQ(
           src_stride_numel[i],
           dst_stride_numel[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Source and destination tensor should have the same number of "
               "elements except the specified axis, but the source elements "
               "number is %d, destination elements number is %d.",
@@ -131,7 +132,7 @@ inline void StridedNumelCopyWithAxis(const Context& ctx,
   }
 
   for (int64_t i = 0; i < before; ++i) {
-    CopyWithContext<Context>(ctx,
+    CopyWithContext<Context>(dev_ctx,
                              place,
                              dst + i * dst_after,
                              place,

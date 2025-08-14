@@ -16,29 +16,43 @@
 
 #include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 
 namespace phi {
 template <typename T, typename Context>
-void ScatterNdAddGradKernel(const Context &ctx,
+void ScatterNdAddGradKernel(const Context &dev_ctx,
                             const DenseTensor &index,
                             const DenseTensor &updates,
                             const DenseTensor &out_grad,
                             DenseTensor *x_grad,
                             DenseTensor *updates_grad) {
-  using XPUT = typename XPUTypeTrait<T>::Type;
-  int ret = xpu::SUCCESS;
+  if (out_grad.numel() == 0) {
+    if (x_grad) {
+      dev_ctx.template Alloc<T>(x_grad);
+    }
+    if (updates_grad) {
+      phi::Full<T, Context>(
+          dev_ctx,
+          phi::IntArray(common::vectorize(updates_grad->dims())),
+          0,
+          updates_grad);
+    }
+    return;
+  }
+  using XPUType = typename XPUTypeTrait<T>::Type;
+  int ret = 0;
   const T *out_grad_data = out_grad.data<T>();
   if (x_grad) {
-    auto *x_grad_data = ctx.template Alloc<T>(x_grad);
-    ret = xpu::copy<XPUT>(ctx.x_context(),
-                          reinterpret_cast<const XPUT *>(out_grad_data),
-                          reinterpret_cast<XPUT *>(x_grad_data),
-                          out_grad.numel());
+    auto *x_grad_data = dev_ctx.template Alloc<T>(x_grad);
+    ret = xpu::copy<XPUType>(dev_ctx.x_context(),
+                             reinterpret_cast<const XPUType *>(out_grad_data),
+                             reinterpret_cast<XPUType *>(x_grad_data),
+                             out_grad.numel());
     PADDLE_ENFORCE_XDNN_SUCCESS(ret, "copy");
   }
 
   if (updates_grad) {
-    auto *updates_grad_data = ctx.template Alloc<T>(updates_grad);
+    auto *updates_grad_data = dev_ctx.template Alloc<T>(updates_grad);
     if (updates_grad->numel() == 0) {
       return;
     }
@@ -64,11 +78,12 @@ void ScatterNdAddGradKernel(const Context &ctx,
                                   out_grad_numel,
                                   remain_numel,
                                   updates_grad_numel));
-      ret = xpu::broadcast<XPUT>(ctx.x_context(),
-                                 reinterpret_cast<const XPUT *>(out_grad_data),
-                                 reinterpret_cast<XPUT *>(updates_grad_data),
-                                 {1, out_grad_numel},
-                                 {remain_numel, out_grad_numel});
+      ret = xpu::broadcast<XPUType>(
+          dev_ctx.x_context(),
+          reinterpret_cast<const XPUType *>(out_grad_data),
+          reinterpret_cast<XPUType *>(updates_grad_data),
+          {1, out_grad_numel},
+          {remain_numel, out_grad_numel});
       PADDLE_ENFORCE_XDNN_SUCCESS(ret, "broadcast");
       return;
     }
@@ -84,19 +99,19 @@ void ScatterNdAddGradKernel(const Context &ctx,
         nullptr};
 
     if (index.dtype() == DataType::INT32) {
-      ret = xpu::gather_nd<XPUT, int>(
-          ctx.x_context(),
-          reinterpret_cast<const XPUT *>(out_grad_data),
+      ret = xpu::gather_nd<XPUType, int>(
+          dev_ctx.x_context(),
+          reinterpret_cast<const XPUType *>(out_grad_data),
           index.data<int>(),
-          reinterpret_cast<XPUT *>(updates_grad_data),
+          reinterpret_cast<XPUType *>(updates_grad_data),
           out_grad_shape_param,
           index_shape_vec);
     } else {
-      ret = xpu::gather_nd<XPUT, int64_t>(
-          ctx.x_context(),
-          reinterpret_cast<const XPUT *>(out_grad_data),
+      ret = xpu::gather_nd<XPUType, int64_t>(
+          dev_ctx.x_context(),
+          reinterpret_cast<const XPUType *>(out_grad_data),
           index.data<int64_t>(),
-          reinterpret_cast<XPUT *>(updates_grad_data),
+          reinterpret_cast<XPUType *>(updates_grad_data),
           out_grad_shape_param,
           index_shape_vec);
     }

@@ -13,16 +13,16 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/container/flat_hash_map.h>
 
 #include <string>
 #include <vector>
 
 #include "paddle/cinn/common/target.h"
-#include "paddle/cinn/hlir/framework/node.h"
+#include "paddle/cinn/ir/dim.h"
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/lang/packed_func.h"
 #include "paddle/cinn/utils/type_defs.h"
+#include "paddle/utils/flat_hash_map.h"
 
 namespace cinn {
 namespace hlir {
@@ -30,14 +30,17 @@ namespace hlir {
 template <typename T>
 T GetAttr(const cinn::utils::AttributeMap &attr_map,
           const std::string &attr_name) {
-  CHECK(attr_map.count(attr_name))
-      << "Cannot found attribute \"" << attr_name << "\"";
+  PADDLE_ENFORCE_EQ(attr_map.count(attr_name),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "Sorry, cannot found attribute %s", attr_name));
   const auto &attr = attr_map.at(attr_name);
-
-  CHECK(absl::holds_alternative<T>(attr))
-      << "The type of attribute \"" << attr_name << "\" isn't "
-      << typeid(T).name();
-  return absl::get<T>(attr_map.at(attr_name));
+  PADDLE_ENFORCE_EQ(
+      std::holds_alternative<T>(attr),
+      true,
+      ::common::errors::InvalidArgument(
+          "The type of attribute %s isn't %s", attr_name, typeid(T).name()));
+  return std::get<T>(attr_map.at(attr_name));
 }
 
 template <class T>
@@ -60,6 +63,8 @@ std::vector<Expr> ToCinnExprs(const std::vector<T> &args) {
   return exprs;
 }
 
+std::vector<Expr> ToCinnExprs(const std::vector<ir::Dim> &args);
+
 template <typename T>
 std::vector<T> ToPodVector(const std::vector<Expr> &args) {
   if (args.empty()) {
@@ -67,9 +72,12 @@ std::vector<T> ToPodVector(const std::vector<Expr> &args) {
   }
 
   const auto &type = args.front().type();
-  CHECK_EQ(type, cinn::common::type_of<T>())
-      << "Cannot get " << cinn::common::type_of<T>() << " value from " << type
-      << " vector!";
+  PADDLE_ENFORCE_EQ(
+      type,
+      cinn::common::type_of<T>(),
+      ::common::errors::InvalidArgument("Cannot get %s value from %s vector!",
+                                        cinn::common::type_of<T>(),
+                                        type));
 
   std::vector<T> shape_v;
   if (type.is_bool()) {
@@ -125,22 +133,12 @@ std::vector<T> ToPodVector(const std::vector<Expr> &args) {
       shape_v.push_back(static_cast<T>(e.as_double()));
     }
   } else {
-    LOG(FATAL) << "Not support " << type;
+    std::stringstream ss;
+    ss << "Not support " << type;
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
   return shape_v;
 }
-
-using CINNSchedule = lang::PackedFunc;
-
-CINNSchedule GetElementwiseScheduleFunc(
-    const std::vector<std::vector<int>> &output_shapes,
-    const Target &target,
-    bool vectorizable = true);
-
-CINNSchedule GetInjectiveScheduleFunc(
-    const std::vector<std::vector<int>> &output_shapes,
-    const Target &target,
-    bool vectorizable = true);
 
 std::string GetExternFuncName(const cinn::common::Target &target,
                               const cinn::common::Type &type,

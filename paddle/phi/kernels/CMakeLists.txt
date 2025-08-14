@@ -29,8 +29,6 @@ file(GLOB kernel_primitive_h "primitive/*.h")
 file(
   GLOB kernel_cu
   RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-  "gpu/*.cu"
-  "gpu/*.cu.cc"
   "gpudnn/*.cu"
   "kps/*.cu"
   "legacy/kps/*.cu"
@@ -38,51 +36,91 @@ file(
   "selected_rows/gpu/*.cu"
   "sparse/gpu/*.cu"
   "strings/gpu/*.cu"
+  "fusion/fp8_gemm/fp8_gemm_with_cublasLt/*.cu"
   "fusion/gpu/*.cu")
+
+file(
+  GLOB kernel_gpu
+  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+  "gpu/*.cu" "gpu/*.cu.cc")
 
 if(APPLE OR WIN32)
   list(REMOVE_ITEM kernel_cu "fusion/gpu/fusion_group_kernel.cu")
+  list(REMOVE_ITEM kernel_cu "sparse/gpu/conv_kernel_igemm.cu")
+endif()
+
+# New Op only supported by CUDA>=12.0 and Linux
+if(((WITH_GPU) AND (CUDA_VERSION VERSION_LESS 12.0))
+   OR APPLE
+   OR WIN32
+   OR WITH_ROCM)
+  list(
+    REMOVE_ITEM
+    kernel_cu
+    "legacy/gpu/moe_ops_partial_nosoftmaxtopk_kernel.cu"
+    "legacy/gpu/moe_ops_partial_nosoftmaxtopk_grad_kernel.cu"
+    "legacy/gpu/moe_gate_dispatch_permute_grad_kernel.cu"
+    "legacy/gpu/moe_gate_dispatch_permute_kernel.cu"
+    "legacy/gpu/moe_gate_dispatch_and_quant_kernel.cu"
+    "legacy/gpu/expand_modality_expert_id_kernel.cu"
+    "legacy/gpu/moe_combine_kernel.cu"
+    "legacy/gpu/moe_combine_grad_kernel.cu"
+    "legacy/gpu/moe_combine_no_weight_kernel.cu"
+    "legacy/gpu/moe_combine_no_weight_grad_kernel.cu"
+    "legacy/gpu/cal_aux_loss_kernel.cu"
+    "legacy/gpu/cal_aux_loss_grad_kernel.cu"
+    "legacy/gpu/ext_build_src_rank_and_local_expert_id_kernel.cu"
+    "legacy/gpu/moe_gate_dispatch_kernel.cu"
+    "legacy/gpu/moe_gate_dispatch_grad_kernel.cu"
+    "legacy/gpu/int_bincount.cu"
+    "legacy/gpu/layer_norm_cuda_kernel.cu"
+    "legacy/gpu/fp8_gemm_blockwise_kernel.cu"
+    "legacy/gpu/fp8_quant_blockwise_kernel.cu"
+    "fusion/gpu/fused_act_dequant_kernel.cu"
+    "fusion/gpu/fused_stack_transpose_quant_kernel.cu"
+    "fusion/gpu/fused_transpose_split_quant_kernel.cu"
+    "fusion/gpu/fused_transpose_wlch_split_quant_kernel.cu"
+    "fusion/gpu/fused_swiglu_weighted_bwd_kernel.cu"
+    "fusion/gpu/fused_weighted_swiglu_act_quant_kernel.cu")
+endif()
+
+# Get flag for CUDA arch >= 80
+set(has_arch_ge80 FALSE)
+foreach(arch ${NVCC_ARCH_BIN})
+  if(${arch} GREATER_EQUAL 80)
+    set(has_arch_ge80 TRUE)
+    break()
+  endif()
+endforeach()
+
+if(WITH_GPU
+   AND (NOT has_arch_ge80 OR (CUDA_VERSION VERSION_LESS 12.0))
+   OR WIN32
+   OR APPLE
+   OR WITH_ROCM) # need support BF16
+  list(REMOVE_ITEM kernel_gpu "gpu/moe_permute_kernel.cu"
+       "gpu/moe_unpermute_kernel.cu")
 endif()
 
 if(NOT WITH_DGC)
-  list(REMOVE_ITEM kernel_cu "gpu/dgc_kernel.cu")
-endif()
-
-if(DEFINED REDUCE_INFERENCE_LIB_SIZE)
-  list(FILTER kernel_cu EXCLUDE REGEX ".*_grad_kernel\\.cc$")
-  list(FILTER kernel_cu EXCLUDE REGEX ".*_grad_kernel\\.cu$")
+  list(REMOVE_ITEM kernel_gpu "gpu/dgc_kernel.cu")
 endif()
 
 if(WITH_CUTLASS)
-  execute_process(
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/fusion/cutlass/conv2d/generated_tmp"
-    COMMAND ${PYTHON_EXECUTABLE} "conv2d_bias_act.py"
-    COMMAND ${PYTHON_EXECUTABLE} "conv2d_bias_residual.py"
-    COMMAND ${PYTHON_EXECUTABLE} "conv2d_depthwise_bias_act.py"
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/fusion/cutlass/conv2d")
-  set(generated_tmp_dir
-      ${PADDLE_SOURCE_DIR}/paddle/phi/kernels/fusion/cutlass/conv2d/generated_tmp
-  )
-  set(generated_dir
-      ${PADDLE_SOURCE_DIR}/paddle/phi/kernels/fusion/cutlass/conv2d/generated)
-  file(GLOB con2d_generated_files ${generated_tmp_dir}/*.cu)
-
-  if(EXISTS ${generated_dir})
-    foreach(gen_file ${con2d_generated_files})
-      string(REPLACE "generated_tmp" "generated" now_file ${gen_file})
-      execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                              "${gen_file}" "${now_file}")
-    endforeach()
-    message("copy if different ${generated_dir}")
-  else()
-    foreach(gen_file ${con2d_generated_files})
-      string(REPLACE "generated_tmp" "generated" now_file ${gen_file})
-      execute_process(COMMAND ${CMAKE_COMMAND} -E copy "${gen_file}"
-                              "${now_file}")
-    endforeach()
-    message("copy ${generated_dir}")
-  endif()
+  add_custom_target(
+    gemm_epilogue_compile_script ALL
+    COMMAND bash compile.sh "${PYTHON_EXECUTABLE}" "${CUDA_TOOLKIT_ROOT_DIR}"
+            \"${NVCC_ARCH_BIN}\" "${CMAKE_COMMAND}"
+    WORKING_DIRECTORY
+      ${PADDLE_SOURCE_DIR}/paddle/phi/kernels/fusion/cutlass/gemm_epilogue
+    COMMENT "GemmEpilogue compile script")
+  add_custom_target(
+    fused_conv2d_add_act_compile_script ALL
+    COMMAND bash compile.sh "${PYTHON_EXECUTABLE}" "${CUDA_TOOLKIT_ROOT_DIR}"
+            \"${NVCC_ARCH_BIN}\" "${CMAKE_COMMAND}"
+    WORKING_DIRECTORY
+      ${PADDLE_SOURCE_DIR}/paddle/phi/kernels/fusion/cutlass/conv2d
+    COMMENT "FusedConv2dAddAct compile script")
 
   execute_process(
     COMMAND
@@ -204,8 +242,6 @@ if(WITH_CUTLASS)
   file(
     GLOB cutlass_cu
     RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-    "fusion/cutlass/conv2d/generated/*.cu"
-    "fusion/cutlass/conv2d/*.cu"
     "fusion/cutlass/*.cu"
     "fusion/cutlass/memory_efficient_attention/autogen/impl/*.cu"
     "fusion/cutlass/memory_efficient_attention/autogen_variable/impl/*.cu"
@@ -222,7 +258,48 @@ if(NOT WITH_CUDNN_FRONTEND)
     "fusion/gpu/fused_scale_bias_relu_conv_bn_kernel.cu"
     "fusion/gpu/fused_scale_bias_add_relu_kernel.cu"
     "fusion/gpu/fused_dconv_drelu_dbn_kernel.cu"
-    "fusion/gpu/fused_dot_product_attention_op.cu")
+    "fusion/gpu/fused_dot_product_attention_op.cu"
+    "fusion/gpu/max_pool2d_v2_grad_kernel.cu"
+    "fusion/gpu/max_pool2d_v2_kernel.cu")
+endif()
+
+# Note(qili93): remove kernels not supported on DCU yet
+if(WITH_ROCM)
+  list(
+    REMOVE_ITEM
+    kernel_cu
+    "gpudnn/mha_cudnn_frontend.cu"
+    "fusion/gpu/fused_attention_kernel.cu"
+    "fusion/gpu/fused_attention_grad_kernel.cu"
+    "fusion/gpu/fused_bn_add_activation_grad_kernel.cu"
+    "fusion/gpu/fused_bn_add_activation_kernel.cu"
+    "fusion/gpu/fused_feedforward_kernel.cu"
+    "fusion/gpu/fused_feedforward_grad_kernel.cu"
+    "fusion/gpu/fused_multi_transformer_int8_kernel.cu"
+    "fusion/gpu/fused_multi_transformer_kernel.cu"
+    "fusion/gpu/fusion_transpose_flatten_concat_kernel.cu")
+  list(
+    REMOVE_ITEM
+    kernel_gpu
+    "gpu/affine_grid_grad_kernel.cu"
+    "gpu/apply_per_channel_scale_kernel.cu"
+    "gpu/calc_reduced_attn_kernel.cu"
+    "gpu/eigvalsh_kernel.cu"
+    "gpu/lu_kernel.cu"
+    "gpu/matrix_rank_kernel.cu"
+    "gpu/matrix_rank_tol_kernel.cu"
+    "gpu/svd_kernel.cu"
+    "gpu/cuda_gemm_kernel.cu")
+endif()
+
+# Remove AP kernel when CINN is not enabled.
+if(NOT WITH_CINN)
+  list(REMOVE_ITEM kernel_cu "gpu/ap_facade_kernel.cu"
+       "gpu/ap_trivial_fusion_begin_kernel.cu"
+       "gpu/ap_trivial_fusion_end_kernel.cu" "gpu/ap_variadic_kernel.cu")
+  list(REMOVE_ITEM kernel_gpu "gpu/ap_facade_kernel.cu"
+       "gpu/ap_trivial_fusion_begin_kernel.cu"
+       "gpu/ap_trivial_fusion_end_kernel.cu" "gpu/ap_variadic_kernel.cu")
 endif()
 
 set(cc_search_pattern
@@ -242,9 +319,13 @@ set(cc_search_pattern
     "stride/*.cc"
     "fusion/cpu/*.cc")
 
-if(WITH_MKLDNN)
+if(WITH_ONEDNN)
   set(cc_search_pattern ${cc_search_pattern} "legacy/onednn/*.cc" "onednn/*.cc"
                         "fusion/onednn/*.cc")
+endif()
+
+if(WITH_CUSTOM_DEVICE)
+  set(cc_search_pattern ${cc_search_pattern} "custom/*.cc")
 endif()
 
 file(
@@ -252,16 +333,14 @@ file(
   RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
   ${cc_search_pattern})
 
-if(DEFINED REDUCE_INFERENCE_LIB_SIZE)
-  list(FILTER kernel_cc EXCLUDE REGEX ".*_grad_kernel\\.cc$")
-endif()
-
 if(NOT
    (WITH_AVX
     AND AVX512F_FOUND
     AND AVX512F_FLAG
     AND WITH_MKL))
+  list(REMOVE_ITEM kernel_cc "fusion/cpu/fused_layer_norm_avx_kernel.cc")
   list(REMOVE_ITEM kernel_cc "fusion/cpu/self_dp_attention_kernel.cc")
+  list(REMOVE_ITEM kernel_cc "fusion/cpu/rms_norm_avx_kernel.cc")
 endif()
 
 file(
@@ -271,8 +350,11 @@ file(
   "sparse/xpu/*.cc")
 
 if(WITH_GPU OR WITH_ROCM)
+  set(kernels_gpu_srcs "")
   collect_srcs(kernels_srcs SRCS ${kernel_cu})
   kernel_declare("${kernel_cu}")
+  collect_srcs(kernels_gpu_srcs SRCS ${kernel_gpu})
+  kernel_declare("${kernel_gpu}")
 endif()
 
 if(WITH_XPU)
@@ -296,8 +378,21 @@ if(WITH_XPU)
     file(GLOB_RECURSE kernel_xpu_cc "${CMAKE_CURRENT_BINARY_DIR}/*.cc")
     collect_generated_srcs(kernels_srcs SRCS ${kernel_xpu_cc})
     set(kernel_cc "")
-
   endif()
+
+  # The kernel related to xpufft must have WITH_XPU_FFT enabled.
+  if(NOT WITH_XPU_FFT)
+    list(
+      REMOVE_ITEM
+      kernel_xpu
+      "xpu/complex_kernel.cc"
+      "xpu/complex_grad_kernel.cc"
+      "xpu/fft_kernel.cc"
+      "xpu/fft_grad_kernel.cc"
+      "xpu/as_real_kernel.cc"
+      "xpu/as_complex_kernel.cc")
+  endif()
+
   collect_srcs(kernels_srcs SRCS ${kernel_xpu})
   kernel_declare("${kernel_xpu}")
   kernel_declare("${kernel_xpu_kps}")

@@ -27,6 +27,7 @@ struct GpuDevice;
 using cudaStream_t = struct CUstream_st *;
 using cudaEvent_t = struct CUevent_st *;
 
+#ifndef PADDLE_WITH_CUSTOM_DEVICE
 // Forward declaration of cuDNN types.
 using cudnnHandle_t = struct cudnnContext *;
 using cudnnTensorDescriptor_t = struct cudnnTensorStruct *;
@@ -66,8 +67,10 @@ using cusolverDnHandle_t = struct cusolverDnContext *;
 // Forward declaration of cuSparse types.
 using cusparseHandle_t = struct cusparseContext *;
 
+#ifdef PADDLE_WITH_CUDA
 // Forward declaration of cuFFT types.
 using cufftHandle = int;
+#endif
 
 // Forward declaration of NCCL types.
 using ncclComm_t = struct ncclComm *;
@@ -103,6 +106,9 @@ using miopenAllocatorFunction = void *(*)(void *context, size_t sizeBytes);
 // Forward declaration of rocBLAS types.
 using rocblas_handle = struct _rocblas_handle *;
 
+// Forward declaration of hipblaslt types.
+using hipblasLtHandle_t = void *;
+
 // Forward declaration of hipfft types.
 using hipfftHandle = struct hipfftHandle_t *;
 
@@ -111,3 +117,4 @@ using rocsolver_handle = rocblas_handle;
 
 // Forward declaration of rocSparse types.
 using rocsparse_handle = struct _rocsparse_handle *;
+#endif

@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_devices
 
 import paddle
-from paddle.base import core
 from paddle.static import Program, program_guard
 
 DYNAMIC = 1
@@ -79,9 +79,7 @@ class TestPowerAPI(unittest.TestCase):
     """TestPowerAPI."""
 
     def setUp(self):
-        self.places = ['cpu']
-        if core.is_compiled_with_cuda():
-            self.places.append('gpu')
+        self.places = get_devices()
 
     def test_power(self):
         """test_power."""
@@ -223,6 +221,87 @@ class TestPowerError(unittest.TestCase):
                     out = paddle.pow(x, 2)
 
             self.assertRaises(TypeError, x_dtype_error)
+
+
+class TestPowerAPI_ZeroSize(unittest.TestCase):
+    """TestPowerAPI."""
+
+    def setUp(self):
+        self.places = get_devices()
+
+    def _test_power(self, shape):
+        np.random.seed(7)
+        for place in self.places:
+            dims = shape
+            x = (np.random.rand(*dims) * 10).astype(np.float64)
+            y = np.random.rand() * 10
+            paddle.disable_static()
+            paddle.set_device(place)
+            x_ = paddle.to_tensor(x)
+            x_.stop_gradient = False
+            y_ = y
+            res = paddle.pow(x_, y_)
+            np.testing.assert_allclose(res, np.power(x, y), rtol=1e-05)
+            loss = paddle.sum(res)
+            loss.backward()
+            np.testing.assert_allclose(x_.grad.shape, x_.shape)
+
+    def test_power(self):
+        self._test_power((0, 2))
+        self._test_power((0, 0))
+
+
+class TestPowerAPI_Alias(unittest.TestCase):
+    """
+    Test the alias of pow function.
+    ``pow(input=2, exponent=1.1)`` is equivalent to ``pow(x=2, y=1.1)``
+    """
+
+    def setUp(self):
+        self.places = get_devices()
+        self.test_cases = [
+            ([1.0, 2.0, 3.0], [1.1]),  # 1D tensor
+            ([[1, 2], [3, 4]], 2),  # 2D tensor with scalar exponent
+            (3.0, [2.0]),  # Scalar input
+        ]
+
+    def test_powxy(self):
+        for alias_param_1 in ["x", "input"]:
+            for alias_param_2 in ["y", "exponent"]:
+                for place in self.places:
+                    paddle.set_device(place)
+                    paddle.disable_static(place)
+                    for input_data, exp_data in self.test_cases:
+                        input_tensor = paddle.to_tensor(input_data)
+                        exp_tensor = paddle.to_tensor(exp_data)
+                        output_alias = paddle.pow(
+                            **{
+                                alias_param_1: input_tensor,
+                                alias_param_2: exp_tensor,
+                            }
+                        )
+                        output_std = paddle.pow(x=input_tensor, y=exp_tensor)
+                        self.assertTrue(
+                            paddle.allclose(output_alias, output_std),
+                            msg=f"Alias {alias_param_1}/{alias_param_2} failed on {place} with input {input_data}, exp {exp_data}",
+                        )
+
+    def test_xpowy(self):
+        for alias_param_2 in ["y", "exponent"]:
+            for place in self.places:
+                paddle.set_device(place)
+                paddle.disable_static(place)
+                for input_data, exp_data in self.test_cases:
+                    input_tensor = paddle.to_tensor(input_data)
+                    exp_tensor = paddle.to_tensor(exp_data)
+                    output_alias = input_tensor.pow(
+                        **{alias_param_2: exp_tensor}
+                    )
+                    output_std = input_tensor.pow(y=exp_tensor)
+                    self.assertTrue(
+                        paddle.allclose(output_alias, output_std),
+                        msg=f"Alias {alias_param_2} failed on {place} with input {input_data}, exp {exp_data}",
+                    )
 
 
 if __name__ == '__main__':

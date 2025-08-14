@@ -20,7 +20,7 @@ from op_test import OpTest, convert_float_to_uint16, paddle_static_guard
 
 import paddle
 from paddle import base
-from paddle.base import Program, core, program_guard
+from paddle.base import core
 from paddle.nn.functional import interpolate
 
 
@@ -333,12 +333,31 @@ class TestLinearInterpOpAPI2_0(unittest.TestCase):
             mode='linear',
             align_mode=1,
             align_corners=False,
-            data_format='NCW',
         )
         with base.dygraph.guard():
-            x = base.dygraph.to_variable(x_data)
+            x = paddle.to_tensor(x_data)
             interp = us_1(x)
 
+            expect = linear_interp_np(
+                x_data, out_w=64, align_mode=1, align_corners=False
+            )
+
+            np.testing.assert_allclose(interp.numpy(), expect, rtol=1e-05)
+
+
+class TestLinearInterpOpAPI2_0_case2(unittest.TestCase):
+    def test_case(self):
+        # dygraph
+        x_data = np.random.random((1, 3, 128)).astype("float32")
+        with base.dygraph.guard():
+            x = paddle.to_tensor(x_data)
+            interp = interpolate(
+                x,
+                size=[64],
+                mode='linear',
+                align_mode=1,
+                align_corners=False,
+            )
             expect = linear_interp_np(
                 x_data, out_w=64, align_mode=1, align_corners=False
             )
@@ -509,40 +528,43 @@ class TestResizeLinearOpUint8(OpTest):
 
 
 class TestLinearInterpOpError(unittest.TestCase):
+
     def test_error(self):
-        with paddle_static_guard():
-            with program_guard(Program(), Program()):
+        with (
+            paddle_static_guard(),
+            paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ),
+        ):
 
-                def input_shape_error():
-                    x1 = paddle.static.data(
-                        name="x1", shape=[1], dtype="float32"
-                    )
-                    out1 = paddle.nn.Upsample(
-                        size=[256], data_format='NCW', mode='linear'
-                    )
-                    out1_res = out1(x1)
+            def input_shape_error():
+                x1 = paddle.static.data(name="x1", shape=[1], dtype="float32")
+                out1 = paddle.nn.Upsample(
+                    size=[256], data_format='NCW', mode='linear'
+                )
+                out1_res = out1(x1)
 
-                def data_format_error():
-                    x2 = paddle.static.data(
-                        name="x2", shape=[1, 3, 128], dtype="float32"
-                    )
-                    out2 = paddle.nn.Upsample(
-                        size=[256], data_format='NHWCD', mode='linear'
-                    )
-                    out2_res = out2(x2)
+            def data_format_error():
+                x2 = paddle.static.data(
+                    name="x2", shape=[1, 3, 128], dtype="float32"
+                )
+                out2 = paddle.nn.Upsample(
+                    size=[256], data_format='NHWCD', mode='linear'
+                )
+                out2_res = out2(x2)
 
-                def out_shape_error():
-                    x3 = paddle.static.data(
-                        name="x3", shape=[1, 3, 128], dtype="float32"
-                    )
-                    out3 = paddle.nn.Upsample(
-                        size=[256, 256], data_format='NHWC', mode='linear'
-                    )
-                    out3_res = out3(x3)
+            def out_shape_error():
+                x3 = paddle.static.data(
+                    name="x3", shape=[1, 3, 128], dtype="float32"
+                )
+                out3 = paddle.nn.Upsample(
+                    size=[256, 256], data_format='NHWC', mode='linear'
+                )
+                out3_res = out3(x3)
 
-                self.assertRaises(ValueError, input_shape_error)
-                self.assertRaises(ValueError, data_format_error)
-                self.assertRaises(ValueError, out_shape_error)
+            self.assertRaises(ValueError, input_shape_error)
+            self.assertRaises(ValueError, data_format_error)
+            self.assertRaises(ValueError, out_shape_error)
 
 
 @unittest.skipIf(

@@ -82,8 +82,8 @@ void ReverseKernel(const Context& dev_ctx,
       functor6(dev_ctx, x, out, axis);
       break;
     default:
-      PADDLE_THROW(phi::errors::OutOfRange(
-          "The reserve operator does not support input tensors"
+      PADDLE_THROW(common::errors::OutOfRange(
+          "The reserve operator does not support input tensors "
           "whose ranks are greater than 6."));
   }
 }

@@ -18,6 +18,7 @@ import unittest
 import numpy as np
 from get_test_cover_info import (
     XPUOpTestWrapper,
+    check_run_big_shape_test,
     create_test_class,
     get_xpu_op_support_types,
 )
@@ -48,9 +49,7 @@ class XPUTestConcatOp(XPUOpTestWrapper):
             self.attrs = {'axis': self.axis}
             if self.axis < 0:
                 self.actual_axis = self.axis + len(self.x0.shape)
-                self.actual_axis = (
-                    self.actual_axis if self.actual_axis > 0 else 0
-                )
+                self.actual_axis = max(0, self.actual_axis)
             else:
                 self.actual_axis = self.axis
 
@@ -84,6 +83,15 @@ class XPUTestConcatOp(XPUOpTestWrapper):
                 self.check_grad_with_place(place, ['x0'], 'Out')
                 self.check_grad_with_place(place, ['x1'], 'Out')
                 self.check_grad_with_place(place, ['x2'], 'Out')
+
+    class TestConcatOpZeroDimXPU(TestConcatOp):
+        def set_inputs(self):
+            self.x0 = np.random.random((5, 0, 4, 5)).astype(self.dtype)
+            self.x1 = np.random.random((5, 2, 4, 5)).astype(self.dtype)
+            self.x2 = np.random.random((5, 3, 4, 5)).astype(self.dtype)
+
+        def init_axis(self):
+            self.axis = 1
 
     class TestConcatOpAxis0XPU(TestConcatOp):
         def init_axis(self):
@@ -143,6 +151,30 @@ class XPUTestConcatOp(XPUOpTestWrapper):
 
         def test_check_grad(self):
             pass
+
+    @check_run_big_shape_test()
+    class TestConcatOpLargeShape1(TestConcatOp):
+        def set_inputs(self):
+            self.x0 = np.random.random([163840])
+            self.x1 = np.random.random([5120])
+            self.x2 = np.random.random([2452])
+            self.axis = 0
+
+    @check_run_big_shape_test()
+    class TestConcatOpLargeShape2(TestConcatOp):
+        def set_inputs(self):
+            self.x0 = np.random.random([5120])
+            self.x1 = np.random.random([1])
+            self.x2 = np.random.random([1762])
+            self.axis = 0
+
+    @check_run_big_shape_test()
+    class TestConcatOpLargeShape3(TestConcatOp):
+        def set_inputs(self):
+            self.x0 = np.random.random([3874])
+            self.x1 = np.random.random([3952])
+            self.x2 = np.random.random([4172])
+            self.axis = 0
 
 
 support_types = get_xpu_op_support_types('concat')

@@ -17,11 +17,13 @@ from .post_training_quantization import (  # noqa: F401
     PostTrainingQuantizationProgram,
     WeightQuantization,
 )
-from .quant2_int8_mkldnn_pass import (  # noqa: F401
+from .quant2_int8_onednn_pass import (  # noqa: F401
     Quant2Int8MkldnnPass,
+    Quant2Int8OnednnPass,
 )
-from .quant_int8_mkldnn_pass import (  # noqa: F401
+from .quant_int8_onednn_pass import (  # noqa: F401
     QuantInt8MkldnnPass,
+    QuantInt8OnednnPass,
 )
 from .quanter import (  # noqa: F401
     convert,

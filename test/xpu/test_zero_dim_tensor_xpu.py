@@ -345,7 +345,7 @@ class TestBinaryAPI(unittest.TestCase):
             # 1) x is 0D, y is 0D
             x_np = np.random.randint(-10, 10, [])
             y_np = np.random.randint(-10, 10, [])
-            out_np = eval('np.%s(x_np, y_np)' % api.__name__)
+            out_np = eval(f'np.{api.__name__}(x_np, y_np)')
 
             x = paddle.to_tensor(x_np)
             y = paddle.to_tensor(y_np)
@@ -357,7 +357,7 @@ class TestBinaryAPI(unittest.TestCase):
             # 2) x is ND, y is 0D
             x_np = np.random.randint(-10, 10, [3, 5])
             y_np = np.random.randint(-10, 10, [])
-            out_np = eval('np.%s(x_np, y_np)' % api.__name__)
+            out_np = eval(f'np.{api.__name__}(x_np, y_np)')
 
             x = paddle.to_tensor(x_np)
             y = paddle.to_tensor(y_np)
@@ -369,7 +369,7 @@ class TestBinaryAPI(unittest.TestCase):
             # 3) x is 0D , y is ND
             x_np = np.random.randint(-10, 10, [])
             y_np = np.random.randint(-10, 10, [3, 5])
-            out_np = eval('np.%s(x_np, y_np)' % api.__name__)
+            out_np = eval(f'np.{api.__name__}(x_np, y_np)')
 
             x = paddle.to_tensor(x_np)
             y = paddle.to_tensor(y_np)
@@ -1074,10 +1074,11 @@ class TestSundryAPI(unittest.TestCase):
 
         self.assertEqual(out1.shape, [])
         self.assertEqual(out2.shape, [])
-        self.assertEqual(out1, 0)
-        self.assertEqual(out2, 0)
+        self.assertTrue(np.isnan(out1.numpy()))
+        self.assertTrue(np.isnan(out2.numpy()))
 
         self.assertEqual(x.grad.shape, [])
+        self.assertTrue(np.isnan(x.grad.numpy()))
 
         # 2) x is ND
         x = paddle.rand([3, 5])
@@ -1099,11 +1100,11 @@ class TestSundryAPI(unittest.TestCase):
 
         self.assertEqual(out1.shape, [])
         self.assertEqual(out2.shape, [])
-        self.assertEqual(out1, 0)
-        self.assertEqual(out2, 0)
+        self.assertTrue(np.isnan(out1.numpy()))
+        self.assertTrue(np.isnan(out2.numpy()))
 
         self.assertEqual(x.grad.shape, [])
-        np.testing.assert_allclose(x.grad, 0)
+        self.assertTrue(np.isnan(x.grad.numpy()))
 
         # 2) x is ND
         x = paddle.rand([3, 5])
@@ -2127,7 +2128,7 @@ class TestSundryAPI(unittest.TestCase):
         self.assertEqual(out2_2.numpy(), 2)
         self.assertEqual(x2.grad.shape, [2])
 
-    def test_maseked_select(self):
+    def test_masked_select(self):
         x = paddle.rand([])
         x.stop_gradient = False
         mask = paddle.full([], True, dtype='bool')
@@ -2382,7 +2383,7 @@ class TestSundryAPI(unittest.TestCase):
         self.assertTrue(x_1.grad.shape, [24])
 
         # 1D input, p = 1 ,axis = None,
-        # using p_nrom, as_vector = True
+        # using p_norm, as_vector = True
         x_2 = paddle.arange(24, dtype="float32") - 12
         x_2.stop_gradient = False
         out_2 = paddle.linalg.norm(x_2, p=1)
@@ -2393,7 +2394,7 @@ class TestSundryAPI(unittest.TestCase):
         self.assertEqual(x_2.grad.shape, [24])
 
         # 1D input, p = 1 ,axis = 0,
-        # using p_nrom, as_vector = False
+        # using p_norm, as_vector = False
         x_2_p = paddle.arange(24, dtype="float32") - 12
         x_2_p.stop_gradient = False
         out_2_p = paddle.linalg.norm(x_2_p, p=1, axis=0)
@@ -2404,7 +2405,7 @@ class TestSundryAPI(unittest.TestCase):
         self.assertEqual(x_2_p.grad.shape, [24])
 
         # 1D input, p = fro ,axis = 0,
-        # using p_nrom, as_vector = False
+        # using p_norm, as_vector = False
         x_2_fro = paddle.arange(24, dtype="float32") - 12
         x_2_fro.stop_gradient = False
         out_2_fro = paddle.linalg.norm(x_2_fro, p="fro", axis=0)
@@ -2666,6 +2667,18 @@ class TestNoBackwardAPI(unittest.TestCase):
         w = paddle.to_tensor(w0, stop_gradient=False)
         emb = paddle.nn.functional.embedding(
             x=ids, weight=w, sparse=True, name="embedding"
+        )
+        self.assertEqual(emb.shape, [2])
+        res = [5.0, 6.0]
+        for i in range(len(res)):
+            self.assertEqual(emb.numpy()[i], res[i])
+
+    def test_embedding_alias(self):
+        ids = paddle.full(shape=[], fill_value=1, dtype='int64')
+        w0 = paddle.arange(3, 9).reshape((3, 2)).astype(paddle.float32)
+        w = paddle.to_tensor(w0, stop_gradient=False)
+        emb = paddle.nn.functional.embedding(
+            input=ids, weight=w, sparse=True, name="embedding"
         )
         self.assertEqual(emb.shape, [2])
         res = [5.0, 6.0]

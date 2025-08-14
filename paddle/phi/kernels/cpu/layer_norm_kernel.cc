@@ -45,6 +45,7 @@ void LayerNormKernel(const Context& dev_ctx,
   dev_ctx.template Alloc<T>(y);
   dev_ctx.template Alloc<T>(mean);
   dev_ctx.template Alloc<T>(var);
+  if (x.numel() == 0) return;
 
   auto matrix_dim = common::flatten_to_2d(x_dims, begin_norm_axis);
   int left = static_cast<int>(matrix_dim[0]);
@@ -103,13 +104,13 @@ void LayerNormKernel(const Context& dev_ctx,
 #else
   PADDLE_ENFORCE_EQ(mean_tmp.numel(),
                     left,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "mean's length (%d) is not equal with expected (%d).",
                         mean_tmp.numel(),
                         left));
   PADDLE_ENFORCE_EQ(var_tmp.numel(),
                     left,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "var's length (%d) is not equal with expected (%d).",
                         var_tmp.numel(),
                         left));
@@ -117,7 +118,7 @@ void LayerNormKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         scale->numel(),
         right,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "scale's length (%d) is not equal with expected (%d).",
             scale->numel(),
             right));
@@ -125,7 +126,7 @@ void LayerNormKernel(const Context& dev_ctx,
   if (bias) {
     PADDLE_ENFORCE_EQ(bias->numel(),
                       right,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "bias's length (%d) is not equal with expected (%d).",
                           bias->numel(),
                           right));

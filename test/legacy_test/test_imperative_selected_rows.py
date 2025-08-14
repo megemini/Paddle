@@ -15,11 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 from paddle import base
-from paddle.base import core
-from paddle.base.dygraph.base import to_variable
 
 
 class SimpleNet(paddle.nn.Layer):
@@ -39,11 +38,7 @@ class SimpleNet(paddle.nn.Layer):
 
 class TestSimpleNet(unittest.TestCase):
     def test_selectedrows_gradient1(self):
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-
-        for place in places:
+        for place in get_places():
             for dtype in ["float32", "float64"]:
                 for sort_sum_gradient in [True, False]:
                     paddle.disable_static(place)
@@ -78,11 +73,7 @@ class TestSimpleNet(unittest.TestCase):
                     paddle.enable_static()
 
     def test_selectedrows_gradient2(self):
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-
-        for place in places:
+        for place in get_places():
             for sort_sum_gradient in [True, False]:
                 with base.dygraph.guard(place):
                     base.set_flags(
@@ -91,7 +82,7 @@ class TestSimpleNet(unittest.TestCase):
                     grad_clip = paddle.nn.ClipGradByGlobalNorm(5.0)
 
                     input_word = np.array([[1, 2], [2, 1]]).astype('int64')
-                    input = to_variable(input_word)
+                    input = paddle.to_tensor(input_word)
 
                     simplenet = SimpleNet(20, 32, "float32")
                     adam = paddle.optimizer.SGD(

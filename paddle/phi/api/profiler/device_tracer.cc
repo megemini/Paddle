@@ -22,10 +22,10 @@ limitations under the License. */
 #include <thread>  // NOLINT
 
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/utils/flags.h"
 
-PD_DECLARE_bool(enable_host_event_recorder_hook);
+PHI_DECLARE_bool(enable_host_event_recorder_hook);
 
 namespace phi {
 
@@ -44,7 +44,7 @@ thread_local std::deque<int> block_id_stack;
 // Tracking the nested event stacks.
 thread_local std::deque<Event *> annotation_stack;
 #endif
-// stack to strore event sunch as pe and so on
+// stack to store event such as pe and so on
 static std::deque<Event *> main_thread_annotation_stack{};
 static std::deque<std::string> main_thread_annotation_stack_name{};
 
@@ -317,7 +317,7 @@ void initCuptiCbidStr();
 
 class DeviceTracerImpl : public DeviceTracer {
  public:
-  DeviceTracerImpl() : enabled_(false) {
+  DeviceTracerImpl() : enabled_(false), start_ns_(0), end_ns_(0) {
 #ifdef PADDLE_WITH_CUPTI
     initCuptiCbidStr();
 #endif
@@ -513,7 +513,7 @@ class DeviceTracerImpl : public DeviceTracer {
     ret = dynload::cuptiSubscribe(
         &subscriber_, static_cast<CUpti_CallbackFunc>(ApiCallback), this);
     if (ret == CUPTI_ERROR_MAX_LIMIT_REACHED) {
-      fprintf(stderr, "CUPTI subcriber limit reached.\n");
+      fprintf(stderr, "CUPTI subscriber limit reached.\n");
     } else if (ret != CUPTI_SUCCESS) {
       fprintf(stderr, "Failed to create CUPTI subscriber.\n");
     }
@@ -571,10 +571,10 @@ class DeviceTracerImpl : public DeviceTracer {
         Event *e = c->second;
         Event *parent = e->parent();
         while (parent) {
-          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);
+          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
           parent = parent->parent();
         }
-        e->AddCudaElapsedTime(r.start_ns, r.end_ns);
+        e->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
       }
     }
     for (const auto &r : mem_records_) {
@@ -583,10 +583,10 @@ class DeviceTracerImpl : public DeviceTracer {
         Event *e = c->second;
         Event *parent = e->parent();
         while (parent) {
-          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);
+          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
           parent = parent->parent();
         }
-        e->AddCudaElapsedTime(r.start_ns, r.end_ns);
+        e->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
       }
     }
 #endif
@@ -834,7 +834,7 @@ uint32_t GetCurSystemThreadId() {
   return id;
 }
 
-void RecoreCurThreadId(uint64_t id) {
+void RecordCurThreadId(uint64_t id) {
   std::lock_guard<std::mutex> lock(system_thread_id_map_mutex);
   auto gid = GetCurSystemThreadId();
   system_thread_id_map[gid] = id;

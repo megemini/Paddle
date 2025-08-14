@@ -11,10 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import datetime
 import hashlib
-import os
+from typing import (
+    TYPE_CHECKING,
+    Literal,
+)
+
+from typing_extensions import TypeAlias
 
 import paddle
 
@@ -28,6 +34,7 @@ from .fleet.layers.mpu.mp_ops import (  # noqa: F401
     _c_identity,
     _c_lookup_table,
     _c_softmax_with_cross_entropy,
+    _c_softmax_with_multi_label_cross_entropy,
     _c_split,
     _Linear,
     _linear,
@@ -37,6 +44,11 @@ from .fleet.layers.mpu.mp_ops import (  # noqa: F401
     _set_var_distributed,
     split,
 )
+
+if TYPE_CHECKING:
+    _BackendList: TypeAlias = Literal["gloo", "nccl", "xccl", "bkcl", "flagcx"]
+
+    from paddle.base.libpaddle import NCCLConfig
 
 __all__ = []
 
@@ -66,7 +78,7 @@ _group_map_backend = {}
 # Name of the default group for init_parallel_env
 _default_group_name = "_default_pg"
 
-_valid_backend_list = ['nccl', 'gloo', 'heter', 'xccl', 'bkcl']
+_valid_backend_list = ['nccl', 'gloo', 'heter', 'xccl', 'bkcl', 'flagcx']
 _default_store = None  # the default tcp store
 _default_backend = None
 _default_timeout = datetime.timedelta(seconds=1800)
@@ -147,15 +159,23 @@ def _new_process_group_impl(
     group_name,
     pg_options,
     group_id=0,
+    nccl_comm_init_option=0,
+    nccl_config=None,
 ):
     pg = None
     genv = _get_global_env()
-    assert backend in _valid_backend_list, "Unsupported backend: %s." % backend
+    assert backend in _valid_backend_list, f"Unsupported backend: {backend}."
     if backend == "gloo":
         pg = core.ProcessGroupGloo.create(store, rank, world_size, group_id)
     elif backend == "nccl":
         pg = core.ProcessGroupNCCL.create(
-            store, rank, world_size, group_id, genv.pg_timeout
+            store,
+            rank,
+            world_size,
+            group_id,
+            genv.pg_timeout,
+            nccl_comm_init_option,
+            nccl_config,
         )
     elif backend == "xccl":
         pg = core.ProcessGroupCustom.create(
@@ -163,6 +183,15 @@ def _new_process_group_impl(
         )
     elif backend == "bkcl":
         pg = core.ProcessGroupBKCL.create(store, rank, world_size, group_id)
+    elif backend == "flagcx":
+        pg = core.ProcessGroupFlagcx.create(
+            store,
+            rank,
+            world_size,
+            group_id,
+            genv.pg_timeout,
+            nccl_comm_init_option,
+        )
     return pg
 
 
@@ -177,7 +206,13 @@ def _set_custom_gid(gid):
     _custom_gid = gid
 
 
-def new_group(ranks=None, backend=None, timeout=_default_timeout):
+def new_group(
+    ranks: list[int] | None = None,
+    backend: Literal['nccl'] | None = None,
+    timeout: datetime.timedelta = _default_timeout,
+    nccl_comm_init_option: int = 0,
+    nccl_config: NCCLConfig | None = None,
+) -> Group:
     """
 
     Creates a new distributed communication group.
@@ -231,6 +266,8 @@ def new_group(ranks=None, backend=None, timeout=_default_timeout):
                 group_name,
                 pg_options=None,
                 group_id=gid,
+                nccl_comm_init_option=nccl_comm_init_option,
+                nccl_config=nccl_config,
             )
         else:
             rank = -1
@@ -242,12 +279,6 @@ def new_group(ranks=None, backend=None, timeout=_default_timeout):
         # TODO: The method below is a new method for group management, will replace the previous
         # three in the future.
         _add_new_group(group)
-
-        if int(os.getenv("FLAGS_eager_communication_connection", 0)) == 1:
-            paddle.distributed.all_reduce(
-                paddle.zeros([1], dtype=paddle.uint8), group=group, sync_op=True
-            )
-
         return group
 
     if not backend:
@@ -306,7 +337,7 @@ def new_group(ranks=None, backend=None, timeout=_default_timeout):
     return gp
 
 
-def is_available():
+def is_available() -> bool:
     """
     Check whether the distributed package is available.
 
@@ -323,7 +354,7 @@ def is_available():
     return core.is_compiled_with_dist()
 
 
-def _init_parallel_env(backend):
+def _init_parallel_env(backend: _BackendList) -> None:
     store = core.create_or_get_global_tcp_store()
     global_env = _get_global_env()
     rank = global_env.rank
@@ -364,3 +395,61 @@ def _init_parallel_env(backend):
         core.CommContextManager.create_bkcl_comm_context(
             store, "0", rank, world_size, endpoints_str_hash
         )
+
+
+_shutdown_group_map_by_name = {}
+
+
+def _get_shutdown_group_map_by_name():
+    global _shutdown_group_map_by_name
+    return _shutdown_group_map_by_name
+
+
+def _update_shutdown_group_map_by_name(pg_name, group):
+    global _shutdown_group_map_by_name
+    _shutdown_group_map_by_name[pg_name] = group
+
+
+def _delete_shutdown_group_map_by_name(pg_name):
+    global _shutdown_group_map_by_name
+    del _shutdown_group_map_by_name[pg_name]
+
+
+def _clear_shutdown_group_map_by_name():
+    global _shutdown_group_map_by_name
+    _shutdown_group_map_by_name.clear()
+
+
+def shutdown_process_group(group: Group | None = None) -> None:
+    shutdown_groups = _get_shutdown_group_map_by_name()
+
+    if group is None:
+        global _default_group_name
+        for pg_name, pg in _get_group_map_by_name().items():
+            if (
+                pg.process_group is not None
+                and pg_name not in shutdown_groups
+                and pg_name != _default_group_name
+            ):
+                pg.process_group.shutdown()
+                _update_shutdown_group_map_by_name(pg_name, pg)
+    else:
+        if (
+            group.process_group is not None
+            and group.name not in shutdown_groups
+        ):
+            group.process_group.shutdown()
+            _update_shutdown_group_map_by_name(group.name, group)
+
+
+def restart_process_group(group: Group | None = None) -> None:
+    shutdown_groups = _get_shutdown_group_map_by_name()
+
+    if group is None:
+        for pg in shutdown_groups.values():
+            pg.process_group.restart()
+        _clear_shutdown_group_map_by_name()
+    else:
+        if group.process_group is not None and group.name in shutdown_groups:
+            group.process_group.restart()
+            _delete_shutdown_group_map_by_name(group.name)

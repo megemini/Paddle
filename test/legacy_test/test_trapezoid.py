@@ -15,9 +15,17 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
+
+
+def get_ref_api():
+    return (
+        np.trapezoid
+        if np.lib.NumpyVersion(np.__version__) >= "2.0.0"
+        else np.trapz  # noqa: NPY201
+    )
 
 
 class TestTrapezoidAPI(unittest.TestCase):
@@ -38,16 +46,14 @@ class TestTrapezoidAPI(unittest.TestCase):
             )
 
     def set_api(self):
-        self.ref_api = np.trapz
+        self.ref_api = get_ref_api()
         self.paddle_api = paddle.trapezoid
 
     def setUp(self):
         self.set_api()
         self.set_args()
         self.get_output()
-        self.places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def func_dygraph(self):
         for place in self.places:
@@ -64,13 +70,9 @@ class TestTrapezoidAPI(unittest.TestCase):
         self.setUp()
         self.func_dygraph()
 
-    @test_with_pir_api
     def test_static(self):
         paddle.enable_static()
-        places = [paddle.CPUPlace()]
-        if paddle.device.is_compiled_with_cuda():
-            places.append(paddle.CUDAPlace(0))
-        for place in places:
+        for place in get_places():
             with paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
             ):
@@ -155,7 +157,7 @@ class TestTrapezoidAxis1(TestTrapezoidAPI):
     def set_args(self):
         self.y = np.random.random((3, 3, 4)).astype('float32')
         self.x = None
-        self.dx = 1
+        self.dx = 1.0
         self.axis = 1
 
 
@@ -164,7 +166,6 @@ class TestTrapezoidError(unittest.TestCase):
     def set_api(self):
         self.paddle_api = paddle.trapezoid
 
-    @test_with_pir_api
     def test_errors(self):
         self.set_api()
         with paddle.static.program_guard(
@@ -227,9 +228,8 @@ class TestTrapezoidError(unittest.TestCase):
 class Testfp16Trapezoid(TestTrapezoidAPI):
     def set_api(self):
         self.paddle_api = paddle.trapezoid
-        self.ref_api = np.trapz
+        self.ref_api = get_ref_api()
 
-    @test_with_pir_api
     def test_fp16_with_gpu(self):
         paddle.enable_static()
         if paddle.base.core.is_compiled_with_cuda():

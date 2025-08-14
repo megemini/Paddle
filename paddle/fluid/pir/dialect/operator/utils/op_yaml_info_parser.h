@@ -15,6 +15,7 @@
 #pragma once
 
 #include "paddle/fluid/pir/dialect/operator/interface/op_yaml_info.h"
+#include "paddle/pir/include/core/dll_decl.h"
 
 namespace paddle {
 namespace dialect {
@@ -23,20 +24,20 @@ class OpYamlInfoParser {
  public:
   OpYamlInfoParser() = delete;
 
-  explicit OpYamlInfoParser(const OpInfoTuple& op_info_tuple,
-                            bool is_legacy_op = false);
+  TEST_API explicit OpYamlInfoParser(OpInfoTuple op_info_tuple,
+                                     bool is_legacy_op = false);
 
-  bool IsTensorAttribute(size_t index) const;
-  size_t InputTensorNumber() const;
+  TEST_API bool IsTensorAttribute(size_t index) const;
+  TEST_API size_t InputTensorNumber() const;
 
-  const std::string& AttrTypeName(const std::string& name) const;
+  TEST_API const std::string& AttrTypeName(const std::string& name) const;
   const std::string& TensorAttrTypeName(const std::string& name) const;
 
   const std::vector<std::string>& TensorParams(bool is_kernel = false) const;
   const std::vector<std::string>& AttrParams(bool is_kernel = false) const;
   const OpRunTimeInfo& OpRuntimeInfo() const;
-  const std::map<std::string, uint32_t>& InputName2Id() const;
-  const std::map<std::string, uint32_t>& OutputName2Id() const;
+  TEST_API const std::map<std::string, uint32_t>& InputName2Id() const;
+  TEST_API const std::map<std::string, uint32_t>& OutputName2Id() const;
 
   const std::vector<uint32_t>& NoNeedBufferIds() const;
 

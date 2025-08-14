@@ -22,11 +22,9 @@ from dygraph_to_static_utils import (
     enable_to_static_guard,
     static_guard,
     test_ast_only,
-    test_legacy_and_pt_and_pir,
 )
 
 import paddle
-from paddle.framework import use_pir_api
 from paddle.static import InputSpec
 
 SEED = 2020
@@ -47,7 +45,7 @@ def test_slice_in_if(x):
     if x.numpy()[0] > 0:
         a.append(x)
     else:
-        a.append(paddle.full(shape=[1, 2], fill_value=9, dtype="int32"))
+        a.append(paddle.full(shape=[1, 2], fill_value=9, dtype="float32"))
 
     if x.numpy()[0] > 0:
         a[0] = x
@@ -116,7 +114,7 @@ class TestSliceBase(Dy2StTestBase):
         self.dygraph_func = None
 
     def init_input(self):
-        self.input = np.random.random(3).astype('int32')
+        self.input = np.random.random(3).astype('float32')
 
     def init_dygraph_func(self):
         raise NotImplementedError(
@@ -143,7 +141,6 @@ class TestSliceWithoutControlFlow(TestSliceBase):
     def init_dygraph_func(self):
         self.dygraph_func = test_slice_without_control_flow
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         static_res = self.run_static_mode()
@@ -179,14 +176,6 @@ class TestSetValue(TestSliceInIf):
     def init_dygraph_func(self):
         self.dygraph_func = test_set_value
 
-    # TODO(pir-control-flow): Delete this code after supporting control flow
-    @test_legacy_and_pt_and_pir
-    def test_transformed_static_result(self):
-        self.init_dygraph_func()
-        static_res = self.run_static_mode()
-        dygraph_res = self.run_dygraph_mode()
-        np.testing.assert_allclose(dygraph_res, static_res, rtol=1e-05)
-
 
 class TestSetValueWithLayerAndSave(Dy2StTestBase):
     def setUp(self):
@@ -199,28 +188,27 @@ class TestSetValueWithLayerAndSave(Dy2StTestBase):
         self.temp_dir.cleanup()
 
     @test_ast_only
-    @test_legacy_and_pt_and_pir
     def test_set_value_with_save(self):
         with enable_to_static_guard(True):
             model = paddle.jit.to_static(
                 LayerWithSetValue(input_dim=10, hidden=1)
             )
             x = paddle.full(shape=[5, 10], fill_value=5.0, dtype="float32")
-            # TODO(pir-save-load): Fix this after we support save/load in PIR
-            if not use_pir_api():
-                paddle.jit.save(
-                    layer=model,
-                    path=self.model_path,
-                    input_spec=[x],
-                    output_spec=None,
-                )
+            paddle.jit.save(
+                layer=model,
+                path=self.model_path,
+                input_spec=[x],
+                output_spec=None,
+            )
 
 
 class TestSliceSupplementSpecialCase(Dy2StTestBase):
     # unittest for slice index which abs(step)>0. eg: x[::2]
-    @test_legacy_and_pt_and_pir
     def test_static_slice_step(self):
-        with static_guard():
+        with (
+            static_guard(),
+            paddle.static.program_guard(paddle.static.Program()),
+        ):
             array = np.arange(4**3).reshape((4, 4, 4)).astype('int64')
 
             x = paddle.static.data(name='x', shape=[4, 4, 4], dtype='int64')
@@ -237,7 +225,6 @@ class TestSliceSupplementSpecialCase(Dy2StTestBase):
         np.testing.assert_array_equal(out[0], array[::2])
         np.testing.assert_array_equal(out[1], array[::-2])
 
-    @test_legacy_and_pt_and_pir
     def test_static_slice_step_dygraph2static(self):
         array = np.arange(4**2 * 5).reshape((5, 4, 4)).astype('int64')
         inps = paddle.to_tensor(array)
@@ -260,7 +247,6 @@ class TestSliceSupplementSpecialCase(Dy2StTestBase):
 
 
 class TestPaddleStridedSlice(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_compare_paddle_strided_slice_with_numpy(self):
         array = np.arange(5)
         pt = paddle.to_tensor(array)
@@ -270,18 +256,10 @@ class TestPaddleStridedSlice(Dy2StTestBase):
         stride1 = -2
         sl = paddle.strided_slice(
             pt,
-            axes=[
-                0,
-            ],
-            starts=[
-                s1,
-            ],
-            ends=[
-                e1,
-            ],
-            strides=[
-                stride1,
-            ],
+            axes=[0],
+            starts=[s1],
+            ends=[e1],
+            strides=[stride1],
         )
 
         self.assertTrue(array[s1:e1:stride1], sl)
@@ -321,7 +299,6 @@ def slice_zero_shape_tensor(x):
 
 
 class TestSliceZeroShapeTensor(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_slice(self):
         x = paddle.ones([0, 0, 0, 0])
         y = slice_zero_shape_tensor(x)

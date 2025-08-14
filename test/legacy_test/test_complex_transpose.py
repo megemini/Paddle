@@ -15,18 +15,16 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 import paddle.base.dygraph as dg
-from paddle import base
 
 
 class TestComplexTransposeLayer(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [paddle.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            self._places.append(paddle.CUDAPlace(0))
+        self._places = get_places()
 
     def test_transpose_by_complex_api(self):
         for dtype in self._dtypes:
@@ -37,7 +35,7 @@ class TestComplexTransposeLayer(unittest.TestCase):
             np_trans = np.transpose(data, perm)
             for place in self._places:
                 with dg.guard(place):
-                    var = dg.to_variable(data)
+                    var = paddle.to_tensor(data)
                     trans = paddle.transpose(var, perm=perm)
                 np.testing.assert_allclose(trans.numpy(), np_trans, rtol=1e-05)
 

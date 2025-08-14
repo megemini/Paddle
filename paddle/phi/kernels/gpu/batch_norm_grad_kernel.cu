@@ -14,11 +14,11 @@
 
 #include "glog/logging.h"
 
+#include "paddle/common/flags.h"
 #include "paddle/common/layout.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_dnn.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/flags.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/batch_norm_kernel.h"
 #include "paddle/phi/kernels/empty_kernel.h"
@@ -35,7 +35,10 @@
 #define LAUNCH_BOUNDS(BlockDim)
 #endif
 
-PD_DECLARE_bool(cudnn_batchnorm_spatial_persistent);
+COMMON_DECLARE_bool(cudnn_batchnorm_spatial_persistent);
+#ifdef PADDLE_WITH_HIP
+COMMON_DECLARE_bool(batch_norm_use_miopen);
+#endif
 namespace phi {
 
 template <typename T>
@@ -145,7 +148,7 @@ class InplaceHelper {
                   const gpuStream_t &stream) {
     PADDLE_ENFORCE_EQ(x,
                       y,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "X and Y should be inplaced in inplace mode"));
     KeBNRestoreData<<<grid2, block, 0, stream>>>(
         layout, x, scale, bias, mean, variance, epsilon, C, M, num, y);
@@ -172,7 +175,7 @@ static __global__ LAUNCH_BOUNDS(BlockDim) void BNBackward(
   __shared__ typename BlockReduce::TempStorage ds_storage;
   __shared__ typename BlockReduce::TempStorage db_storage;
   __shared__ typename BlockReduce::TempStorage mean_storage;
-  __shared__ typename BlockReduce::TempStorage variance_storeage;
+  __shared__ typename BlockReduce::TempStorage variance_storage;
   __shared__ BatchNormParamType<T> inv_var_val;
   __shared__ BatchNormParamType<T> mean_val;
   __shared__ BatchNormParamType<T> dscale_val;
@@ -204,7 +207,7 @@ static __global__ LAUNCH_BOUNDS(BlockDim) void BNBackward(
 
       x_sum = BlockReduce(mean_storage).Reduce(x_sum, cub::Sum());
       x_square_sum =
-          BlockReduce(variance_storeage).Reduce(x_square_sum, cub::Sum());
+          BlockReduce(variance_storage).Reduce(x_square_sum, cub::Sum());
       if (threadIdx.x == 0) {
         mean_val = x_sum / inner_size;
         inv_var_val =
@@ -283,12 +286,12 @@ static __global__ void BNBackward2DChannelLastStage1(
     }
 
     // vertical block sum
-    funcs::BlockReduceByVetical<T, BatchNormParamType<T>>(x_sum,
-                                                          x_square_sum,
-                                                          &smem_sum[0],
-                                                          &smem_square_sum[0],
-                                                          &x_sum,
-                                                          &x_square_sum);
+    funcs::BlockReduceByVertical<T, BatchNormParamType<T>>(x_sum,
+                                                           x_square_sum,
+                                                           &smem_sum[0],
+                                                           &smem_square_sum[0],
+                                                           &x_sum,
+                                                           &x_square_sum);
 
     if (gridDim.y > 1) {
       __shared__ bool is_last_block_done;
@@ -363,7 +366,7 @@ static __global__ void BNBackward2DChannelLastStage2(
     }
 
     // vertical block sum
-    funcs::BlockReduceByVetical<T, BatchNormParamType<T>>(
+    funcs::BlockReduceByVertical<T, BatchNormParamType<T>>(
         ds_sum, db_sum, &smem_ds_sum[0], &smem_db_sum[0], &ds_sum, &db_sum);
 
     if (gridDim.y > 1) {
@@ -486,7 +489,7 @@ static __global__ LAUNCH_BOUNDS(BlockDim) void BNBackwardData(
 }
 
 template <typename T, typename Context>
-void BatchNormGradFunctor(const Context &ctx,
+void BatchNormGradFunctor(const Context &dev_ctx,
                           const DenseTensor &x,
                           const paddle::optional<DenseTensor> &scale,
                           const paddle::optional<DenseTensor> &bias,
@@ -523,7 +526,7 @@ void BatchNormGradFunctor(const Context &ctx,
   PADDLE_ENFORCE_EQ(
       x_dims.size() >= 2 && x_dims.size() <= 5,
       true,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of input's dimensions should be between 2 and 5."
           "But received: the size of input's dimensions is [%d],"
           "the dimensions of input is [%s]",
@@ -533,7 +536,7 @@ void BatchNormGradFunctor(const Context &ctx,
   PADDLE_ENFORCE_EQ((d_scale == nullptr && d_bias == nullptr) ||
                         (d_scale != nullptr && d_bias != nullptr),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Weight and bias's stop_gradient of BatchNorm must be "
                         "True or False at the same time."));
 
@@ -542,12 +545,12 @@ void BatchNormGradFunctor(const Context &ctx,
 
   // init output
   if (d_x) {
-    ctx.template Alloc<T>(d_x);
+    dev_ctx.template Alloc<T>(d_x);
   }
 
   if (d_scale && d_bias) {
-    ctx.template Alloc<BatchNormParamType<T>>(d_scale);
-    ctx.template Alloc<BatchNormParamType<T>>(d_bias);
+    dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale);
+    dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias);
   }
 
   auto *Scale = scale.get_ptr();
@@ -559,19 +562,19 @@ void BatchNormGradFunctor(const Context &ctx,
   if (Scale) {
     new_scale = scale.get();
   } else {
-    new_scale = phi::Full<T, Context>(ctx, {C}, static_cast<T>(1));
+    new_scale = phi::Full<T, Context>(dev_ctx, {C}, static_cast<T>(1));
   }
 
   if (Bias) {
     new_bias = bias.get();
   } else {
-    new_bias = phi::Full<T, Context>(ctx, {C}, static_cast<T>(0));
+    new_bias = phi::Full<T, Context>(dev_ctx, {C}, static_cast<T>(0));
   }
 
   PADDLE_ENFORCE_EQ(
       new_scale.dims().size(),
       1UL,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of scale's dimensions must equal to 1. But received: "
           "the size of scale's dimensions is [%d], the dimensions of scale "
           "is [%s].",
@@ -580,7 +583,7 @@ void BatchNormGradFunctor(const Context &ctx,
   PADDLE_ENFORCE_EQ(
       new_scale.dims()[0],
       C,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The first dimension of scale must equal to Channels[%d]. But "
           "received: the first dimension of scale is [%d]",
           C,
@@ -589,7 +592,10 @@ void BatchNormGradFunctor(const Context &ctx,
   auto dtype = phi::backends::gpu::CudnnDataType<T>::type;
 #ifdef PADDLE_WITH_HIP
   auto compute_format =
-      data_layout == DataLayout::kNHWC ? DataLayout::kNHWC : DataLayout::kNCHW;
+      data_layout == DataLayout::kNHWC
+          ? (FLAGS_batch_norm_use_miopen == true ? DataLayout::kNCHW
+                                                 : DataLayout::kNHWC)
+          : DataLayout::kNCHW;
 
 // TODO(wangran16): wait for MIOpen to improve the performance of BN
 // HIP do not support compute format of NHWC
@@ -609,12 +615,12 @@ void BatchNormGradFunctor(const Context &ctx,
   if (data_layout == DataLayout::kNHWC && compute_format == DataLayout::kNCHW &&
       x_dims.size() > 2) {
     VLOG(3) << "Transform input tensor from NHWC to NCHW.";
-    ResizeToChannelFirst<Context, T>(ctx, &x, &transformed_x);
-    TransToChannelFirst<Context, T>(ctx, &x, &transformed_x);
-    ResizeToChannelFirst<Context, T>(ctx, d_y, &transformed_d_y);
-    TransToChannelFirst<Context, T>(ctx, d_y, &transformed_d_y);
+    ResizeToChannelFirst<Context, T>(dev_ctx, &x, &transformed_x);
+    TransToChannelFirst<Context, T>(dev_ctx, &x, &transformed_x);
+    ResizeToChannelFirst<Context, T>(dev_ctx, d_y, &transformed_d_y);
+    TransToChannelFirst<Context, T>(dev_ctx, d_y, &transformed_d_y);
     if (d_x) {
-      ResizeToChannelFirst<Context, T>(ctx, d_x, &transformed_d_x);
+      ResizeToChannelFirst<Context, T>(dev_ctx, d_x, &transformed_d_x);
     }
   } else {
     transformed_x.ShareDataWith(x);
@@ -640,35 +646,35 @@ void BatchNormGradFunctor(const Context &ctx,
 #else
   const int block = 512;
 #endif
-  int max_threads = ctx.GetMaxPhysicalThreadCount();
+  int max_threads = dev_ctx.GetMaxPhysicalThreadCount();
   const int max_blocks = std::max(max_threads / block, 1);
   int grid1 = (num + block - 1) / block;
   int grid2 = std::min(C, max_blocks);
-  auto stream = ctx.stream();
+  auto stream = dev_ctx.stream();
   InplaceHelper<T> inplace_functor;
 
   if (!use_global_stats) {
     if ((N * H * W * D) == 1) {
       if (d_x) {
-        phi::Copy(ctx, *d_y, ctx.GetPlace(), false, d_x);
+        phi::Copy(dev_ctx, *d_y, dev_ctx.GetPlace(), false, d_x);
       }
       phi::funcs::SetConstant<Context, BatchNormParamType<T>> functor;
-      functor(ctx, d_scale, static_cast<BatchNormParamType<T>>(0));
-      functor(ctx, d_bias, static_cast<BatchNormParamType<T>>(0));
+      functor(dev_ctx, d_scale, static_cast<BatchNormParamType<T>>(0));
+      functor(dev_ctx, d_bias, static_cast<BatchNormParamType<T>>(0));
       return;
     }
 
 // ------------------- cudnn descriptors ---------------------
 #ifdef PADDLE_WITH_HIP
-// TODO(wangran16): wait for MIOpen to improve the performance of BN
-// miopenTensorDescriptor_t data_desc_;
-// miopenTensorDescriptor_t bn_param_desc_;
-// miopenBatchNormMode_t mode_;
+    // TODO(wangran16): wait for MIOpen to improve the performance of BN
+    miopenTensorDescriptor_t data_desc_;
+    miopenTensorDescriptor_t bn_param_desc_;
+    miopenBatchNormMode_t mode_;
 
-// PADDLE_ENFORCE_GPU_SUCCESS(
-//     platform::dynload::miopenCreateTensorDescriptor(&data_desc_));
-// PADDLE_ENFORCE_GPU_SUCCESS(
-//     platform::dynload::miopenCreateTensorDescriptor(&bn_param_desc_));
+    PADDLE_ENFORCE_GPU_SUCCESS(
+        phi::dynload::miopenCreateTensorDescriptor(&data_desc_));
+    PADDLE_ENFORCE_GPU_SUCCESS(
+        phi::dynload::miopenCreateTensorDescriptor(&bn_param_desc_));
 #else
     cudnnTensorDescriptor_t data_desc_;
     cudnnTensorDescriptor_t bn_param_desc_;
@@ -686,9 +692,15 @@ void BatchNormGradFunctor(const Context &ctx,
     }
     epsilon = std::max(epsilon, CUDNN_BN_MIN_EPSILON);
 #ifdef PADDLE_WITH_HIP
-// TODO(wangran16): wait for MIOpen to improve the performance of BN
-// mode_ = miopenBNSpatial;
+    // TODO(wangran16): wait for MIOpen to improve the performance of BN
+    if (H == 1 && W == 1) {
+      mode_ = miopenBNPerActivation;
+    } else {
+      mode_ = miopenBNSpatial;
+    }
 #elif CUDNN_VERSION_MIN(7, 0, 1)
+    // CUDNN_BATCHNORM_SPATIAL_PERSISTENT will cause precision issues in NCHW
+    // format.
     if (FLAGS_cudnn_batchnorm_spatial_persistent) {
       mode_ = CUDNN_BATCHNORM_SPATIAL_PERSISTENT;
     } else if (H == 1 && W == 1) {
@@ -705,14 +717,15 @@ void BatchNormGradFunctor(const Context &ctx,
 #endif  // CUDNN_VERSION_MIN(7, 0, 1)
 
 #ifdef PADDLE_WITH_HIP
-// TODO(wangran16): wait for MIOpen to improve the performance of BN
-// PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::miopenSetTensorDescriptor(
-//     data_desc_, CudnnDataType<T>::type,
-//     x_dims.size() > 3 ? x_dims.size() : 4, const_cast<int *>(dims.data()),
-//     const_cast<int *>(strides.data())));
-// PADDLE_ENFORCE_GPU_SUCCESS(
-//     platform::dynload::miopenDeriveBNTensorDescriptor(bn_param_desc_,
-//                                                       data_desc_, mode_));
+    // TODO(wangran16): wait for MIOpen to improve the performance of BN
+    PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::miopenSetTensorDescriptor(
+        data_desc_,
+        CudnnDataType<T>::type,
+        x_dims.size() > 3 ? x_dims.size() : 4,
+        const_cast<int *>(dims.data()),
+        const_cast<int *>(strides.data())));
+    PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::miopenDeriveBNTensorDescriptor(
+        bn_param_desc_, data_desc_, mode_));
 #else
     PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::cudnnSetTensorNdDescriptor(
         data_desc_,
@@ -750,23 +763,47 @@ void BatchNormGradFunctor(const Context &ctx,
     if (d_x && d_scale && d_bias) {
 #ifdef PADDLE_WITH_HIP
       if (compute_format == DataLayout::kNCHW) {
-        BNBackward<T, block, DataLayout::kNCHW>
-            <<<grid2, block, 0, ctx.stream()>>>(
-                transformed_d_y.template data<T>(),
-                transformed_x.template data<T>(),
-                new_scale.template data<BatchNormParamType<T>>(),
-                saved_mean_data,
-                saved_var_data,
-                C,
-                N,
-                H * W * D,
-                epsilon,
-                transformed_d_x.template data<T>(),
-                ctx.template Alloc<BatchNormParamType<T>>(d_scale),
-                ctx.template Alloc<BatchNormParamType<T>>(d_bias));
+        if (FLAGS_batch_norm_use_miopen == true) {
+          PADDLE_ENFORCE_GPU_SUCCESS(
+              phi::dynload::miopenBatchNormalizationBackward(
+                  dev_ctx.cudnn_handle(),
+                  mode_,
+                  CudnnDataType<T>::kOne(),
+                  CudnnDataType<T>::kZero(),
+                  CudnnDataType<T>::kOne(),
+                  CudnnDataType<T>::kZero(),
+                  data_desc_,
+                  transformed_x.template data<T>(),
+                  data_desc_,
+                  transformed_d_y.template data<T>(),
+                  data_desc_,
+                  dev_ctx.template Alloc<T>(&transformed_d_x),
+                  bn_param_desc_,
+                  new_scale.template data<BatchNormParamType<T>>(),
+                  dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale),
+                  dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias),
+                  epsilon,
+                  saved_mean_data,
+                  saved_var_data));
+        } else {
+          BNBackward<T, block, DataLayout::kNCHW>
+              <<<grid2, block, 0, dev_ctx.stream()>>>(
+                  transformed_d_y.template data<T>(),
+                  transformed_x.template data<T>(),
+                  new_scale.template data<BatchNormParamType<T>>(),
+                  saved_mean_data,
+                  saved_var_data,
+                  C,
+                  N,
+                  H * W * D,
+                  epsilon,
+                  transformed_d_x.template data<T>(),
+                  dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale),
+                  dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias));
+        }
       } else {
         BNBackward<T, block, DataLayout::kNHWC>
-            <<<grid2, block, 0, ctx.stream()>>>(
+            <<<grid2, block, 0, dev_ctx.stream()>>>(
                 transformed_d_y.template data<T>(),
                 transformed_x.template data<T>(),
                 new_scale.template data<BatchNormParamType<T>>(),
@@ -777,25 +814,10 @@ void BatchNormGradFunctor(const Context &ctx,
                 H * W * D,
                 epsilon,
                 transformed_d_x.template data<T>(),
-                ctx.template Alloc<BatchNormParamType<T>>(d_scale),
-                ctx.template Alloc<BatchNormParamType<T>>(d_bias));
+                dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale),
+                dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias));
       }
 
-// TODO(wangran16): wait for MIOpen to improve the performance of BN
-// PADDLE_ENFORCE_GPU_SUCCESS(
-//     platform::dynload::miopenBatchNormalizationBackward(
-//         dev_ctx.cudnn_handle(), mode_, CudnnDataType<T>::kOne(),
-//         CudnnDataType<T>::kZero(), CudnnDataType<T>::kOne(),
-//         CudnnDataType<T>::kZero(), data_desc_,
-//         transformed_x.template data<T>(), data_desc_,
-//         transformed_d_y.template data<T>(), data_desc_,
-//         transformed_d_x.template mutable_data<T>(ctx.GetPlace()),
-//         bn_param_desc_, scale->template data<BatchNormParamType<T>>(),
-//         d_scale->template mutable_data<BatchNormParamType<T>>(
-//             ctx.GetPlace()),
-//         d_bias->template mutable_data<BatchNormParamType<T>>(
-//             ctx.GetPlace()),
-//         epsilon, saved_mean_data, saved_var_data));
 #else
     }
     // CUDNN only support small batch size
@@ -817,15 +839,15 @@ void BatchNormGradFunctor(const Context &ctx,
           DenseTensor block_data_tensor;
           DenseTensor flag_tensor;
           DenseTensor compute_mean_tensor =
-              phi::Empty<BatchNormParamType<T>, Context>(ctx, {C});
+              phi::Empty<BatchNormParamType<T>, Context>(dev_ctx, {C});
           DenseTensor compute_inv_var_tensor =
-              phi::Empty<BatchNormParamType<T>, Context>(ctx, {C});
+              phi::Empty<BatchNormParamType<T>, Context>(dev_ctx, {C});
 
           BatchNormParamType<T> *block_data_ptr = nullptr;
           int *flag_ptr = nullptr;
 
           funcs::SetLaunchConfigInfoForChannelLast<T, BatchNormParamType<T>>(
-              ctx,
+              dev_ctx,
               &block_data_tensor,
               &flag_tensor,
               &block_data_ptr,
@@ -851,7 +873,7 @@ void BatchNormGradFunctor(const Context &ctx,
 
           if (saved_mean_data == nullptr) {
             BNBackward2DChannelLastStage1<T, block_size>
-                <<<grid, block, 0, ctx.stream()>>>(
+                <<<grid, block, 0, dev_ctx.stream()>>>(
                     transformed_x.template data<T>(),
                     C,
                     N,
@@ -867,19 +889,19 @@ void BatchNormGradFunctor(const Context &ctx,
           BatchNormParamType<T> *dbias = nullptr;
           bool with_scale = false;
           if (d_scale && d_bias) {
-            dscale = ctx.template Alloc<BatchNormParamType<T>>(d_scale);
-            dbias = ctx.template Alloc<BatchNormParamType<T>>(d_bias);
+            dscale = dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale);
+            dbias = dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias);
           } else {
             DenseTensor dscale_mem =
-                phi::Empty<BatchNormParamType<T>, Context>(ctx, {C});
+                phi::Empty<BatchNormParamType<T>, Context>(dev_ctx, {C});
             DenseTensor dbias_mem =
-                phi::Empty<BatchNormParamType<T>, Context>(ctx, {C});
+                phi::Empty<BatchNormParamType<T>, Context>(dev_ctx, {C});
             dscale = dscale_mem.data<BatchNormParamType<T>>();
             dbias = dbias_mem.data<BatchNormParamType<T>>();
           }
 
           BNBackward2DChannelLastStage2<T, block_size>
-              <<<grid, block, 0, ctx.stream()>>>(
+              <<<grid, block, 0, dev_ctx.stream()>>>(
                   transformed_d_y.template data<T>(),
                   transformed_x.template data<T>(),
                   mean_ptr,
@@ -896,7 +918,7 @@ void BatchNormGradFunctor(const Context &ctx,
 
           // 3. elementwise_mul(scale, mean, inv_var, dy, dscale, dbias) => dx
           BNBackward2DChannelLastStage3<T, block_size>
-              <<<grid, block, 0, ctx.stream()>>>(
+              <<<grid, block, 0, dev_ctx.stream()>>>(
                   transformed_d_y.template data<T>(),
                   transformed_x.template data<T>(),
                   new_scale.template data<BatchNormParamType<T>>(),
@@ -913,7 +935,7 @@ void BatchNormGradFunctor(const Context &ctx,
         } else {
           if (compute_format == DataLayout::kNCHW) {
             BNBackward<T, block, DataLayout::kNCHW>
-                <<<grid2, block, 0, ctx.stream()>>>(
+                <<<grid2, block, 0, dev_ctx.stream()>>>(
                     transformed_d_y.template data<T>(),
                     transformed_x.template data<T>(),
                     new_scale.template data<BatchNormParamType<T>>(),
@@ -924,11 +946,11 @@ void BatchNormGradFunctor(const Context &ctx,
                     H * W * D,
                     epsilon,
                     transformed_d_x.template data<T>(),
-                    ctx.template Alloc<BatchNormParamType<T>>(d_scale),
-                    ctx.template Alloc<BatchNormParamType<T>>(d_bias));
+                    dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale),
+                    dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias));
           } else {
             BNBackward<T, block, DataLayout::kNHWC>
-                <<<grid2, block, 0, ctx.stream()>>>(
+                <<<grid2, block, 0, dev_ctx.stream()>>>(
                     transformed_d_y.template data<T>(),
                     transformed_x.template data<T>(),
                     new_scale.template data<BatchNormParamType<T>>(),
@@ -939,8 +961,8 @@ void BatchNormGradFunctor(const Context &ctx,
                     H * W * D,
                     epsilon,
                     transformed_d_x.template data<T>(),
-                    ctx.template Alloc<BatchNormParamType<T>>(d_scale),
-                    ctx.template Alloc<BatchNormParamType<T>>(d_bias));
+                    dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale),
+                    dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias));
           }
         }
       } else {
@@ -952,7 +974,7 @@ void BatchNormGradFunctor(const Context &ctx,
         // --------------- cudnn batchnorm workspace ---------------
         PADDLE_ENFORCE_GPU_SUCCESS(
             phi::dynload::cudnnGetBatchNormalizationBackwardExWorkspaceSize(
-                /*handle=*/ctx.cudnn_handle(),
+                /*handle=*/dev_ctx.cudnn_handle(),
                 /*mode=*/mode_,
                 /*bnIps=*/CUDNN_BATCHNORM_OPS_BN,
                 /*xDesc=*/data_desc_,
@@ -965,12 +987,16 @@ void BatchNormGradFunctor(const Context &ctx,
                 /*sizeInBytes=*/&workspace_size));
 
         workspace_tensor.Resize({static_cast<int64_t>(workspace_size)});
-        workspace_ptr =
-            static_cast<void *>(ctx.template Alloc<uint8_t>(&workspace_tensor));
-
+        workspace_ptr = static_cast<void *>(
+            dev_ctx.template Alloc<uint8_t>(&workspace_tensor));
+        uint8_t *reserve_space_ptr = nullptr;
+        if (reserve_space_size != 0) {
+          reserve_space_ptr =
+              const_cast<uint8_t *>(reserve_space->template data<uint8_t>());
+        }
         PADDLE_ENFORCE_GPU_SUCCESS(
             phi::dynload::cudnnBatchNormalizationBackwardEx(
-                /*handle=*/ctx.cudnn_handle(),
+                /*handle=*/dev_ctx.cudnn_handle(),
                 /*mode=*/mode_,
                 /*bnOps=*/CUDNN_BATCHNORM_OPS_BN,
                 /*alphaDataDiff=*/CudnnDataType<T>::kOne(),
@@ -986,15 +1012,15 @@ void BatchNormGradFunctor(const Context &ctx,
                 /*dzDesc=*/nullptr,
                 /*dzData=*/nullptr,
                 /*dxDesc=*/data_desc_,
-                /*dxData=*/ctx.template Alloc<T>(&transformed_d_x),
+                /*dxData=*/dev_ctx.template Alloc<T>(&transformed_d_x),
                 /*dBnScaleBiasDesc=*/bn_param_desc_,
                 /*bnScaleData=*/
                 new_scale.template data<BatchNormParamType<T>>(),
                 /*bnBiasData=*/nullptr,
                 /*dBnScaleData=*/
-                ctx.template Alloc<BatchNormParamType<T>>(d_scale),
+                dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale),
                 /*dBnBiasData=*/
-                ctx.template Alloc<BatchNormParamType<T>>(d_bias),
+                dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias),
                 /*epsilon=*/epsilon,
                 /*savedMean=*/saved_mean_data,
                 /*savedInvVariance=*/saved_var_data,
@@ -1002,12 +1028,14 @@ void BatchNormGradFunctor(const Context &ctx,
                 /*workspace=*/workspace_ptr,
                 /*workSpaceSizeInBytes=*/workspace_size,
                 /*reserveSpace=*/
-                const_cast<uint8_t *>(reserve_space->template data<uint8_t>()),
+                // const_cast<uint8_t *>(reserve_space->template
+                // data<uint8_t>()),
+                reserve_space_ptr,
                 /*reserveSpaceSizeInBytes=*/reserve_space_size));
 #else
         PADDLE_ENFORCE_GPU_SUCCESS(
             phi::dynload::cudnnBatchNormalizationBackward(
-                ctx.cudnn_handle(),
+                dev_ctx.cudnn_handle(),
                 mode_,
                 CudnnDataType<T>::kOne(),
                 CudnnDataType<T>::kZero(),
@@ -1018,11 +1046,11 @@ void BatchNormGradFunctor(const Context &ctx,
                 data_desc_,
                 transformed_d_y.template data<T>(),
                 data_desc_,
-                ctx.template Alloc<T>(&transformed_d_x),
+                dev_ctx.template Alloc<T>(&transformed_d_x),
                 bn_param_desc_,
                 new_scale.template data<BatchNormParamType<T>>(),
-                ctx.template Alloc<BatchNormParamType<T>>(d_scale),
-                ctx.template Alloc<BatchNormParamType<T>>(d_bias),
+                dev_ctx.template Alloc<BatchNormParamType<T>>(d_scale),
+                dev_ctx.template Alloc<BatchNormParamType<T>>(d_bias),
                 epsilon,
                 saved_mean_data,
                 saved_var_data));
@@ -1033,7 +1061,7 @@ void BatchNormGradFunctor(const Context &ctx,
       if (data_layout == DataLayout::kNHWC &&
           compute_format == DataLayout::kNCHW) {
         VLOG(3) << "Transform batchnorm output from NCHW to NHWC";
-        TransToChannelLast<Context, T>(ctx, &transformed_d_x, d_x);
+        TransToChannelLast<Context, T>(dev_ctx, &transformed_d_x, d_x);
       }
     } else {
       // This branch call CUDA kernels
@@ -1041,7 +1069,7 @@ void BatchNormGradFunctor(const Context &ctx,
         if (data_layout == DataLayout::kNHWC) {
           if (d_x) {
             BNBackwardData<T, block, phi::DataLayout::kNHWC>
-                <<<grid2, block, 0, ctx.stream()>>>(
+                <<<grid2, block, 0, dev_ctx.stream()>>>(
                     d_y->data<T>(),
                     new_scale.data<BatchNormParamType<T>>(),
                     saved_mean_data,
@@ -1069,7 +1097,7 @@ void BatchNormGradFunctor(const Context &ctx,
         } else {
           if (d_x) {
             BNBackwardData<T, block, phi::DataLayout::kNCHW>
-                <<<grid2, block, 0, ctx.stream()>>>(
+                <<<grid2, block, 0, dev_ctx.stream()>>>(
                     d_y->data<T>(),
                     new_scale.data<BatchNormParamType<T>>(),
                     saved_mean_data,
@@ -1098,7 +1126,7 @@ void BatchNormGradFunctor(const Context &ctx,
       } else {
         if (d_x) {
           BNBackwardData<T, block, phi::DataLayout::kNHWC>
-              <<<grid2, block, 0, ctx.stream()>>>(
+              <<<grid2, block, 0, dev_ctx.stream()>>>(
                   d_y->data<T>(),
                   new_scale.data<BatchNormParamType<T>>(),
                   saved_mean_data,
@@ -1127,12 +1155,12 @@ void BatchNormGradFunctor(const Context &ctx,
     }
 
 #ifdef PADDLE_WITH_HIP
-// TODO(wangran16): wait for MIOpen to improve the performance of BN
-// clean when exit.
-// PADDLE_ENFORCE_GPU_SUCCESS(
-//     platform::dynload::miopenDestroyTensorDescriptor(data_desc_));
-// PADDLE_ENFORCE_GPU_SUCCESS(
-//     platform::dynload::miopenDestroyTensorDescriptor(bn_param_desc_));
+    // TODO(wangran16): wait for MIOpen to improve the performance of BN
+    // clean when exit.
+    PADDLE_ENFORCE_GPU_SUCCESS(
+        phi::dynload::miopenDestroyTensorDescriptor(data_desc_));
+    PADDLE_ENFORCE_GPU_SUCCESS(
+        phi::dynload::miopenDestroyTensorDescriptor(bn_param_desc_));
 #else
     // clean when exit.
     PADDLE_ENFORCE_GPU_SUCCESS(
@@ -1153,7 +1181,7 @@ void BatchNormGradFunctor(const Context &ctx,
     if (is_inplace) {
       auto px = x;
       inplace_functor(data_layout,
-                      ctx.template Alloc<T>(&px),
+                      dev_ctx.template Alloc<T>(&px),
                       new_scale.template data<BatchNormParamType<T>>(),
                       new_bias.template data<BatchNormParamType<T>>(),
                       running_mean_data,
@@ -1249,7 +1277,7 @@ void BatchNormGradFunctor(const Context &ctx,
         int *flag_ptr = nullptr;
 
         funcs::SetLaunchConfigInfoForChannelLast<T, BatchNormParamType<T>>(
-            ctx,
+            dev_ctx,
             &block_data_tensor,
             &flag_tensor,
             &block_data_ptr,
@@ -1263,7 +1291,7 @@ void BatchNormGradFunctor(const Context &ctx,
             &block,
             &grid);
         BNBackward2DChannelLastStage2<T, block_size>
-            <<<grid, block, 0, ctx.stream()>>>(
+            <<<grid, block, 0, dev_ctx.stream()>>>(
                 transformed_d_y.template data<T>(),
                 transformed_x.template data<T>(),
                 running_mean_data,
@@ -1302,6 +1330,21 @@ void BatchNormGradKernel(const Context &dev_ctx,
                          DenseTensor *x_grad,
                          DenseTensor *scale_grad,
                          DenseTensor *bias_grad) {
+  if (x.numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    if (scale_grad)
+      phi::Full<T, Context>(
+          dev_ctx,
+          phi::IntArray(common::vectorize(scale_grad->dims())),
+          0,
+          scale_grad);
+    if (bias_grad)
+      phi::Full<T, Context>(dev_ctx,
+                            phi::IntArray(common::vectorize(bias_grad->dims())),
+                            0,
+                            bias_grad);
+    return;
+  }
   BatchNormGradFunctor<T, Context>(dev_ctx,
                                    x,
                                    scale,
@@ -1326,7 +1369,7 @@ void BatchNormGradKernel(const Context &dev_ctx,
 
 template <typename T, typename Context>
 void BatchNormDoubleGradKernel(
-    const Context &ctx,
+    const Context &dev_ctx,
     const DenseTensor &x,
     const paddle::optional<DenseTensor> &scale,
     const paddle::optional<DenseTensor> &mean,
@@ -1348,7 +1391,7 @@ void BatchNormDoubleGradKernel(
     DenseTensor *y_grad_grad) {
   PADDLE_ENFORCE_EQ(is_test,
                     false,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "`is_test = True` CANNOT be used in train program. If "
                         "you want to use global status in pre_train model, "
                         "please set `use_global_stats = True`"));
@@ -1369,9 +1412,9 @@ void BatchNormDoubleGradKernel(
   if (Scale) {
     new_scale = scale.get();
   } else {
-    new_scale = phi::Full<T, Context>(ctx, {C}, static_cast<T>(1));
+    new_scale = phi::Full<T, Context>(dev_ctx, {C}, static_cast<T>(1));
   }
-  phi::funcs::NormDoubleGradFunctor<Context, T>(ctx,
+  phi::funcs::NormDoubleGradFunctor<Context, T>(dev_ctx,
                                                 data_layout,
                                                 &x,
                                                 &new_scale,

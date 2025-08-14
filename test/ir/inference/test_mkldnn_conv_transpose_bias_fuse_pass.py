@@ -21,7 +21,7 @@ from auto_scan_test import PassAutoScanTest
 from program_config import OpConfig, ProgramConfig, TensorConfig
 
 
-class TestConvTransposeMkldnnFusePass(PassAutoScanTest):
+class TestConvTransposeOnednnFusePass(PassAutoScanTest):
     def is_program_valid(self, program_config: ProgramConfig) -> bool:
         attrs = [
             program_config.ops[i].attrs for i in range(len(program_config.ops))
@@ -105,14 +105,14 @@ class TestConvTransposeMkldnnFusePass(PassAutoScanTest):
         return program_config
 
     def sample_predictor_configs(self, program_config):
-        config = self.create_inference_config(use_mkldnn=True)
-        yield config, ['conv2d_transpose'], (1e-5, 1e-5)
+        config = self.create_inference_config(use_onednn=True)
+        yield config, ['conv2d_transpose_bias'], (1e-5, 1e-5)
 
     def test(self):
         self.run_and_statis(
             quant=False,
             max_duration=300,
-            passes=["conv_transpose_bias_mkldnn_fuse_pass"],
+            passes=["conv_transpose_bias_onednn_fuse_pass"],
         )
 
 

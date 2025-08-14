@@ -24,9 +24,9 @@ from op_test_xpu import XPUOpTest
 
 import paddle
 from paddle import base
+from paddle.base import core
 
 paddle.enable_static()
-from paddle.base import core
 from paddle.tensor import random
 
 typeid_dict = {
@@ -60,13 +60,13 @@ class XPUTestGaussianRandomOp(XPUOpTestWrapper):
             self.python_api = paddle.normal
             self.set_attrs()
             self.inputs = {}
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.attrs = {
                 "shape": [123, 92],
                 "mean": self.mean,
                 "std": self.std,
                 "seed": 10,
-                "use_mkldnn": self.use_mkldnn,
+                "use_onednn": self.use_onednn,
                 "dtype": typeid_dict[self.in_type_str],
             }
             paddle.seed(10)
@@ -119,7 +119,7 @@ class XPUTestGaussianRandomOp(XPUOpTestWrapper):
                 'mean': self.mean,
                 'std': self.std,
                 'seed': self.seed,
-                'use_mkldnn': self.use_mkldnn,
+                'use_onednn': self.use_onednn,
                 "dtype": typeid_dict[self.in_type_str],
             }
 
@@ -129,7 +129,7 @@ class XPUTestGaussianRandomOp(XPUOpTestWrapper):
         def init_data(self):
             self.shape = [123, 92]
             self.infer_shape = [-1, 92]
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.mean = 1.0
             self.std = 2.0
             self.seed = 10
@@ -145,7 +145,7 @@ class XPUTestGaussianRandomOp(XPUOpTestWrapper):
         def init_data(self):
             self.shape = [123, 92]
             self.infer_shape = [-1, -1]
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.mean = 1.0
             self.std = 2.0
             self.seed = 10
@@ -156,7 +156,7 @@ class XPUTestGaussianRandomOp(XPUOpTestWrapper):
         def init_data(self):
             self.shape = [123, 92]
             self.infer_shape = [123, -1]
-            self.use_mkldnn = True
+            self.use_onednn = True
             self.mean = 1.0
             self.std = 2.0
             self.seed = 10
@@ -167,7 +167,7 @@ class XPUTestGaussianRandomOp(XPUOpTestWrapper):
         def init_data(self):
             self.shape = [123, 92]
             self.infer_shape = [123, -1]
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.mean = 1.0
             self.std = 2.0
             self.seed = 10
@@ -178,21 +178,21 @@ class XPUTestGaussianRandomOp(XPUOpTestWrapper):
             '''Test gaussian_random op with specified value'''
             self.init()
             self.init_data()
-            self.use_mkldnn = False
+            self.use_onednn = False
 
             self.inputs = {"ShapeTensor": np.array(self.shape).astype("int32")}
             self.attrs = {
                 'mean': self.mean,
                 'std': self.std,
                 'seed': self.seed,
-                'use_mkldnn': self.use_mkldnn,
+                'use_onednn': self.use_onednn,
                 "dtype": typeid_dict[self.in_type_str],
             }
             self.outputs = {'Out': np.zeros((123, 92), dtype=self.dtype)}
 
         def init_data(self):
             self.shape = [123, 92]
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.mean = 1.0
             self.std = 2.0
             self.seed = 10
@@ -285,22 +285,22 @@ class TestGaussianRandomAPI(unittest.TestCase):
         def test_default_fp16():
             paddle.framework.set_default_dtype('float16')
             out = paddle.tensor.random.gaussian([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.FP16)
+            self.assertEqual(out.dtype, paddle.float16)
 
         def test_default_bf16():
             paddle.framework.set_default_dtype('bfloat16')
             out = paddle.tensor.random.gaussian([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.BF16)
+            self.assertEqual(out.dtype, paddle.bfloat16)
 
         def test_default_fp32():
             paddle.framework.set_default_dtype('float32')
             out = paddle.tensor.random.gaussian([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.FP32)
+            self.assertEqual(out.dtype, paddle.float32)
 
         def test_default_fp64():
             paddle.framework.set_default_dtype('float64')
             out = paddle.tensor.random.gaussian([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.FP64)
+            self.assertEqual(out.dtype, paddle.float64)
 
         test_default_fp64()
         test_default_fp32()
@@ -317,28 +317,35 @@ class TestStandardNormalDtype(unittest.TestCase):
         def test_default_fp16():
             paddle.framework.set_default_dtype('float16')
             out = paddle.tensor.random.standard_normal([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.FP16)
+            self.assertEqual(out.dtype, paddle.float16)
 
         def test_default_bf16():
             paddle.framework.set_default_dtype('bfloat16')
             out = paddle.tensor.random.standard_normal([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.BF16)
+            self.assertEqual(out.dtype, paddle.bfloat16)
 
         def test_default_fp32():
             paddle.framework.set_default_dtype('float32')
             out = paddle.tensor.random.standard_normal([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.FP32)
+            self.assertEqual(out.dtype, paddle.float32)
 
         def test_default_fp64():
             paddle.framework.set_default_dtype('float64')
             out = paddle.tensor.random.standard_normal([2, 3])
-            self.assertEqual(out.dtype, base.core.VarDesc.VarType.FP64)
+            self.assertEqual(out.dtype, paddle.float64)
 
         test_default_fp64()
         test_default_fp32()
         test_default_fp16()
         test_default_bf16()
 
+        paddle.enable_static()
+
+
+class TestZeroSizeRandN(unittest.TestCase):
+    def test_zero_size_randn(self):
+        paddle.disable_static()
+        x = paddle.randn((0,))
         paddle.enable_static()
 
 

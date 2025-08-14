@@ -14,6 +14,7 @@
 
 #include "paddle/phi/kernels/bmm_grad_kernel.h"
 
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/xpu/bmm_xpu_utils.h"
 
 namespace phi {
@@ -25,16 +26,18 @@ void MatMul(const Context& dev_ctx,
             const DenseTensor& b,
             bool trans_b,
             DenseTensor* out) {
-  using XPUT = typename XPUTypeTrait<T>::Type;
+  using XPUType = typename XPUTypeTrait<T>::Type;
   dev_ctx.template Alloc<T>(out);
   xpu::Context* xpu_ctx = dev_ctx.x_context();
-  int fccal_type = FCCalcType<XPUT>();
-  if (fccal_type == XPUFCCalcType::FC_INT32) {
+  int fc_calc_type = FCCalcType<XPUType>();
+  if (fc_calc_type == XPUFCCalcType::FC_INT32) {
     MatMulXPUFunction<T, int32_t>(a, b, out, trans_a, trans_b, xpu_ctx);
-  } else if (fccal_type == XPUFCCalcType::FC_FLOAT) {
+  } else if (fc_calc_type == XPUFCCalcType::FC_FLOAT) {
     MatMulXPUFunction<T, float>(a, b, out, trans_a, trans_b, xpu_ctx);
-  } else if (fccal_type == XPUFCCalcType::FC_INT32_WITH_LL) {
+  } else if (fc_calc_type == XPUFCCalcType::FC_INT32_WITH_LL) {
     MatMulXPUFunction<T, int_with_ll_t>(a, b, out, trans_a, trans_b, xpu_ctx);
+  } else if (fc_calc_type == XPUFCCalcType::FC_FLOAT16) {
+    MatMulXPUFunction<T, float16>(a, b, out, trans_a, trans_b, xpu_ctx);
   } else {
     MatMulXPUFunction<T, int16_t>(a, b, out, trans_a, trans_b, xpu_ctx);
   }
@@ -58,6 +61,18 @@ void BmmGradKernel(const Context& dev_ctx,
                    const DenseTensor& out_grad,
                    DenseTensor* x_grad,
                    DenseTensor* y_grad) {
+  if (x_grad && x_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(y.dims())), 0, y_grad);
+    return;
+  }
+  if (y_grad && y_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(y_grad);
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(x.dims())), 0, x_grad);
+    return;
+  }
   DenseTensor x_help = x;
   DenseTensor y_help = y;
   DenseTensor out_grad_help = out_grad;

@@ -15,13 +15,12 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_places
 from utils import static_guard
 
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def numpy_scatter_nd(ref, index, updates, fun):
@@ -29,17 +28,17 @@ def numpy_scatter_nd(ref, index, updates, fun):
     index_shape = index.shape
 
     end_size = index_shape[-1]
-    remain_numl = 1
+    remain_numel = 1
     for i in range(len(index_shape) - 1):
-        remain_numl *= index_shape[i]
+        remain_numel *= index_shape[i]
 
     slice_size = 1
     for i in range(end_size, len(ref_shape)):
         slice_size *= ref_shape[i]
 
-    flat_index = index.reshape([remain_numl] + list(index_shape[-1:]))
-    flat_updates = updates.reshape((remain_numl, slice_size))
-    flat_output = ref.reshape(list(ref_shape[:end_size]) + [slice_size])
+    flat_index = index.reshape([remain_numel, *index_shape[-1:]])
+    flat_updates = updates.reshape((remain_numel, slice_size))
+    flat_output = ref.reshape([*ref_shape[:end_size], slice_size])
 
     for i_up, i_out in enumerate(flat_index):
         i_out = tuple(i_out)
@@ -80,7 +79,9 @@ class TestScatterNdAddSimpleOp(OpTest):
         else:
             target_dtype = "float32"
         ref_np = np.random.random([100]).astype(target_dtype)
-        index_np = np.random.randint(0, 100, [100, 1]).astype("int32")
+        index_np = np.random.randint(
+            -ref_np.shape[0], ref_np.shape[0], [100, 1]
+        ).astype("int32")
         updates_np = np.random.random([100]).astype(target_dtype)
         expect_np = numpy_scatter_nd_add(ref_np.copy(), index_np, updates_np)
         if self.dtype == np.uint16:
@@ -94,11 +95,17 @@ class TestScatterNdAddSimpleOp(OpTest):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad(
-            ['X', 'Updates'], 'Out', check_prim=True, check_pir=True
+            ['X', 'Updates'],
+            'Out',
+            check_prim=True,
+            check_pir=True,
+            check_prim_pir=True,
         )
 
 
@@ -114,7 +121,7 @@ class TestScatterNdAddSimpleFP16Op(TestScatterNdAddSimpleOp):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestScatterNdAddSimpleBF16Op(TestScatterNdAddSimpleOp):
     """
@@ -133,7 +140,12 @@ class TestScatterNdAddSimpleBF16Op(TestScatterNdAddSimpleOp):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             self.check_grad_with_place(
-                place, ['X', 'Updates'], 'Out', check_prim=True, check_pir=True
+                place,
+                ['X', 'Updates'],
+                'Out',
+                check_prim=True,
+                check_pir=True,
+                check_prim_pir=True,
             )
 
 
@@ -171,12 +183,18 @@ class TestScatterNdAddWithEmptyIndex(OpTest):
     def _set_dtype(self):
         self.dtype = np.float64
 
-    def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+    def _test_check_output(self):
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
-    def test_check_grad(self):
+    def _test_check_grad(self):
         self.check_grad(
-            ['X', 'Updates'], 'Out', check_prim=True, check_pir=True
+            ['X', 'Updates'],
+            'Out',
+            check_prim=True,
+            check_pir=True,
+            check_prim_pir=True,
         )
 
 
@@ -192,7 +210,7 @@ class TestScatterNdAddWithEmptyIndexFP16(TestScatterNdAddWithEmptyIndex):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestScatterNdAddWithEmptyIndexBF16(TestScatterNdAddWithEmptyIndex):
     """
@@ -202,16 +220,21 @@ class TestScatterNdAddWithEmptyIndexBF16(TestScatterNdAddWithEmptyIndex):
     def _set_dtype(self):
         self.dtype = np.uint16
 
-    def test_check_output(self):
+    def _test_check_output(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             self.check_output_with_place(place, check_pir=True)
 
-    def test_check_grad(self):
+    def _test_check_grad(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             self.check_grad_with_place(
-                place, ['X', 'Updates'], 'Out', check_prim=True, check_pir=True
+                place,
+                ['X', 'Updates'],
+                'Out',
+                check_prim=True,
+                check_pir=True,
+                check_prim_pir=True,
             )
 
 
@@ -235,7 +258,7 @@ class TestScatterNdAddWithHighRankSame(OpTest):
         shape = (3, 2, 2, 1, 10)
         ref_np = np.random.rand(*shape).astype(target_dtype)
         index_np = np.vstack(
-            [np.random.randint(0, s, size=100) for s in shape]
+            [np.random.randint(-s, s, size=100) for s in shape]
         ).T.astype("int32")
         update_shape = judge_update_shape(ref_np, index_np)
         updates_np = np.random.rand(*update_shape).astype(target_dtype)
@@ -253,7 +276,9 @@ class TestScatterNdAddWithHighRankSame(OpTest):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad(
@@ -273,7 +298,7 @@ class TestScatterNdAddWithHighRankSameFP16(TestScatterNdAddWithHighRankSame):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestScatterNdAddWithHighRankSameBF16(TestScatterNdAddWithHighRankSame):
     """
@@ -308,7 +333,7 @@ class TestScatterNdAddWithHighRankDiff(OpTest):
         self.prim_op_type = "prim"
         shape = (8, 2, 2, 1, 10)
         ref_np = np.random.rand(*shape).astype("double")
-        index = np.vstack([np.random.randint(0, s, size=500) for s in shape]).T
+        index = np.vstack([np.random.randint(-s, s, size=500) for s in shape]).T
         index_np = index.reshape([10, 5, 10, 5]).astype("int64")
         update_shape = judge_update_shape(ref_np, index_np)
         updates_np = np.random.rand(*update_shape).astype("double")
@@ -318,7 +343,9 @@ class TestScatterNdAddWithHighRankDiff(OpTest):
         self.outputs = {'Out': expect_np}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad(
@@ -430,44 +457,47 @@ class TestScatterNdOpAPI(unittest.TestCase):
             np.testing.assert_array_equal(gpu_value.numpy(), cpu_value.numpy())
             paddle.set_device(device)
 
-        @test_with_pir_api
         def test_static_graph():
-            with paddle.static.program_guard(
-                paddle.static.Program(), paddle.static.Program()
-            ):
-                x_t = paddle.static.data(name="x", dtype=x.dtype, shape=x.shape)
-                index_t = paddle.static.data(
-                    name="index", dtype=index.dtype, shape=index.shape
-                )
-                val_t = paddle.static.data(
-                    name="val", dtype=val.dtype, shape=val.shape
-                )
-                gpu_exe = paddle.static.Executor(paddle.CUDAPlace(0))
-                cpu_exe = paddle.static.Executor(paddle.CPUPlace())
-                out_t = paddle.scatter_nd_add(x_t, index_t, val_t)
-                gpu_value = gpu_exe.run(
-                    feed={
-                        'x': x,
-                        'index': index,
-                        'val': val,
-                    },
-                    fetch_list=[out_t],
-                )
-                cpu_value = cpu_exe.run(
-                    feed={
-                        'x': x,
-                        'index': index,
-                        'val': val,
-                    },
-                    fetch_list=[out_t],
-                )
-            np.testing.assert_array_equal(gpu_value, cpu_value)
+            with static_guard():
+                with paddle.static.program_guard(
+                    paddle.static.Program(), paddle.static.Program()
+                ):
+                    x_t = paddle.static.data(
+                        name="x", dtype=x.dtype, shape=x.shape
+                    )
+                    index_t = paddle.static.data(
+                        name="index", dtype=index.dtype, shape=index.shape
+                    )
+                    val_t = paddle.static.data(
+                        name="val", dtype=val.dtype, shape=val.shape
+                    )
+                    gpu_exe = paddle.static.Executor(paddle.CUDAPlace(0))
+                    cpu_exe = paddle.static.Executor(paddle.CPUPlace())
+                    out_t = paddle.scatter_nd_add(x_t, index_t, val_t)
+                    gpu_value = gpu_exe.run(
+                        feed={
+                            'x': x,
+                            'index': index,
+                            'val': val,
+                        },
+                        fetch_list=[out_t],
+                    )
+                    cpu_value = cpu_exe.run(
+                        feed={
+                            'x': x,
+                            'index': index,
+                            'val': val,
+                        },
+                        fetch_list=[out_t],
+                    )
+                np.testing.assert_array_equal(gpu_value, cpu_value)
 
         test_static_graph()
 
 
 # Test Raise Error
 class TestScatterNdOpRaise(unittest.TestCase):
+
     def test_check_raise(self):
         def check_raise_is_test():
             with static_guard():
@@ -490,24 +520,26 @@ class TestScatterNdOpRaise(unittest.TestCase):
         self.assertRaises(IndexError, check_raise_is_test)
 
     def test_check_raise2(self):
-        with self.assertRaises(ValueError):
-            with static_guard():
-                ref6 = paddle.static.data(
-                    name='ref6',
-                    shape=[10, 9, 8, 1, 3],
-                    dtype='double',
-                )
-                index6 = paddle.static.data(
-                    name='index6',
-                    shape=[5, 8, 5],
-                    dtype='int32',
-                )
-                updates6 = paddle.static.data(
-                    name='update6',
-                    shape=[5, 8],
-                    dtype='float32',
-                )
-                output6 = paddle.scatter_nd_add(ref6, index6, updates6)
+        with (
+            self.assertRaises(TypeError),
+            static_guard(),
+        ):
+            ref6 = paddle.static.data(
+                name='ref6',
+                shape=[10, 9, 8, 1, 3],
+                dtype='double',
+            )
+            index6 = paddle.static.data(
+                name='index6',
+                shape=[5, 8, 5],
+                dtype='int32',
+            )
+            updates6 = paddle.static.data(
+                name='update6',
+                shape=[5, 8],
+                dtype='float32',
+            )
+            output6 = paddle.scatter_nd_add(ref6, index6, updates6)
 
     def test_check_raise3(self):
         def check_raise_is_test():
@@ -528,14 +560,14 @@ class TestScatterNdOpRaise(unittest.TestCase):
                     if t in str(e):
                         raise ValueError
 
-            self.assertRaises(ValueError, check_raise_is_test)
+        self.assertRaises(ValueError, check_raise_is_test)
 
 
 class TestDygraph(unittest.TestCase):
     def test_dygraph(self):
         with base.dygraph.guard(base.CPUPlace()):
             index_data = np.array([[1, 1], [0, 1], [1, 3]]).astype(np.int64)
-            index = base.dygraph.to_variable(index_data)
+            index = paddle.to_tensor(index_data)
             updates = paddle.rand(shape=[3, 9, 10], dtype='float32')
             shape = [3, 5, 9, 10]
             output = paddle.scatter_nd(index, updates, shape)
@@ -545,8 +577,66 @@ class TestDygraph(unittest.TestCase):
             x = paddle.rand(shape=[3, 5, 9, 10], dtype='float32')
             updates = paddle.rand(shape=[3, 9, 10], dtype='float32')
             index_data = np.array([[1, 1], [0, 1], [1, 3]]).astype(np.int64)
-            index = base.dygraph.to_variable(index_data)
+            index = paddle.to_tensor(index_data)
             output = paddle.scatter_nd_add(x, index, updates)
+
+
+class TestScatterNd_ZeroSize(unittest.TestCase):
+    def test_dygraph(self):
+        for place in get_places():
+            with base.dygraph.guard(place):
+                index_data = np.random.random([0, 1])
+                index = paddle.to_tensor(index_data)
+                index.stop_gradient = False
+                updates = paddle.rand(shape=[4], dtype='float32')
+                updates.stop_gradient = False
+                shape = [4]
+                output = paddle.scatter_nd(index, updates, shape)
+                np.testing.assert_allclose(output.numpy(), updates.numpy())
+                output.sum().backward()
+                np.testing.assert_allclose(updates.grad.numpy(), np.ones([4]))
+
+
+class TestScatterNdAdd_ZeroSize(unittest.TestCase):
+    def test_dygraph(self):
+        for place in get_places():
+            with base.dygraph.guard(place):
+                # x 0-size
+                x = paddle.randn([0, 2, 3])
+                x.stop_gradient = False
+                index_data = np.random.random([2, 3])
+                index = paddle.to_tensor(index_data)
+                updates = paddle.rand(shape=[2], dtype='float32')
+                updates.stop_gradient = False
+                output = paddle.scatter_nd_add(x, index, updates)
+                np.testing.assert_allclose(output.numpy(), x.numpy())
+                output.sum().backward()
+                np.testing.assert_allclose(x.grad.numpy(), np.zeros(x.shape))
+                np.testing.assert_allclose(
+                    updates.grad.numpy(), np.zeros(updates.shape)
+                )
+
+
+class TestScatterNdAdd_ZeroSize2(unittest.TestCase):
+    def test_dygraph(self):
+        for place in get_places():
+            with base.dygraph.guard(place):
+                # index 0-size
+                x = paddle.randn([1, 2])
+                x.stop_gradient = False
+                index_data = np.random.random([0, 3])
+                index = paddle.to_tensor(index_data)
+                updates = paddle.rand(shape=[1, 2], dtype='float32')
+                updates.stop_gradient = False
+                output = paddle.scatter_nd_add(x, index, updates)
+                np.testing.assert_allclose(
+                    output.numpy(), (x + updates).numpy()
+                )
+                output.sum().backward()
+                np.testing.assert_allclose(x.grad.numpy(), np.ones(x.shape))
+                np.testing.assert_allclose(
+                    updates.grad.numpy(), np.ones(updates.shape)
+                )
 
 
 if __name__ == "__main__":

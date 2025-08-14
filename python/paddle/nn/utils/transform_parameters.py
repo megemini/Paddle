@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from functools import reduce
+from typing import TYPE_CHECKING
 
 import paddle
 from paddle import _C_ops
@@ -23,9 +26,15 @@ from paddle.base.framework import (
     in_dygraph_mode,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
-# input==output, inplace strategy of reshape has no cost almostly
-def _inplace_reshape_dygraph(x, shape):
+    from paddle import Tensor
+    from paddle._typing import ShapeLike
+
+
+# input==output, inplace strategy of reshape has no cost almost
+def _inplace_reshape_dygraph(x: Tensor, shape: ShapeLike) -> None:
     x_shape = _create_tensor(dtype='int64')
     if in_dygraph_mode():
         with paddle.base.dygraph.no_grad():
@@ -42,12 +51,12 @@ def _inplace_reshape_dygraph(x, shape):
 
 
 @dygraph_only
-def _stride_column(param):
+def _stride_column(param: Tensor) -> None:
     """
     A tool function. Permute date of parameter as a 'columns' stride. Now, it only support 2-D parameter.
 
     Args:
-        param(Tensor]): The param that will be strided according to 'columns'.
+        param(Tensor): The param that will be strided according to 'columns'.
 
     Examples:
        .. code-block:: python
@@ -75,7 +84,9 @@ def _stride_column(param):
 
 
 @dygraph_only
-def parameters_to_vector(parameters, name=None):
+def parameters_to_vector(
+    parameters: Iterable[Tensor], name: str | None = None
+) -> Tensor:
     """
     Flatten parameters to a 1-D Tensor.
 
@@ -126,7 +137,9 @@ def parameters_to_vector(parameters, name=None):
 
 
 @dygraph_only
-def vector_to_parameters(vec, parameters, name=None):
+def vector_to_parameters(
+    vec: Tensor, parameters: Iterable[Tensor], name: str | None = None
+) -> None:
     """
     Transform a 1-D Tensor to the input ``parameters`` .
 
@@ -152,12 +165,15 @@ def vector_to_parameters(vec, parameters, name=None):
             Tensor(shape=[], dtype=bool, place=Place(cpu), stop_gradient=True,
             True)
     """
+    assert len(vec.shape) == 1
     origin_shapes = []
     sections = []
+    total_elements = 0
     for param in parameters:
         shape = param.shape
         origin_shapes.append(shape)
         numel = reduce(lambda x, y: x * y, shape, 1)
+        total_elements += numel
         sections.append(numel)
 
     if len(sections) == 1:
@@ -165,7 +181,18 @@ def vector_to_parameters(vec, parameters, name=None):
 
     if in_dygraph_mode():
         with paddle.base.dygraph.no_grad():
-            res = _C_ops.split(vec, sections, 0)
+            res = []
+            if total_elements == vec.shape[0]:
+                res = _C_ops.split(vec, sections, 0)
+            elif total_elements < vec.shape[0]:
+                pointer = 0
+                for section in sections:
+                    res.append(vec[pointer : pointer + section])
+                    pointer += section
+            else:
+                raise ValueError(
+                    "The total_elements of vec should be equal to or larger than the number of elements in parameters."
+                )
             for i in range(0, len(parameters)):
                 res[i]._share_underline_tensor_to(parameters[i])
     else:

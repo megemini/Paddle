@@ -26,8 +26,7 @@
 #include "paddle/phi/kernels/funcs/jit/kernels.h"
 #include "paddle/phi/kernels/funcs/sequence2batch.h"
 
-namespace phi {
-namespace fusion {
+namespace phi::fusion {
 
 #define INIT_BASE_DEFINES                                  \
   auto x_lod = x.lod();                                    \
@@ -72,13 +71,6 @@ void SeqCompute(const Context& dev_ctx,
                 const std::string& gate_activation,
                 const bool is_reverse,
                 const bool use_seq,
-                const bool origin_mode,
-                const bool use_mkldnn,
-                const std::string& mkldnn_data_type,
-                const float scale_data,
-                const float shift_data,
-                const std::vector<float>& scale_weights,
-                const bool force_fp32_output,
                 DenseTensor* reordered_h0,
                 DenseTensor* xx,
                 DenseTensor* batched_input,
@@ -183,13 +175,6 @@ void BatchCompute(const Context& dev_ctx,
                   const std::string& gate_activation,
                   const bool is_reverse,
                   const bool use_seq,
-                  const bool origin_mode,
-                  const bool use_mkldnn,
-                  const std::string& mkldnn_data_type,
-                  const float scale_data,
-                  const float shift_data,
-                  const std::vector<float>& scale_weights,
-                  const bool force_fp32_output,
                   DenseTensor* reordered_h0,
                   DenseTensor* xx,
                   DenseTensor* batched_input,
@@ -208,13 +193,6 @@ void BatchCompute(const Context& dev_ctx,
                            gate_activation,
                            is_reverse,
                            use_seq,
-                           origin_mode,
-                           use_mkldnn,
-                           mkldnn_data_type,
-                           scale_data,
-                           shift_data,
-                           scale_weights,
-                           force_fp32_output,
                            reordered_h0,
                            xx,
                            batched_input,
@@ -227,7 +205,7 @@ void BatchCompute(const Context& dev_ctx,
   T* batched_out_data = dev_ctx.template Alloc<T>(batched_out);
   dev_ctx.template Alloc<T>(hidden);
   auto blas = phi::funcs::GetBlas<Context, T>(dev_ctx);
-  phi::funcs::LoDTensor2BatchFunctor<Context, T> to_batch;
+  phi::funcs::DenseTensor2BatchFunctor<Context, T> to_batch;
 
   phi::funcs::FCFunctor<Context, T> fc;
   if (M > D3) {
@@ -355,7 +333,7 @@ void BatchCompute(const Context& dev_ctx,
     batched_input_data = cur_batched_data;
   }
 
-  phi::funcs::Batch2LoDTensorFunctor<Context, T> to_seq;
+  phi::funcs::Batch2DenseTensorFunctor<Context, T> to_seq;
   batched_out->set_lod(batched_lod);
   to_seq(dev_ctx, *batched_out, hidden);
 }
@@ -372,11 +350,6 @@ void FusionGRUKernel(const Context& dev_ctx,
                      const bool is_reverse,
                      const bool use_seq,
                      const bool origin_mode,
-                     const bool use_mkldnn,
-                     const std::string& mkldnn_data_type,
-                     const float scale_data,
-                     const float shift_data,
-                     const std::vector<float>& scale_weights,
                      const bool force_fp32_output,
                      DenseTensor* reordered_h0,
                      DenseTensor* xx,
@@ -394,13 +367,6 @@ void FusionGRUKernel(const Context& dev_ctx,
                            gate_activation,
                            is_reverse,
                            use_seq,
-                           origin_mode,
-                           use_mkldnn,
-                           mkldnn_data_type,
-                           scale_data,
-                           shift_data,
-                           scale_weights,
-                           force_fp32_output,
                            reordered_h0,
                            xx,
                            batched_input,
@@ -417,13 +383,6 @@ void FusionGRUKernel(const Context& dev_ctx,
                              gate_activation,
                              is_reverse,
                              use_seq,
-                             origin_mode,
-                             use_mkldnn,
-                             mkldnn_data_type,
-                             scale_data,
-                             shift_data,
-                             scale_weights,
-                             force_fp32_output,
                              reordered_h0,
                              xx,
                              batched_input,
@@ -432,8 +391,7 @@ void FusionGRUKernel(const Context& dev_ctx,
   }
 }
 
-}  // namespace fusion
-}  // namespace phi
+}  // namespace phi::fusion
 
 PD_REGISTER_KERNEL(
     fusion_gru, CPU, ALL_LAYOUT, phi::fusion::FusionGRUKernel, float, double) {}

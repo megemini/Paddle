@@ -17,9 +17,7 @@
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_utils.h"
 #include "paddle/phi/kernels/funcs/layer_norm_impl.cu.h"
-#ifndef PADDLE_WITH_HIP
 #include "paddle/phi/kernels/fusion/gpu/fused_dropout_helper.h"
-#endif
 
 namespace phi {
 namespace fusion {
@@ -42,7 +40,6 @@ void FusedBiasDropoutResidualLnKernel(
     DenseTensor* dropout_mask_out,
     DenseTensor* ln_mean,
     DenseTensor* ln_variance) {
-#ifndef PADDLE_WITH_HIP
   using U = phi::funcs::LayerNormParamType<T>;
   auto* x_data = x.data<T>();
   auto* bias_data = (bias.get_ptr() == nullptr) ? nullptr : bias->data<T>();
@@ -64,7 +61,7 @@ void FusedBiasDropoutResidualLnKernel(
           : dev_ctx.template Alloc<uint8_t>(
                 dropout_mask_out, dropout_mask_out->numel() * sizeof(uint8_t));
   auto* y_data = dev_ctx.template Alloc<T>(y, y->numel() * sizeof(T));
-
+  if (y->numel() == 0) return;
   const auto input_x_dims = x.dims();
   int bsz_seq = 1;
   for (int i = 0; i < input_x_dims.size() - 1; i++) {
@@ -95,14 +92,20 @@ void FusedBiasDropoutResidualLnKernel(
       y_data,
       ln_mean_data,
       ln_var_data);
-#else
-  PADDLE_THROW(phi::errors::Unimplemented(
-      "FusedBiasDropoutResidualLnKernel not surpport for rocm"));
-#endif
 }
 }  // namespace fusion
 }  // namespace phi
 
+#ifdef PADDLE_WITH_HIP
+PD_REGISTER_KERNEL(fused_bias_dropout_residual_layer_norm,
+                   GPU,
+                   ALL_LAYOUT,
+                   phi::fusion::FusedBiasDropoutResidualLnKernel,
+                   float,
+                   phi::dtype::float16) {
+  kernel->OutputAt(1).SetDataType(phi::DataType::UINT8);
+}
+#else
 PD_REGISTER_KERNEL(fused_bias_dropout_residual_layer_norm,
                    GPU,
                    ALL_LAYOUT,
@@ -112,3 +115,4 @@ PD_REGISTER_KERNEL(fused_bias_dropout_residual_layer_norm,
                    phi::dtype::float16) {
   kernel->OutputAt(1).SetDataType(phi::DataType::UINT8);
 }
+#endif

@@ -17,7 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import _legacy_C_ops
+from paddle import _C_ops
 
 
 class TestCapture:
@@ -34,15 +34,15 @@ def grad_hook(grad):
     return grad
 
 
-class TestBakcwardFunctionHookError(unittest.TestCase):
+class TestBackwardFunctionHookError(unittest.TestCase):
     def test_hook(self):
         input_data = np.ones([4, 4]).astype('float32')
 
         x = paddle.to_tensor(input_data.astype(np.float32), stop_gradient=False)
         z = paddle.to_tensor(input_data.astype(np.float32), stop_gradient=False)
 
-        y = _legacy_C_ops.sigmoid(x)
-        out = _legacy_C_ops.matmul_v2(y, z, 'trans_x', False, 'trans_y', False)
+        y = _C_ops.sigmoid(x)
+        out = _C_ops.matmul(y, z, False, False)
 
         y.register_hook(grad_hook)
 

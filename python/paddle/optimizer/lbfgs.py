@@ -12,15 +12,67 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import os
+import warnings
 from collections import defaultdict
 from functools import reduce
+from typing import TYPE_CHECKING, NoReturn, TypedDict
+
+from typing_extensions import NotRequired
 
 import paddle
 
 from ..base import framework
 from .optimizer import Optimizer
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+    from paddle.nn.clip import GradientClipBase
+    from paddle.regularizer import WeightDecayRegularizer
+
+    from .optimizer import _ParameterConfig
+
 __all__ = []
+
+
+class _LbfgsState(TypedDict):
+    func_evals: int
+    n_iter: int
+    d: Tensor
+    alpha: Tensor
+    old_yk: list[Tensor]
+    old_sk: list[Tensor]
+    ro: list[Tensor]
+    H_diag: Tensor
+    prev_flat_grad: Tensor
+    prev_loss: float
+    al: NotRequired[list[Tensor]]
+
+
+class _LbfgsStateDict(TypedDict):
+    state: _LbfgsState
+
+
+def check_tf32_override():
+    """Check and warn about TF32 acceleration status"""
+    if os.getenv("NVIDIA_TF32_OVERRIDE") != "0":  # None or "1"
+        warnings.warn(
+            "Warning! TF32 Tensor Cores are enabled by default on some NVIDIA GPUs for faster computation, "
+            "but may compromise numerical precision in specific cases, particularly with the L-BFGS optimizer. "
+            "To disable it, set: NVIDIA_TF32_OVERRIDE=0"
+        )
+
+
+def dot(x, y):
+    r"""
+    NOTE: This is a temporary workaround for unstable result computed by `paddle.dot`,
+    which will be reverted when the problem is fixed."
+    """
+    return (x * y).sum(axis=-1)
 
 
 def _cubic_interpolate(x1, f1, g1, x2, f2, g2, bounds=None):
@@ -152,15 +204,10 @@ def _strong_wolfe(
     # evaluate objective and gradient using initial step
     loss_new, grad_new = obj_func(xk, alpha, d)
     ls_func_evals = 1
-    gtd_new = paddle.dot(grad_new, d)
+    gtd_new = dot(grad_new, d)
 
     # bracket an interval containing a point satisfying the Wolfe criteria
-    t_prev, f_prev, g_prev, gtd_prev = (
-        paddle.to_tensor(0, dtype=grad.dtype),
-        loss,
-        grad,
-        gtd,
-    )
+    t_prev, f_prev, g_prev, gtd_prev = (0, loss, grad, gtd)
     done = False
     ls_iter = 0
     while ls_iter < max_ls:
@@ -174,7 +221,7 @@ def _strong_wolfe(
             bracket_gtd = [gtd_prev, gtd_new]
             break
 
-        if paddle.abs(gtd_new) <= -c2 * gtd:
+        if abs(gtd_new) <= -c2 * gtd:
             bracket = [alpha]
             bracket_f = [loss_new]
             bracket_g = [grad_new]
@@ -210,7 +257,7 @@ def _strong_wolfe(
 
         loss_new, grad_new = obj_func(xk, alpha, d)
         ls_func_evals += 1
-        gtd_new = grad_new.dot(d)
+        gtd_new = dot(grad_new, d)
         ls_iter += 1
 
     # reached max number of iterations?
@@ -227,7 +274,7 @@ def _strong_wolfe(
     low_pos, high_pos = (0, 1) if bracket_f[0] <= bracket_f[-1] else (1, 0)
     while not done and ls_iter < max_ls:
         # line-search bracket is so small
-        if paddle.abs(bracket[1] - bracket[0]) * d_norm < tolerance_change:
+        if abs(bracket[1] - bracket[0]) * d_norm < tolerance_change:
             break
 
         # compute new trial value
@@ -253,9 +300,7 @@ def _strong_wolfe(
             # interpolation close to boundary
             if insuf_progress or alpha >= max(bracket) or alpha <= min(bracket):
                 # evaluate at 0.1 away from boundary
-                if paddle.abs(alpha - max(bracket)) < paddle.abs(
-                    alpha - min(bracket)
-                ):
+                if abs(alpha - max(bracket)) < abs(alpha - min(bracket)):
                     alpha = max(bracket) - eps
                 else:
                     alpha = min(bracket) + eps
@@ -267,7 +312,7 @@ def _strong_wolfe(
         # Evaluate new point
         loss_new, grad_new = obj_func(xk, alpha, d)
         ls_func_evals += 1
-        gtd_new = grad_new.dot(d)
+        gtd_new = dot(grad_new, d)
         ls_iter += 1
 
         if (
@@ -283,7 +328,7 @@ def _strong_wolfe(
                 (0, 1) if bracket_f[0] <= bracket_f[1] else (1, 0)
             )
         else:
-            if paddle.abs(gtd_new) <= -c2 * gtd:
+            if abs(gtd_new) <= -c2 * gtd:
                 # Wolfe conditions satisfied
                 done = True
             elif gtd_new * (bracket[high_pos] - bracket[low_pos]) >= 0:
@@ -327,28 +372,28 @@ class LBFGS(Optimizer):
         learning_rate (float, optional): learning rate .The default value is 1.
         max_iter (int, optional): maximal number of iterations per optimization step.
             The default value is 20.
-        max_eval (int, optional): maximal number of function evaluations per optimization
+        max_eval (int|None, optional): maximal number of function evaluations per optimization
             step. The default value is max_iter * 1.25.
         tolerance_grad (float, optional): termination tolerance on first order optimality
             The default value is 1e-5.
         tolerance_change (float, optional): termination tolerance on function
             value/parameter changes. The default value is 1e-9.
         history_size (int, optional): update history size. The default value is 100.
-        line_search_fn (string, optional): either 'strong_wolfe' or None. The default value is strong_wolfe.
-        parameters (list|tuple, optional): List/Tuple of ``Tensor`` names to update to minimize ``loss``. \
+        line_search_fn (string|None, optional): either 'strong_wolfe' or None. The default value is strong_wolfe.
+        parameters (list|tuple|None, optional): List/Tuple of ``Tensor`` names to update to minimize ``loss``. \
             This parameter is required in dygraph mode. The default value is None.
-        weight_decay (float|WeightDecayRegularizer, optional): The strategy of regularization. \
-            It canbe a float value as coeff of L2 regularization or \
+        weight_decay (int|float|WeightDecayRegularizer|None, optional): The strategy of regularization. \
+            It can be a int or float value as coeff of L2 regularization or \
             :ref:`api_paddle_regularizer_L1Decay`, :ref:`api_paddle_regularizer_L2Decay`.
             If a parameter has set regularizer using :ref:`api_paddle_ParamAttr` already, \
             the regularization setting here in optimizer will be ignored for this parameter. \
             Otherwise, the regularization setting here in optimizer will take effect. \
             Default None, meaning there is no regularization.
-        grad_clip (GradientClipBase, optional): Gradient cliping strategy, it's an instance of \
-            some derived class of ``GradientClipBase`` . There are three cliping strategies \
+        grad_clip (GradientClipBase|None, optional): Gradient clipping strategy, it's an instance of \
+            some derived class of ``GradientClipBase`` . There are three clipping strategies \
             ( :ref:`api_paddle_nn_ClipGradByGlobalNorm` , :ref:`api_paddle_nn_ClipGradByNorm` , \
             :ref:`api_paddle_nn_ClipGradByValue` ). Default None, meaning there is no gradient clipping.
-        name (str, optional): Normally there is no need for user to set this property.
+        name (str|None, optional): Normally there is no need for user to set this property.
             For more information, please refer to :ref:`api_guide_Name`.
             The default value is None.
 
@@ -391,26 +436,28 @@ class LBFGS(Optimizer):
             ...         return loss
             ...     opt.step(closure)
             ...
-            >>> for input, target in zip(inputs, targets):
-            ...     input = paddle.to_tensor(input)
-            ...     target = paddle.to_tensor(target)
+            >>> for input_np, target_np in zip(inputs, targets):
+            ...     input = paddle.to_tensor(input_np)
+            ...     target = paddle.to_tensor(target_np)
             ...     train_step(input, target)
     """
 
     def __init__(
         self,
-        learning_rate=1.0,
-        max_iter=20,
-        max_eval=None,
-        tolerance_grad=1e-7,
-        tolerance_change=1e-9,
-        history_size=100,
-        line_search_fn=None,
-        parameters=None,
-        weight_decay=None,
-        grad_clip=None,
-        name=None,
-    ):
+        learning_rate: float = 1.0,
+        max_iter: int = 20,
+        max_eval: int | None = None,
+        tolerance_grad: float = 1e-7,
+        tolerance_change: float = 1e-9,
+        history_size: int = 100,
+        line_search_fn: str | None = None,
+        parameters: Sequence[Tensor] | Sequence[_ParameterConfig] | None = None,
+        weight_decay: float | WeightDecayRegularizer | None = None,
+        grad_clip: GradientClipBase | None = None,
+        name: str | None = None,
+    ) -> None:
+        check_tf32_override()
+
         if max_eval is None:
             max_eval = max_iter * 5 // 4
 
@@ -446,7 +493,7 @@ class LBFGS(Optimizer):
 
         self._numel_cache = None
 
-    def state_dict(self):
+    def state_dict(self) -> _LbfgsStateDict:
         r"""Returns the state of the optimizer as a :class:`dict`.
 
         Return:
@@ -490,7 +537,6 @@ class LBFGS(Optimizer):
                 ...     loss = train_step(inputs, targets)
                 ...     n_iter = opt.state_dict()["state"]["func_evals"]
                 ...     print("n_iter:", n_iter)
-                ...
         """
 
         packed_state = {}
@@ -499,7 +545,7 @@ class LBFGS(Optimizer):
 
         return {'state': packed_state}
 
-    def _numel(self):
+    def _numel(self) -> int:
         # compute the number of all parameters
         if self._numel_cache is None:
             self._numel_cache = reduce(
@@ -547,7 +593,7 @@ class LBFGS(Optimizer):
         return loss, flat_grad
 
     @framework.non_static_only
-    def step(self, closure):
+    def step(self, closure) -> Tensor:
         """Performs a single optimization step.
 
         Args:
@@ -646,7 +692,7 @@ class LBFGS(Optimizer):
                     # do lbfgs update (update memory)
                     y = flat_grad.subtract(prev_flat_grad)
                     s = d.multiply(paddle.to_tensor(alpha, dtype=d.dtype))
-                    ys = y.dot(s)
+                    ys = dot(y, s)
                     if ys > 1e-10:
                         # updating memory
                         if len(old_yk) == history_size:
@@ -661,7 +707,7 @@ class LBFGS(Optimizer):
                         ro.append(1.0 / ys)
 
                         # update scale of initial Hessian approximation
-                        H_diag = ys / y.dot(y)  # (y*y)
+                        H_diag = ys / dot(y, y)  # (y*y)
 
                     # compute the approximate (L-BFGS) inverse Hessian
                     # multiplied by the gradient
@@ -674,14 +720,14 @@ class LBFGS(Optimizer):
                     # iteration in L-BFGS loop collapsed to use just one buffer
                     q = flat_grad.neg()
                     for i in range(num_old - 1, -1, -1):
-                        al[i] = old_sk[i].dot(q) * ro[i]
+                        al[i] = dot(old_sk[i], q) * ro[i]
                         paddle.assign(q.add(old_yk[i] * (-al[i])), q)
 
                     # multiply by initial Hessian
                     # r/d is the final direction
                     d = r = paddle.multiply(q, H_diag)
                     for i in range(num_old):
-                        be_i = old_yk[i].dot(r) * ro[i]
+                        be_i = dot(old_yk[i], r) * ro[i]
                         paddle.assign(r.add(old_sk[i] * (al[i] - be_i)), r)
 
                 if prev_flat_grad is None:
@@ -702,7 +748,7 @@ class LBFGS(Optimizer):
                     alpha = learning_rate
 
                 # directional derivative
-                gtd = flat_grad.dot(d)
+                gtd = dot(flat_grad, d)
 
                 # directional derivative is below tolerance
                 if gtd > -tolerance_change:
@@ -772,7 +818,7 @@ class LBFGS(Optimizer):
 
     def minimize(
         self, loss, startup_program=None, parameters=None, no_grad_set=None
-    ):
+    ) -> NoReturn:
         """Empty method. LBFGS optimizer does not use this way to minimize ``loss``. Please refer 'Examples' of LBFGS() above for usage."""
         raise NotImplementedError(
             "LBFGS optimizer does not use this way to minimize loss. Please refer 'Examples' of LBFGS() for usage."

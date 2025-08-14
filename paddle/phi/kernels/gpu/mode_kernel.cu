@@ -33,19 +33,31 @@ void ModeKernel(const Context& dev_ctx,
   // get the input dims
   const auto& in_dims = x.dims();
   for (int i = 0; i < in_dims.size(); i++) {
-    PADDLE_ENFORCE_LT(0,
-                      in_dims[i],
-                      errors::InvalidArgument(
-                          "The dims of Input(X) should be greater than 0."));
+    PADDLE_ENFORCE_LE(
+        0,
+        in_dims[i],
+        errors::InvalidArgument(
+            "The dims of Input(X) should be greater than or equal to 0."));
   }
-  // calcluate the real axis
+  // calculate the real axis
   if (axis < 0) axis += in_dims.size();
+  if (keepdim) {
+    PADDLE_ENFORCE_GT(
+        in_dims[axis],
+        0,
+        errors::InvalidArgument(
+            "If keepdim is True, in_dims[axis] should be greater than 0."));
+  }
 
   auto out_dims = out->dims();
 
   const T* input_data = x.data<T>();
   T* output_data = dev_ctx.template Alloc<T>(out);
   int64_t* indices_data = dev_ctx.template Alloc<int64_t>(indices);
+  // out and indices have the same numel.
+  if (out->numel() == 0) {
+    return;
+  }
 
   // For 0D Tensor
   if (in_dims.size() == 0) {
@@ -93,7 +105,7 @@ void ModeKernel(const Context& dev_ctx,
     }
     trans_out_shape[in_dims.size() - 1] = 1;
 
-    // second step, tranpose the input
+    // second step, transpose the input
     DenseTensor trans_input;
     trans_input.Resize(trans_shape);
     dev_ctx.template Alloc<T>(&trans_input);
@@ -118,7 +130,7 @@ void ModeKernel(const Context& dev_ctx,
                             input_height,
                             trans_out_data,
                             trans_ind_data);
-    // last step, tranpose back the indices and output
+    // last step, transpose back the indices and output
     funcs::TransCompute<Context, int64_t>(
         ndims, dev_ctx, trans_ind, indices, trans_axis);
     funcs::TransCompute<Context, T>(ndims, dev_ctx, trans_out, out, trans_axis);

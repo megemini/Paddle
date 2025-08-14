@@ -208,12 +208,12 @@ class TestPostTrainingQuantization(unittest.TestCase):
         image_shape = [3, 224, 224]
         config = paddle.inference.Config(model_path)
         config.disable_gpu()
-        config.enable_mkldnn()
+        config.enable_onednn()
         config.switch_ir_optim()
         config.set_cpu_math_library_num_threads(1)
         config.disable_glog_info()
         if is_quantized_model:
-            config.enable_mkldnn_int8()
+            config.enable_onednn_int8()
         predictor = paddle.inference.create_predictor(config)
 
         input_names = predictor.get_input_names()
@@ -311,9 +311,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         model_cache_folder = self.download_data(data_urls, data_md5s, model)
 
         print(
-            "Start INT8 post training quantization for {} on {} images ...".format(
-                model, sample_iterations * batch_size
-            )
+            f"Start INT8 post training quantization for {model} on {sample_iterations * batch_size} images ..."
         )
         self.generate_quantized_model(
             os.path.join(model_cache_folder, "model"),
@@ -327,9 +325,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         )
 
         print(
-            "Start FP32 inference for {} on {} images ...".format(
-                model, infer_iterations * batch_size
-            )
+            f"Start FP32 inference for {model} on {infer_iterations * batch_size} images ..."
         )
         (fp32_throughput, fp32_latency, fp32_acc1) = self.run_program(
             os.path.join(model_cache_folder, "model"),
@@ -338,9 +334,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         )
 
         print(
-            "Start INT8 inference for {} on {} images ...".format(
-                model, infer_iterations * batch_size
-            )
+            f"Start INT8 inference for {model} on {infer_iterations * batch_size} images ..."
         )
         (int8_throughput, int8_latency, int8_acc1) = self.run_program(
             self.int8_model,
@@ -351,14 +345,10 @@ class TestPostTrainingQuantization(unittest.TestCase):
 
         print(f"---Post training quantization of {algo} method---")
         print(
-            "FP32 {}: batch_size {}, throughput {} images/second, latency {} second, accuracy {}.".format(
-                model, batch_size, fp32_throughput, fp32_latency, fp32_acc1
-            )
+            f"FP32 {model}: batch_size {batch_size}, throughput {fp32_throughput} images/second, latency {fp32_latency} second, accuracy {fp32_acc1}."
         )
         print(
-            "INT8 {}: batch_size {}, throughput {} images/second, latency {} second, accuracy {}.\n".format(
-                model, batch_size, int8_throughput, int8_latency, int8_acc1
-            )
+            f"INT8 {model}: batch_size {batch_size}, throughput {int8_throughput} images/second, latency {int8_latency} second, accuracy {int8_acc1}.\n"
         )
         sys.stdout.flush()
 
@@ -366,7 +356,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         self.assertLess(delta_value, diff_threshold)
 
 
-class TestMKLDNNInt8ForResnet50AvgONNXFormat(TestPostTrainingQuantization):
+class TestONEDNNInt8ForResnet50AvgONNXFormat(TestPostTrainingQuantization):
     def test_onnx_format_avg_resnet50(self):
         model = "resnet50"
         algo = "avg"

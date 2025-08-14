@@ -15,28 +15,39 @@ limitations under the License. */
 #include "paddle/phi/api/include/tensor.h"
 
 #include "glog/logging.h"
-
-#include "paddle/phi/common/int_array.h"
-#include "paddle/phi/core/compat/convert_utils.h"
-#include "paddle/phi/core/tensor_base.h"
+#include "paddle/common/flags.h"
 
 #include "paddle/phi/api/include/context_pool.h"
 #include "paddle/phi/api/include/sparse_api.h"
 #include "paddle/phi/api/lib/api_gen_utils.h"
 #include "paddle/phi/api/lib/kernel_dispatch.h"
+#include "paddle/phi/common/int_array.h"
+#include "paddle/phi/core/compat/convert_utils.h"
+#include "paddle/phi/core/tensor_base.h"
 #include "paddle/phi/core/tensor_utils.h"
+#include "paddle/phi/core/visit_type.h"
 #include "paddle/phi/infermeta/unary.h"
+#include "paddle/phi/kernels/funcs/strided_utils.h"
 // clang-format off
 #ifdef PADDLE_WITH_DISTRIBUTE
 #include "paddle/phi/infermeta/spmd_rules/rules.h"
 #include "paddle/phi/core/distributed/auto_parallel/reshard/reshard_utils.h"
 #include "paddle/phi/api/lib/data_transform.h"
 #endif
+#include "paddle/utils/optional.h"
+
+COMMON_DECLARE_bool(use_stride_kernel);
 namespace paddle {
 namespace experimental {
 // declare cast api
-Tensor cast(const Tensor &x, DataType out_dtype);
-Tensor copy_to(const Tensor &x, const Place &place, bool blocking);
+Tensor cast(const Tensor &x,
+DataType out_dtype,
+paddle::optional<Tensor*> input_out = paddle::none);
+
+Tensor copy_to(const Tensor &x,
+const Place &place,
+bool blocking,
+ paddle::optional<Tensor*> input_out = paddle::none);
 }  // namespace experimental
 
 // TODO(chenweihang): Remove this namespace using-directives later
@@ -87,8 +98,13 @@ Tensor::copy_to<phi::dtype::float16>(const Place &target_place) const;
 void Tensor::copy_(const Tensor &src,
                    const phi::Place &target_place,
                    bool blocking) {
-  if (!src.initialized()) {
+  if (!src.has_allocation()) {
     VLOG(8) << "Src is empty, skip copy";
+    return;
+  }
+
+  if (src.place().GetType() == AllocationType::UNDEFINED) {
+    VLOG(8) << "Src place is UNDEFINED, skip copy";
     return;
   }
 
@@ -96,21 +112,21 @@ void Tensor::copy_(const Tensor &src,
   if (initialized()) {
     PADDLE_ENFORCE_EQ(dtype(),
                       src.dtype(),
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "Tensor %s has different data type with Tensor %s, "
                           "Tensor Copy cannot be performed!",
                           name(),
                           src.name()));
     PADDLE_ENFORCE_EQ(impl()->type_info().id(),
                       src.impl()->type_info().id(),
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "Tensor %s has different type with Tensor %s, Tensor "
                           "Copy cannot be performed!",
                           name(),
                           src.name()));
     PADDLE_ENFORCE_EQ(target_place,
                       place(),
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "Place is different of dst tensor and args %s, which "
                           "current tensor holds %s "
                           "Copy cannot be performed!",
@@ -136,7 +152,7 @@ void Tensor::copy_(const Tensor &src,
   auto *dev_ctx = pool.GetMutable(
       place.GetType() == target_place.GetType() ? target_place : place);
 
-  if (kernel_type == KernelType::DENSE_TENSOR_KENREL) {
+  if (kernel_type == KernelType::DENSE_TENSOR_KERNEL) {
 #ifdef PADDLE_WITH_DISTRIBUTE
   bool run_auto_parallel = AllInputsAreDistTensor(src);
   bool rank_is_in_current_mesh = false;
@@ -154,7 +170,7 @@ void Tensor::copy_(const Tensor &src,
       PADDLE_ENFORCE_EQ((meta_dist_input_x.dist_attr() == this_dist_attr
                         || this_dist_attr.empty()),
                         true,
-                        phi::errors::PreconditionNotMet(
+                        common::errors::PreconditionNotMet(
                             "DistAttr is different of dst "
                             "tensor and args %s, which "
                             "current tensor holds %s "
@@ -189,18 +205,54 @@ void Tensor::copy_(const Tensor &src,
     return;
   }
 #endif
-    SetKernelOutput(this);
-    phi::MetaTensor meta_out(impl_.get());
-    phi::UnchangedInferMeta(
+    if(is_dense_tensor() && has_allocation() &&
+      initialized() && src.is_dense_tensor()) {
+      auto dst_tensor = static_cast<phi::DenseTensor*>(impl_.get());
+      auto src_tensor = std::static_pointer_cast<phi::DenseTensor>(src.impl_);
+      if(!dst_tensor->meta().is_contiguous() ||
+        !src_tensor->meta().is_contiguous()) {
+        VLOG(8) << "Tensor::copy_ , src or dst tesnor is not contiguous";
+        if (!FLAGS_use_stride_kernel) {
+          PADDLE_THROW(common::errors::Fatal(
+              "FLAGS_use_stride_kernel is closed. Strided kernel "
+              "be called, something wrong has happened!"));
+        }
+        PD_VISIT_ALL_TYPES(src_tensor->dtype(), "StridedTensorCopy", ([&] {
+                          phi::StridedTensorCopy<data_t>(
+                              *src_tensor,
+                              common::vectorize<int64_t>(dst_tensor->dims()),
+                              common::vectorize<int64_t>(dst_tensor->strides()),
+                              dst_tensor->offset(),
+                              dst_tensor);
+                        }));
+      } else {
+        SetKernelOutput(this);
+        phi::MetaTensor meta_out(impl_.get());
+        phi::UnchangedInferMeta(
+          MakeMetaTensor(
+              *(std::static_pointer_cast<phi::DenseTensor>(src.impl_))),
+          &meta_out);
+        phi::Copy(*dev_ctx,
+                  (*(std::static_pointer_cast<phi::DenseTensor>(src.impl_))),
+                  target_place,
+                  blocking,
+                  static_cast<phi::DenseTensor *>(impl_.get()));
+      }
+    } else {
+      SetKernelOutput(this);
+      phi::MetaTensor meta_out(impl_.get());
+      phi::UnchangedInferMeta(
         MakeMetaTensor(
             *(std::static_pointer_cast<phi::DenseTensor>(src.impl_))),
         &meta_out);
-    phi::Copy(*dev_ctx,
-              (*(std::static_pointer_cast<phi::DenseTensor>(src.impl_))),
-              target_place,
-              blocking,
-              static_cast<phi::DenseTensor *>(impl_.get()));
-  } else if (kernel_type == KernelType::SELECTED_ROWS_KENREL) {
+      phi::Copy(*dev_ctx,
+                (*(std::static_pointer_cast<phi::DenseTensor>(src.impl_))),
+                target_place,
+                blocking,
+                static_cast<phi::DenseTensor *>(impl_.get()));
+    }
+
+  } else if (kernel_type == KernelType::SELECTED_ROWS_KERNEL) {
     SetSelectedRowsKernelOutput(this);
     phi::MetaTensor meta_out(impl_.get());
     phi::UnchangedInferMeta(
@@ -237,7 +289,7 @@ void Tensor::copy_(const Tensor &src,
               blocking,
               static_cast<phi::SparseCsrTensor *>(impl_.get()));
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "We currently only support dense tensor copy for now and if u need to "
         "copy selected rows please raise a issue."));
   }

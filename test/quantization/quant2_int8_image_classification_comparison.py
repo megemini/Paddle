@@ -25,7 +25,7 @@ import numpy as np
 import paddle
 from paddle.base.framework import IrGraph
 from paddle.framework import core
-from paddle.static.quantization import Quant2Int8MkldnnPass
+from paddle.static.quantization import Quant2Int8OnednnPass
 
 paddle.enable_static()
 
@@ -211,7 +211,7 @@ class Quant2Int8ImageClassificationComparisonTest(unittest.TestCase):
             graph = IrGraph(core.Graph(inference_program.desc), for_test=True)
             if self._debug:
                 graph.draw('.', 'quant_orig', graph.all_op_nodes())
-            quant_transform_pass = Quant2Int8MkldnnPass(
+            quant_transform_pass = Quant2Int8OnednnPass(
                 self._quantized_ops,
                 _op_ids_to_skip=self._op_ids_to_skip,
                 _scope=inference_scope,
@@ -262,7 +262,7 @@ class Quant2Int8ImageClassificationComparisonTest(unittest.TestCase):
                         },
                         fetch_list=fetch_targets,
                     )
-                    batch_time = (time.time() - start) * 1000  # in miliseconds
+                    batch_time = (time.time() - start) * 1000  # in milliseconds
                     batch_acc1, batch_acc5 = out[1], out[2]
                     outputs.append(batch_acc1)
                 else:
@@ -273,7 +273,7 @@ class Quant2Int8ImageClassificationComparisonTest(unittest.TestCase):
                         feed={feed_target_names[0]: images},
                         fetch_list=fetch_targets,
                     )
-                    batch_time = (time.time() - start) * 1000  # in miliseconds
+                    batch_time = (time.time() - start) * 1000  # in milliseconds
                     outputs.append(out[0])
                     # Calculate accuracy result
                     batch_acc1, batch_acc5 = self._get_batch_accuracy(
@@ -332,9 +332,7 @@ class Quant2Int8ImageClassificationComparisonTest(unittest.TestCase):
 
     def _compare_accuracy(self, threshold, quant_acc1, int8_acc1):
         _logger.info(
-            'Accepted top1 accuracy drop threshold: {}. (condition: (Quant_top1_acc - IN8_top1_acc) <= threshold && Quant_top1_acc > 0.5 && INT8_top1_acc > 0.5)'.format(
-                threshold
-            )
+            f'Accepted top1 accuracy drop threshold: {threshold}. (condition: (Quant_top1_acc - IN8_top1_acc) <= threshold && Quant_top1_acc > 0.5 && INT8_top1_acc > 0.5)'
         )
         # We assume valid accuracy to be at least 0.5
         assert quant_acc1 > 0.5

@@ -15,10 +15,6 @@
 #pragma once
 
 #include <Python.h>
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
 
 #include "paddle/fluid/eager/autograd_meta.h"
 #include "paddle/fluid/eager/grad_node_info.h"
@@ -109,7 +105,7 @@ class GradNodePyLayer : public GradNodeBase {
   PyObject* ctx_{nullptr};
   std::string name_{""};
   std::vector<std::vector<phi::DenseTensorMeta>> forward_outputs_meta_;
-  std::vector<std::vector<paddle::platform::Place>> forward_outputs_place_;
+  std::vector<std::vector<phi::Place>> forward_outputs_place_;
   std::vector<std::vector<phi::distributed::TensorDistAttr>>
       forward_outputs_dist_attr_;
   std::vector<std::vector<phi::DDim>> forward_outputs_global_dims_;

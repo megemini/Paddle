@@ -15,6 +15,7 @@
 import os
 import struct
 from collections import defaultdict
+from functools import partial
 
 import config
 import numpy as np
@@ -31,11 +32,13 @@ from paddle.base.framework import (
     canonicalize_attrs,
     in_dygraph_mode,
     in_pir_mode,
+    paddle_type_to_proto_type,
     use_pir_api,
 )
 from paddle.decomposition import decompose
 from paddle.incubate.autograd import primapi
 from paddle.jit.dy2static.utils import parse_arg_and_kwargs
+from paddle.pir.core import vartype_to_datatype
 
 
 def flatten(nest_list):
@@ -67,6 +70,14 @@ def convert_uint16_to_float(in_list):
     return np.reshape(out, in_list.shape)
 
 
+def patch_for_one_hot(inputs, attrs, args):
+    if 'depth_tensor' in inputs.keys():
+        args[1] = inputs['depth_tensor'].item()
+    else:
+        args[1] = attrs['depth']
+    return args
+
+
 # TODO(wanghao107): OpTestUtils will be moved to op_test.py
 class OpTestUtils:
     @classmethod
@@ -89,18 +100,13 @@ class OpTestUtils:
             """we think the kernel_sig is missing."""
             kernel_sig = None
             print(
-                "[Warning: op_test.py] Kernel Signature is not found for %s, fall back to intermediate state."
-                % op_type
+                f"[Warning: op_test.py] Kernel Signature is not found for {op_type}, fall back to intermediate state."
             )
         return kernel_sig
 
     @classmethod
     def prepare_python_api_arguments(
-        cls,
-        api,
-        op_proto_ins,
-        op_proto_attrs,
-        kernel_sig,
+        cls, api, op_proto_ins, op_proto_attrs, kernel_sig, target_dtype=None
     ):
         """map from `op proto inputs and attrs` to `api input list and api attrs dict`
 
@@ -114,9 +120,9 @@ class OpTestUtils:
             return isinstance(a, Empty)
 
         def get_default(idx, defaults):
-            assert not isinstance(defaults[idx], Empty), (
-                "%d-th params of python api don't have default value." % idx
-            )
+            assert not isinstance(
+                defaults[idx], Empty
+            ), f"{idx}-th params of python api don't have default value."
             return defaults[idx]
 
         def to_defaults_list(params, defaults):
@@ -146,6 +152,21 @@ class OpTestUtils:
             else:
                 return Empty()
 
+        def convert_dtype(dtype, target_dtype):
+            if target_dtype is None:
+                return dtype
+            if (
+                isinstance(dtype, core.VarDesc.VarType)
+                and target_dtype is paddle.pir.core.DataType
+            ):
+                return vartype_to_datatype[dtype]
+            if (
+                isinstance(dtype, paddle.pir.core.DataType)
+                and target_dtype is core.VarDesc.VarType
+            ):
+                return paddle_type_to_proto_type[dtype]
+            return dtype
+
         # NOTE(xiongkun): the logic of constructing parameters:
         # for example:
         #    python api: cumprod(x, dim, dtype=None, name=None)
@@ -165,9 +186,14 @@ class OpTestUtils:
         api_defaults = [
             Empty() for i in range(len(api_params) - len(api_defaults))
         ] + api_defaults
+
+        # patch for one hot -> fill the api params
+        if "one_hot" in str(api):
+            api_defaults = [None for x in range(len(api_params))]
+
         assert len(api_defaults) == len(
             api_params
-        ), "Error happens. contack xiongkun03 to solve."
+        ), "Error happens. contact xiongkun03 to solve."
         inputs_sig, attrs_sig, outputs_sig = kernel_sig
         inputs_and_attrs = inputs_sig + attrs_sig
         input_arguments = [
@@ -185,7 +211,12 @@ class OpTestUtils:
         idx_of_op_proto_arguments = 0
         for idx, arg_name in enumerate(api_params):
             if arg_name in api_ignore_param_list:
-                results.append(get_default(idx, api_defaults))
+                to_append = (
+                    get_default(idx, api_defaults)
+                    if arg_name not in op_proto_attrs
+                    else op_proto_attrs[arg_name]
+                )
+                results.append(to_append)
                 if idx_of_op_proto_arguments < len(input_arguments):
                     idx_of_op_proto_arguments += 1
             else:
@@ -203,6 +234,10 @@ class OpTestUtils:
                 else:
                     results.append(tmp)
         assert len(results) == len(api_params)
+
+        results = paddle.utils.map_structure(
+            partial(convert_dtype, target_dtype=target_dtype), results
+        )
         return results
 
     @classmethod
@@ -237,11 +272,14 @@ class OpTestUtils:
 
 
 def apply_to_static(net, use_cinn):
-    build_strategy = paddle.static.BuildStrategy()
-    build_strategy.build_cinn_pass = use_cinn
-    return paddle.jit.to_static(
-        net, build_strategy=build_strategy, full_graph=True
-    )
+    if not paddle.framework.use_pir_api():
+        build_strategy = paddle.static.BuildStrategy()
+        build_strategy.build_cinn_pass = use_cinn
+        return paddle.jit.to_static(
+            net, build_strategy=build_strategy, full_graph=True
+        )
+    backend = "CINN" if use_cinn else None
+    return paddle.jit.to_static(net, backend=backend, full_graph=True)
 
 
 class PrimNet(paddle.nn.Layer):
@@ -268,7 +306,7 @@ class PrimForwardChecker:
     def init_checker(self):
         assert hasattr(
             self.op_test, 'prim_op_type'
-        ), "if you want to test comp op, please set prim_op_type with \'prim\' or \'comp\' in setUp function."
+        ), "If you want to test comp op, please set prim_op_type with 'prim' or 'comp' in setUp function."
         assert self.op_test.prim_op_type in [
             "comp",
             "prim",
@@ -461,7 +499,10 @@ class PrimForwardChecker:
                 eager_tensor_inputs,
                 attrs_outputs,
                 self.kernel_sig,
+                target_dtype=paddle.core.VarDesc.VarType,
             )
+            if "one_hot" in self.op_type:
+                args = patch_for_one_hot(self.inputs, self.attrs, args)
             inputs_sig, _, _ = self.kernel_sig
             args = OpTestUtils.assumption_assert_and_transform(
                 args, len(inputs_sig)
@@ -608,7 +649,14 @@ class PrimForwardChecker:
                     static_inputs,
                     attrs,
                     self.kernel_sig,
+                    target_dtype=(
+                        paddle.pir.core.DataType
+                        if in_pir_mode()
+                        else paddle.core.VarDesc.VarType
+                    ),
                 )
+                if "one_hot" in self.op_type:
+                    args = patch_for_one_hot(self.inputs, self.attrs, args)
                 inputs_sig, _, _ = self.kernel_sig
                 args = OpTestUtils.assumption_assert_and_transform(
                     args, len(inputs_sig)
@@ -633,9 +681,9 @@ class PrimForwardChecker:
                 # ensure the operator not in program if check_prim is True
                 if not in_pir_mode():
                     forward_ops = [op.type for op in main_program.blocks[0].ops]
-                    assert self.op_type not in forward_ops, (
-                        "%s shouldn't appear in program when check_prim is True"
-                    ) % (self.op_type)
+                    assert (
+                        self.op_type not in forward_ops
+                    ), f"{self.op_type} shouldn't appear in program when check_prim is True"
                 exe = paddle.static.Executor(self.place)
                 exe.run(startup_program)
                 ret = exe.run(main_program, feed=feed, fetch_list=ret)
@@ -646,13 +694,8 @@ class PrimForwardChecker:
         # check static forward
         if len(ret) != len(self.eager_desire):
             msg = (
-                "The static comp forward api out tensor nums is different with eager forward api out tensor nums on {}."
-                'when enable_fw_comp is {}, static comp forward api out tensor nums = {}, eager forward api out tensor nums = {}. \n'.format(
-                    str(self.place),
-                    self.enable_fw_comp,
-                    len(ret),
-                    len(self.eager_desire),
-                )
+                f"The static comp forward api out tensor nums is different with eager forward api out tensor nums on {self.place}."
+                f'when enable_fw_comp is {self.enable_fw_comp}, static comp forward api out tensor nums = {len(ret)}, eager forward api out tensor nums = {len(self.eager_desire)}. \n'
             )
             raise RuntimeError(msg)
         for i in range(len(ret)):
@@ -663,15 +706,10 @@ class PrimForwardChecker:
                 atol=self.fw_comp_atol,
                 err_msg=(
                     'Check static comp forward api out failed. Mismatch between static comp '
-                    'and eager on %s, when enable_fw_comp is %s,the forward api out tensor\'s index is : %d \n'
-                    'static comp forward api out tensor:\n%s\n eager forward api out tensor:\n%s\n'
-                    % (
-                        str(self.place),
-                        self.enable_fw_comp,
-                        i,
-                        ret[i],
-                        self.eager_desire[i],
-                    )
+                    f'and eager on {self.place!s}, when enable_fw_comp is {self.enable_fw_comp},'
+                    f'the forward api out tensor\'s index is : {i} \n'
+                    f'static comp forward api out tensor:\n{ret[i]}\n '
+                    f'eager forward api out tensor:\n{self.eager_desire[i]}\n'
                 ),
             )
         with dygraph_guard():
@@ -702,7 +740,14 @@ class PrimForwardChecker:
                 eager_tensor_inputs,
                 attrs_outputs,
                 self.kernel_sig,
+                target_dtype=(
+                    paddle.pir.core.DataType
+                    if use_pir_api()
+                    else paddle.core.VarDesc.VarType
+                ),
             )
+            if "one_hot" in self.op_type:
+                args = patch_for_one_hot(self.inputs, self.attrs, args)
             inputs_sig, _, _ = self.kernel_sig
             args = OpTestUtils.assumption_assert_and_transform(
                 args, len(inputs_sig)
@@ -717,9 +762,9 @@ class PrimForwardChecker:
                     .forward_program.block(0)
                     .ops
                 ]
-                assert self.op_type not in forward_ops, (
-                    "%s shouldn't appear in program when check_prim is True"
-                ) % (self.op_type)
+                assert (
+                    self.op_type not in forward_ops
+                ), f"{self.op_type} shouldn't appear in program when check_prim is True"
             ret = flatten(_as_list(net(args)))
             ret = paddle.utils.map_structure(lambda x: x.numpy(), ret)
             if OpTestUtils.is_bfloat16_type(self.dtype):
@@ -729,13 +774,8 @@ class PrimForwardChecker:
             # check jit comp forward
             if len(ret) != len(self.eager_desire):
                 msg = (
-                    "The jit comp forward api out tensor nums is different with eager forward api out tensor nums on {}."
-                    'when enable_fw_comp is {}, jit comp forward api out tensor nums = {}, eager forward api out tensor nums = {}. \n'.format(
-                        str(self.place),
-                        self.enable_fw_comp,
-                        len(ret),
-                        len(self.eager_desire),
-                    )
+                    f"The jit comp forward api out tensor nums is different with eager forward api out tensor nums on {self.place}."
+                    f'when enable_fw_comp is {self.enable_fw_comp}, jit comp forward api out tensor nums = {len(ret)}, eager forward api out tensor nums = {len(self.eager_desire)}. \n'
                 )
                 raise RuntimeError(msg)
             for i in range(len(ret)):
@@ -746,15 +786,10 @@ class PrimForwardChecker:
                     atol=atol,
                     err_msg=(
                         'Check jit comp forward api out failed. Mismatch between jit comp '
-                        'and eager on %s, when enable_fw_comp is %s,the forward api out tensor\'s index is : %d \n'
-                        'jit comp forward api out tensor:\n%s\n eager forward api out tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            self.enable_fw_comp,
-                            i,
-                            ret[i],
-                            self.eager_desire[i],
-                        )
+                        f'and eager on {self.place!s}, when enable_fw_comp is {self.enable_fw_comp},'
+                        f'the forward api out tensor\'s index is : {i} \n'
+                        f'jit comp forward api out tensor:\n{ret[i]}\n '
+                        f'eager forward api out tensor:\n{self.eager_desire[i]}\n'
                     ),
                 )
             core._set_prim_forward_enabled(False)
@@ -796,6 +831,11 @@ class PrimForwardChecker:
                 eager_tensor_inputs,
                 attrs_outputs,
                 self.kernel_sig,
+                target_dtype=(
+                    paddle.pir.core.DataType
+                    if use_pir_api()
+                    else paddle.core.VarDesc.VarType
+                ),
             )
             inputs_sig, _, _ = self.kernel_sig
             args = OpTestUtils.assumption_assert_and_transform(
@@ -812,9 +852,9 @@ class PrimForwardChecker:
                 .forward_program.block(0)
                 .ops
             ]
-            assert self.op_type not in forward_ops, (
-                "%s shouldn't appear in program when check_prim is True"
-            ) % (self.op_type)
+            assert (
+                self.op_type not in forward_ops
+            ), f"{self.op_type} shouldn't appear in program when check_prim is True"
             ret = flatten(_as_list(net(args)))
             ret = paddle.utils.map_structure(lambda x: x.numpy(), ret)
             if OpTestUtils.is_bfloat16_type(self.dtype):
@@ -824,14 +864,8 @@ class PrimForwardChecker:
             # check jit comp forward
             if len(ret) != len(self.eager_desire):
                 msg = (
-                    "The jit comp with cinn forward api out tensor nums is different with eager forward api out tensor nums on {}."
-                    'when enable_fw_comp is {}, enable_cinn is {}, jit comp forward api out tensor nums = {}, eager forward api out tensor nums = {}. \n'.format(
-                        str(self.place),
-                        self.enable_fw_comp,
-                        core.is_compiled_with_cinn() and self.enable_cinn,
-                        len(ret),
-                        len(self.eager_desire),
-                    )
+                    f"The jit comp with cinn forward api out tensor nums is different with eager forward api out tensor nums on {self.place}."
+                    f'when enable_fw_comp is {self.enable_fw_comp}, enable_cinn is {core.is_compiled_with_cinn() and self.enable_cinn}, jit comp forward api out tensor nums = {len(ret)}, eager forward api out tensor nums = {len(self.eager_desire)}. \n'
                 )
                 raise RuntimeError(msg)
             for i in range(len(ret)):
@@ -841,17 +875,12 @@ class PrimForwardChecker:
                     rtol=rtol,
                     atol=atol,
                     err_msg=(
-                        'Check jit comp with cinn forward api out failed. Mismatch between jit comp and eager on %s, '
-                        'when enable_fw_comp is %s, enable_cinn is %s, the forward api out tensor\'s index is : %d \n'
-                        'jit comp forward api out tensor:\n%s\n eager forward api out tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            self.enable_fw_comp,
-                            core.is_compiled_with_cinn() and self.enable_cinn,
-                            i,
-                            ret[i],
-                            self.eager_desire[i],
-                        )
+                        f'Check jit comp with cinn forward api out failed. Mismatch between jit comp and eager on {self.place!s}, '
+                        f'when enable_fw_comp is {self.enable_fw_comp}, '
+                        f'enable_cinn is {core.is_compiled_with_cinn() and self.enable_cinn}, '
+                        f'the forward api out tensor\'s index is : {i} \n'
+                        f'jit comp forward api out tensor:\n{ret[i]}\n '
+                        f'eager forward api out tensor:\n{self.eager_desire[i]}\n'
                     ),
                 )
             core._set_prim_forward_enabled(False)
@@ -902,9 +931,9 @@ class PrimGradChecker(PrimForwardChecker):
                     self.check_jit_comp()
 
     def get_output_dict(self, np_outputs, api_outputs, outputs_sig):
-        assert len(api_outputs) <= len(outputs_sig), (
-            "forward api outputs length must be the less than or equal to KernelSignature outputs,but receive {} and {}"
-        ).format(len(api_outputs), len(outputs_sig))
+        assert len(api_outputs) <= len(
+            outputs_sig
+        ), f"forward api outputs length must be the less than or equal to KernelSignature outputs,but receive {len(api_outputs)} and {len(outputs_sig)}"
         output_dict = {}
         for i in range(len(api_outputs)):
             output_name = outputs_sig[i]
@@ -926,9 +955,11 @@ class PrimGradChecker(PrimForwardChecker):
                 paddle.to_tensor(
                     data=np_v,
                     place=self.place,
-                    dtype="bfloat16"
-                    if OpTestUtils.is_bfloat16_type(np_v.dtype)
-                    else np_v.dtype,
+                    dtype=(
+                        "bfloat16"
+                        if OpTestUtils.is_bfloat16_type(np_v.dtype)
+                        else np_v.dtype
+                    ),
                 )
             )
         return eager_vs
@@ -943,9 +974,11 @@ class PrimGradChecker(PrimForwardChecker):
                 paddle.static.data(
                     name='v_' + str(i),
                     shape=np_v.shape,
-                    dtype="bfloat16"
-                    if OpTestUtils.is_bfloat16_type(np_v.dtype)
-                    else np_v.dtype,
+                    dtype=(
+                        "bfloat16"
+                        if OpTestUtils.is_bfloat16_type(np_v.dtype)
+                        else np_v.dtype
+                    ),
                 )
             )
             feed.update({'v_' + str(i): np_v})
@@ -976,6 +1009,7 @@ class PrimGradChecker(PrimForwardChecker):
                 eager_tensor_inputs,
                 attrs_outputs,
                 self.kernel_sig,
+                target_dtype=paddle.core.VarDesc.VarType,
             )
             inputs_sig, _, outputs_sig = self.kernel_sig
             if hasattr(self.op_test, "python_out_sig"):
@@ -999,7 +1033,7 @@ class PrimGradChecker(PrimForwardChecker):
                 xs.append(inputs_dict[self.inputs_to_check])
             vs = self.gen_eager_grad_outputs()
             no_grad_vars = self.gen_no_grad_set(
-                var_dict={**inputs_dict, **outputs_dict}
+                var_dict=inputs_dict | outputs_dict
             )
             ret = paddle.grad(
                 ys, xs, vs, allow_unused=True, no_grad_vars=no_grad_vars
@@ -1026,13 +1060,8 @@ class PrimGradChecker(PrimForwardChecker):
             # check static forward
             if len(actual_ret) != len(self.eager_desire):
                 msg = (
-                    "The eager comp grad out tensor nums is different with eager grad out tensor nums on {}."
-                    'when enable_rev_comp is {}, eager comp grad api out tensor nums = {}, eager grad out tensor nums = {}. \n'.format(
-                        str(self.place),
-                        self.enable_rev_comp,
-                        len(actual_ret),
-                        len(self.eager_desire),
-                    )
+                    f"The eager comp grad out tensor nums is different with eager grad out tensor nums on {self.place}."
+                    f'when enable_rev_comp is {self.enable_rev_comp}, eager comp grad api out tensor nums = {len(actual_ret)}, eager grad out tensor nums = {len(self.eager_desire)}. \n'
                 )
                 raise RuntimeError(msg)
             for i in range(len(actual_ret)):
@@ -1043,15 +1072,9 @@ class PrimGradChecker(PrimForwardChecker):
                     atol=rtol,
                     err_msg=(
                         'Check eager comp grad out failed. Mismatch between eager comp '
-                        'and eager on %s, when enable_rev_comp is %s,the eager comp grad out tensor\'s index is : %d \n'
-                        'eager comp grad out tensor:\n%s\n eager grad out tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            self.enable_rev_comp,
-                            i,
-                            actual_ret[i],
-                            self.eager_desire[i],
-                        )
+                        f'and eager on {self.place!s}, when enable_rev_comp is {self.enable_rev_comp},'
+                        f'the eager comp grad out tensor\'s index is : {i} \n'
+                        f'eager comp grad out tensor:\n{actual_ret[i]}\n eager grad out tensor:\n{self.eager_desire[i]}\n'
                     ),
                 )
             core.set_prim_eager_enabled(False)
@@ -1083,6 +1106,11 @@ class PrimGradChecker(PrimForwardChecker):
                     static_inputs,
                     attrs,
                     self.kernel_sig,
+                    target_dtype=(
+                        paddle.pir.core.DataType
+                        if in_pir_mode()
+                        else paddle.core.VarDesc.VarType
+                    ),
                 )
                 inputs_sig, _, outputs_sig = self.kernel_sig
                 if hasattr(self.op_test, "python_out_sig"):
@@ -1094,7 +1122,15 @@ class PrimGradChecker(PrimForwardChecker):
                 if not in_pir_mode():
                     primapi.to_prim(main_program.blocks)
                 else:
-                    fw_outs = decompose(main_program, fw_outs)
+                    blacklist = set()
+                    for op in main_program.global_block().ops:
+                        if core.has_custom_vjp(op):
+                            blacklist.add(op.name())
+                    fw_outs = decompose(
+                        main_program,
+                        fw_outs,
+                        blacklist=blacklist,
+                    )
                 outputs_dict = self.get_output_dict(
                     self.outputs, fw_outs, outputs_sig
                 )
@@ -1113,7 +1149,7 @@ class PrimGradChecker(PrimForwardChecker):
                 vs, vs_feed = self.gen_static_grad_outputs_and_feed()
                 feed.update(vs_feed)
                 no_grad_vars = self.gen_no_grad_set(
-                    var_dict={**inputs_dict, **outputs_dict}
+                    var_dict=inputs_dict | outputs_dict
                 )
                 if not in_pir_mode():
                     ret = paddle.static.gradients(
@@ -1125,9 +1161,9 @@ class PrimGradChecker(PrimForwardChecker):
                 if not in_pir_mode():
                     ops = [op.type for op in main_program.blocks[0].ops]
                     backward_op_type = self.op_type + "_grad"
-                    assert backward_op_type not in ops, (
-                        "%s shouldn't appear in program when check_prim is True"
-                    ) % (backward_op_type)
+                    assert (
+                        backward_op_type not in ops
+                    ), f"{backward_op_type} shouldn't appear in program when check_prim is True"
                 elif self.prim_op_type == "prim":
                     grad_ops = []
                     for op in main_program.global_block().ops:
@@ -1146,14 +1182,8 @@ class PrimGradChecker(PrimForwardChecker):
         # check static grad out
         if len(actual_ret) != len(self.eager_desire):
             msg = (
-                "The static comp grad out tensor nums is different with eager grad out tensor nums on {}."
-                'when enable_fw_comp is {},enable_rev_comp is {}, static comp grad out tensor nums = {}, eager grad out tensor nums = {}. \n'.format(
-                    str(self.place),
-                    self.enable_fw_comp,
-                    self.enable_rev_comp,
-                    len(actual_ret),
-                    len(self.eager_desire),
-                )
+                f"The static comp grad out tensor nums is different with eager grad out tensor nums on {self.place}."
+                f'when enable_fw_comp is {self.enable_fw_comp},enable_rev_comp is {self.enable_rev_comp}, static comp grad out tensor nums = {len(actual_ret)}, eager grad out tensor nums = {len(self.eager_desire)}. \n'
             )
             raise RuntimeError(msg)
         for i in range(len(actual_ret)):
@@ -1164,16 +1194,9 @@ class PrimGradChecker(PrimForwardChecker):
                 atol=atol,
                 err_msg=(
                     'Check static comp grad out failed. Mismatch between static comp '
-                    'and eager on %s, when enable_fw_comp is %s,enable_rev_comp is %s,the forward api out tensor\'s index is : %d \n'
-                    'static comp grad out tensor:\n%s\n eager grad out tensor:\n%s\n'
-                    % (
-                        str(self.place),
-                        self.enable_fw_comp,
-                        self.enable_rev_comp,
-                        i,
-                        actual_ret[i],
-                        self.eager_desire[i],
-                    )
+                    f'and eager on {self.place}, when enable_fw_comp is {self.enable_fw_comp},enable_rev_comp is { self.enable_rev_comp},'
+                    f'the forward api out tensor\'s index is : {i} \n'
+                    f'static comp grad out tensor:\n{actual_ret[i]}\n eager grad out tensor:\n{self.eager_desire[i]}\n'
                 ),
             )
         core._set_prim_forward_enabled(False)
@@ -1212,6 +1235,11 @@ class PrimGradChecker(PrimForwardChecker):
                 eager_tensor_inputs,
                 attrs_outputs,
                 self.kernel_sig,
+                target_dtype=(
+                    paddle.pir.core.DataType
+                    if use_pir_api()
+                    else paddle.core.VarDesc.VarType
+                ),
             )
             inputs_sig, _, outputs_sig = self.kernel_sig
             args = OpTestUtils.assumption_assert_and_transform(
@@ -1229,9 +1257,9 @@ class PrimGradChecker(PrimForwardChecker):
                     .ops
                 ]
                 backward_op_type = self.op_type + "_grad"
-                assert backward_op_type not in ops, (
-                    "%s shouldn't appear in program when check_prim is True"
-                ) % (backward_op_type)
+                assert (
+                    backward_op_type not in ops
+                ), f"{backward_op_type} shouldn't appear in program when check_prim is True"
             out = _as_list(net(args))
             if hasattr(self.op_test, "python_out_sig"):
                 outputs_sig = self.op_test.python_out_sig
@@ -1250,7 +1278,7 @@ class PrimGradChecker(PrimForwardChecker):
                 xs.append(inputs_dict[self.inputs_to_check])
             vs = self.gen_eager_grad_outputs()
             no_grad_vars = self.gen_no_grad_set(
-                var_dict={**inputs_dict, **outputs_dict}
+                var_dict=inputs_dict | outputs_dict
             )
             ret = paddle.grad(
                 ys, xs, vs, allow_unused=True, no_grad_vars=no_grad_vars
@@ -1263,14 +1291,8 @@ class PrimGradChecker(PrimForwardChecker):
             # check jit comp grad out
             if len(ret) != len(self.eager_desire):
                 msg = (
-                    "The jit comp grad out tensor nums is different with eager grad out tensor nums on {}."
-                    'when enable_fw_comp is {}, enable_rev_comp is {}, jit comp grad out tensor nums = {}, eager grad out tensor nums = {}. \n'.format(
-                        str(self.place),
-                        self.enable_fw_comp,
-                        self.enable_rev_comp,
-                        len(ret),
-                        len(self.eager_desire),
-                    )
+                    f"The jit comp grad out tensor nums is different with eager grad out tensor nums on {self.place}."
+                    f'when enable_fw_comp is {self.enable_fw_comp}, enable_rev_comp is {self.enable_rev_comp}, jit comp grad out tensor nums = {len(ret)}, eager grad out tensor nums = {len(self.eager_desire)}. \n'
                 )
                 raise RuntimeError(msg)
             for i in range(len(ret)):
@@ -1281,16 +1303,9 @@ class PrimGradChecker(PrimForwardChecker):
                     atol=atol,
                     err_msg=(
                         'Check jit comp grad out failed. Mismatch between jit comp '
-                        'and eager on %s, when enable_fw_comp is %s, enable_rev_comp is %s,the grad out tensor\'s index is : %d \n'
-                        'jit comp grad out tensor:\n%s\n eager grad out out tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            self.enable_fw_comp,
-                            self.enable_rev_comp,
-                            i,
-                            ret[i],
-                            self.eager_desire[i],
-                        )
+                        f'and eager on {self.place!s}, when enable_fw_comp is {self.enable_fw_comp}, '
+                        f'enable_rev_comp is {self.enable_rev_comp},the grad out tensor\'s index is : {i} \n'
+                        f'jit comp grad out tensor:\n{ret[i]}\n eager grad out out tensor:\n{self.eager_desire[i]}\n'
                     ),
                 )
             core._set_prim_forward_enabled(False)
@@ -1341,6 +1356,11 @@ class PrimGradChecker(PrimForwardChecker):
                 eager_tensor_inputs,
                 attrs_outputs,
                 self.kernel_sig,
+                target_dtype=(
+                    paddle.pir.core.DataType
+                    if use_pir_api()
+                    else paddle.core.VarDesc.VarType
+                ),
             )
             inputs_sig, _, outputs_sig = self.kernel_sig
             args = OpTestUtils.assumption_assert_and_transform(
@@ -1358,9 +1378,9 @@ class PrimGradChecker(PrimForwardChecker):
                 .ops
             ]
             backward_op_type = self.op_type + "_grad"
-            assert backward_op_type not in ops, (
-                "%s shouldn't appear in program when check_prim is True"
-            ) % (backward_op_type)
+            assert (
+                backward_op_type not in ops
+            ), f"{backward_op_type} shouldn't appear in program when check_prim is True"
 
             out = _as_list(net(args))
             if hasattr(self.op_test, "python_out_sig"):
@@ -1380,7 +1400,7 @@ class PrimGradChecker(PrimForwardChecker):
                 xs.append(inputs_dict[self.inputs_to_check])
             vs = self.gen_eager_grad_outputs()
             no_grad_vars = self.gen_no_grad_set(
-                var_dict={**inputs_dict, **outputs_dict}
+                var_dict=inputs_dict | outputs_dict
             )
             ret = paddle.grad(
                 ys, xs, vs, allow_unused=True, no_grad_vars=no_grad_vars
@@ -1393,15 +1413,8 @@ class PrimGradChecker(PrimForwardChecker):
             # check jit comp grad out
             if len(ret) != len(self.eager_desire):
                 msg = (
-                    "The jit comp with cinn grad out tensor nums is different with eager grad out tensor nums on {}."
-                    'when enable_fw_comp is {}, enable_rev_comp is {}, enable_cinn is {}, jit comp grad out tensor nums = {}, eager grad out tensor nums = {}. \n'.format(
-                        str(self.place),
-                        self.enable_fw_comp,
-                        self.enable_rev_comp,
-                        self.enable_cinn and core.is_compiled_with_cinn(),
-                        len(ret),
-                        len(self.eager_desire),
-                    )
+                    f"The jit comp with cinn grad out tensor nums is different with eager grad out tensor nums on {self.place}."
+                    f'when enable_fw_comp is {self.enable_fw_comp}, enable_rev_comp is {self.enable_rev_comp}, enable_cinn is {self.enable_cinn and core.is_compiled_with_cinn()}, jit comp grad out tensor nums = {len(ret)}, eager grad out tensor nums = {len(self.eager_desire)}. \n'
                 )
                 raise RuntimeError(msg)
             for i in range(len(ret)):
@@ -1412,17 +1425,9 @@ class PrimGradChecker(PrimForwardChecker):
                     atol=atol,
                     err_msg=(
                         'Check jit comp with cinn grad out failed. Mismatch between jit comp with cinn '
-                        'and eager on %s, when enable_fw_comp is %s, enable_rev_comp is %s, enable_cinn is %s,'
-                        'the grad out tensor\'s index is : %d ,jit comp with cinn grad out tensor:\n%s\n eager grad out out tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            self.enable_fw_comp,
-                            self.enable_rev_comp,
-                            self.enable_cinn and core.is_compiled_with_cinn(),
-                            i,
-                            ret[i],
-                            self.eager_desire[i],
-                        )
+                        f'and eager on {self.place!s}, when enable_fw_comp is {self.enable_fw_comp}, '
+                        f'enable_rev_comp is {self.enable_rev_comp}, enable_cinn is {self.enable_cinn and core.is_compiled_with_cinn()},'
+                        f'the grad out tensor\'s index is : {i} ,jit comp with cinn grad out tensor:\n{ret[i]}\n eager grad out out tensor:\n{self.eager_desire[i]}\n'
                     ),
                 )
 

@@ -61,18 +61,20 @@ class FusionGroupPassTest(PassTest):
     def _feed_random_data(self, feed_vars):
         feeds = {}
         for var in feed_vars:
-            if var.type != base.core.VarDesc.VarType.LOD_TENSOR:
-                raise TypeError("Feed data of non LoDTensor is not supported.")
+            if var.type != base.core.VarDesc.VarType.DENSE_TENSOR:
+                raise TypeError(
+                    "Feed data of non DenseTensor is not supported."
+                )
 
             shape = var.shape
-            if var.dtype == base.core.VarDesc.VarType.FP32:
+            if var.dtype == paddle.float32:
                 dtype = "float32"
-            elif var.dtype == base.core.VarDesc.VarType.FP64:
+            elif var.dtype == paddle.float64:
                 dtype = "float64"
-            elif var.dtype == base.core.VarDesc.VarType.FP16:
+            elif var.dtype == paddle.float16:
                 dtype = "float16"
             else:
-                raise ValueError("Unsupported dtype %s" % var.dtype)
+                raise ValueError(f"Unsupported dtype {var.dtype}")
             feeds[var.name] = np.random.random(shape).astype(dtype)
         return feeds
 

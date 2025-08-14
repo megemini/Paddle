@@ -246,9 +246,9 @@ class Collective:
 
             ring_id = (ring_id + 1) % self.nrings
             block.append_op(
-                type='c_broadcast',
-                inputs={'X': param},
-                outputs={'Out': param},
+                type='broadcast',
+                inputs={'x': param},
+                outputs={'out': param},
                 attrs={
                     'ring_id': ring_id,
                     'root': 0,
@@ -352,16 +352,17 @@ class GradAllReduce(Collective):
                         )
                         offset += 1
 
-                    # As we search ops reversedly, we should insert c_allreduce_sum
+                    # As we search ops reversely, we should insert all_reduce sum
                     # op in the same way to keep the ring_id alternate
                     ring_id = (ring_id + 1) % self.nrings
                     block._insert_op(
                         offset,
-                        type='c_allreduce_sum',
-                        inputs={'X': grad},
-                        outputs={'Out': grad},
+                        type='all_reduce',
+                        inputs={'x': grad},
+                        outputs={'out': grad},
                         attrs={
                             'ring_id': ring_id,
+                            'reduce_type': paddle.distributed.ReduceOp.SUM,
                             self.op_role_key: OpRole.Backward,
                         },
                     )
@@ -454,11 +455,12 @@ class LocalSGD(Collective):
                 ring_id = (ring_id + 1) % self.nrings
                 block._insert_op(
                     idx + 3,
-                    type='c_allreduce_sum',
-                    inputs={'X': [param]},
-                    outputs={'Out': [param]},
+                    type='all_reduce',
+                    inputs={'x': [param]},
+                    outputs={'out': [param]},
                     attrs={
                         'ring_id': ring_id,
+                        'reduce_type': paddle.distributed.ReduceOp.SUM,
                         self.op_role_key: OpRole.Optimize,
                     },
                 )
@@ -517,13 +519,13 @@ class SingleProcessMultiThread(GradAllReduce):
         nodes_num = 0
         if len(self.endpoints) > 1:
             nodes_num = len({x.split(':')[0] for x in self.endpoints})
-        # diffent ip num is multi node
+        # different ip num is multi node
         if nodes_num > 1:
             self.nranks = nodes_num
             print("begin to _transpile_startup_program for multi-node")
             print("current_endpoint: ", self.current_endpoint)
             print("total endpoints: ", self.endpoints)
-            print("rank: %d, ring_id: %d" % (self.rank, self.nrings))
+            print(f"rank: {self.rank}, ring_id: {self.nrings}")
             for ring_id in range(self.nrings):
                 self._init_communicator(
                     self.startup_program,
@@ -538,7 +540,7 @@ class SingleProcessMultiThread(GradAllReduce):
             self.nranks = 1
             print("begin to _transpile_startup_program for single-node")
             block = self.startup_program.global_block()
-            block.append_op(type='c_comm_init_all', attrs={'ring_id': 0})
+            block.append_op(type='comm_init_all', attrs={'ring_id': 0})
 
     def _transpile_main_program(self):
         # not need loss scale and no dense param
@@ -553,7 +555,7 @@ class SingleProcessMultiThread(GradAllReduce):
             return
         # fuse allreduce
         if self.fuse_allreduce > 0:
-            print("begin used fuse_allreduce param count = %s" % (param_cnt))
+            print(f"begin used fuse_allreduce param count = {param_cnt}")
             # use fuse allreduce
             self._insert_fuse_allreduce_ops()
         else:
@@ -592,7 +594,7 @@ class SingleProcessMultiThread(GradAllReduce):
             scale = 1.0 / self.nranks / self.gpu_nums
         else:
             scale = 1.0 / self.gpu_nums
-        print("begin _insert_scale_loss_grad_ops scale = %s" % (scale))
+        print(f"begin _insert_scale_loss_grad_ops scale = {scale}")
         block = self.main_program.global_block()
         for idx, op in reversed(list(enumerate(block.ops))):
             if not self._is_loss_grad_op(op):
@@ -701,10 +703,14 @@ class SingleProcessMultiThread(GradAllReduce):
             ring_id = (ring_id + 1) % self.nrings
             block._insert_op(
                 global_offset,
-                type='c_allreduce_sum',
-                inputs={'X': fused_output},
-                outputs={'Out': fused_output},
-                attrs={'ring_id': ring_id, self.op_role_key: OpRole.Backward},
+                type='all_reduce',
+                inputs={'x': fused_output},
+                outputs={'out': fused_output},
+                attrs={
+                    'ring_id': ring_id,
+                    self.op_role_key: OpRole.Backward,
+                    'reduce_type': paddle.distributed.ReduceOp.SUM,
+                },
             )
             global_offset += 1
 
@@ -722,7 +728,7 @@ class SingleProcessMultiThread(GradAllReduce):
 class MultiThread(GradAllReduce):
     ''' '''
 
-    def __init__(self, nrings=1, trans_mode="all_reduce"):
+    def __init__(self, nrings=1, trans_mode="fuse_all_reduce"):
         GradAllReduce.__init__(self, nrings)
         self.mode = "box"
         self.trans_mode = trans_mode
@@ -737,7 +743,7 @@ class MultiThread(GradAllReduce):
             print("begin to _transpile_startup_program for multi-node")
             print("current_endpoint: ", self.current_endpoint)
             print("total endpoints: ", self.endpoints)
-            print("rank: %d, ring_id: %d" % (self.rank, self.nrings))
+            print(f"rank: {self.rank}, ring_id: {self.nrings}")
             for ring_id in range(self.nrings):
                 self._init_communicator(
                     self.startup_program,
@@ -756,7 +762,7 @@ class MultiThread(GradAllReduce):
                 )
                 block = self.startup_program.global_block()
                 block.append_op(
-                    type='c_comm_init_all',
+                    type='comm_init_all',
                     attrs={
                         'devices': list(
                             map(
@@ -769,7 +775,7 @@ class MultiThread(GradAllReduce):
             else:
                 print("begin to _transpile_startup_program for single-node")
                 block = self.startup_program.global_block()
-                block.append_op(type='c_comm_init_all', attrs={'ring_id': 0})
+                block.append_op(type='comm_init_all', attrs={'ring_id': 0})
 
     def _transpile_main_program(self):
         self._insert_scale_loss_grad_ops()
@@ -814,7 +820,7 @@ class MultiThread(GradAllReduce):
                     param = block.vars[op_role_var[i]]
                     new_grad_var = block.create_var(
                         name=op_role_var[i] + "_allgather",
-                        shape=[self.allgather_ranks] + list(param.shape),
+                        shape=[self.allgather_ranks, *list(param.shape)],
                         persistable=False,
                         dtype=core.VarDesc.VarType.FP32,
                         stop_gradient=True,
@@ -834,14 +840,14 @@ class MultiThread(GradAllReduce):
                         )
                         offset += 1
 
-                    # As we search ops reversedly, we should insert c_allgather
+                    # As we search ops reversely, we should insert all_gather
                     # op in the same way to keep the ring_id alternate
                     ring_id = (ring_id + 1) % self.nrings
                     block._insert_op(
                         offset,
-                        type='c_allgather',
-                        inputs={'X': grad},
-                        outputs={'Out': new_grad_var},
+                        type='all_gather',
+                        inputs={'x': grad},
+                        outputs={'out': new_grad_var},
                         attrs={
                             'nranks': self.allgather_ranks,
                             'ring_id': ring_id,
@@ -1019,12 +1025,12 @@ class MultiThread(GradAllReduce):
                 for fused_var in fused_vars:
                     block._insert_op(
                         idx,
-                        type='c_allreduce_sum',
-                        inputs={'X': fused_var},
-                        outputs={'Out': fused_var},
+                        type='all_reduce',
+                        inputs={'x': fused_var},
+                        outputs={'out': fused_var},
                         attrs={
                             'ring_id': ring_id,
-                            'use_calc_stream': False,
+                            'reduce_type': paddle.distributed.ReduceOp.SUM,
                             self.op_role_key: OpRole.Backward,
                         },
                     )

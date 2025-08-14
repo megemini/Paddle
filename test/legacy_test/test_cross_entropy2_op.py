@@ -17,6 +17,14 @@ import unittest
 import numpy as np
 from op_test import OpTest
 
+import paddle
+
+
+def api_wrapper(x, label, ignore_index=-100):
+    return paddle._legacy_C_ops.cross_entropy2(
+        x, label, "ignore_index", ignore_index
+    )
+
 
 class CrossEntropy2OpTestBase(OpTest):
     def initParameters(self):
@@ -40,11 +48,13 @@ class CrossEntropy2OpTestBase(OpTest):
             self.drop_last_dim,
         ) = self.initParameters()
         self.op_type = 'cross_entropy2'
+        self.python_api = api_wrapper
+        self.python_out_sig = ["Y"]
         feature_size = int(self.shape[-1])
         batch_size = int(np.prod(self.shape) / feature_size)
         logits = (np.random.random(size=self.shape) + 1).astype(self.dtype)
         label_shape = (
-            self.shape[0:-1] if self.drop_last_dim else self.shape[0:-1] + [1]
+            self.shape[0:-1] if self.drop_last_dim else [*self.shape[0:-1], 1]
         )
         label = np.random.random_integers(
             low=0, high=feature_size - 1, size=label_shape
@@ -58,7 +68,7 @@ class CrossEntropy2OpTestBase(OpTest):
         out_shape = label_shape
         self.outputs = {
             'Y': np.reshape(outputs, out_shape),
-            'MatchX': np.reshape(match_x, self.shape[:-1] + [1]),
+            'MatchX': np.reshape(match_x, [*self.shape[:-1], 1]),
             'XShape': np.zeros(shape=logits.shape, dtype=logits.dtype),
         }
         self.attrs = {'ignore_index': self.ignore_index}

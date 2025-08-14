@@ -67,7 +67,7 @@ func TestNewConfig(t *testing.T) {
 
 	config.SwitchIrDebug(false)
 
-	config.EnableMKLDNN()
+	config.EnableONEDNN()
 
 	config.EnableMemoryOptim(true)
 	t.Logf("MemoryOptimEnabled:%+v", config.MemoryOptimEnabled())
@@ -89,33 +89,20 @@ func TestNewConfig(t *testing.T) {
 	t.Log(config.Summary())
 }
 
-func TestLite(t *testing.T) {
-	config := NewConfig()
-	config.SetModel("model", "params")
-	t.Log(config.ProgFile())
-	t.Log(config.ParamsFile())
-
-	config.EnableLiteEngine(PrecisionFloat32, true, []string{}, []string{})
-	t.Logf("LiteEngineEnabled:%+v", config.LiteEngineEnabled())
-}
-
 func TestMkldnn(t *testing.T) {
 	config := NewConfig()
 	config.SetModelDir("modelDir")
 	t.Log(config.ModelDir())
 
-	config.EnableMKLDNN()
+	config.EnableONEDNN()
 	t.Logf("MkldnnEnabled:%+v", config.MkldnnEnabled())
 
-	config.SetMkldnnCacheCapacity(4)
+	config.SetOnednnCacheCapacity(4)
 
 	config.SetCpuMathLibraryNumThreads(4)
 	t.Logf("CpuMathLibraryNumThreads:%+v", config.CpuMathLibraryNumThreads())
 
-	config.SetMKLDNNOp([]string{"fc", "conv"})
-
-	config.EnableMkldnnQuantizer()
-	t.Logf("MkldnnQuantizerEnabled:%+v", config.MkldnnQuantizerEnabled())
+	config.SetONEDNNOp([]string{"fc", "conv"})
 
 	config.EnableMkldnnBfloat16()
 	t.Logf("MkldnnBfloat16Enabled:%+v", config.MkldnnBfloat16Enabled())

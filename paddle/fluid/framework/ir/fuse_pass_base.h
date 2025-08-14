@@ -40,10 +40,15 @@ static const char kFuseStatisAttr[] = "__fuse_statis__";
 // allocation.
 static const char kRepetitiveParamAttr[] = "__repetitive_param__";
 
+// scale and zero point of the quantized/dequantized op should be removed in
+// save_optimized_model_pass.
+static const char kScaleAndZeroPointParamAttr[] =
+    "__scale_and_zero_point_param__";
+
 enum FuseOptions {
   DO_NOT_FUSE,  // fusing will not be done
-  FUSE_NATIVE,  // fusing will be done without MKL-DNN
-  FUSE_MKLDNN   // fusing will be done with MKL-DNN
+  FUSE_NATIVE,  // fusing will be done without ONE-DNN
+  FUSE_ONEDNN   // fusing will be done with ONE-DNN
 };
 
 class FusePassBase : public OpCompatSensiblePass {

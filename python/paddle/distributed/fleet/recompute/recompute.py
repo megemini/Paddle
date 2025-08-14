@@ -12,9 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import contextlib
 import copy
+import inspect
+import random
 import weakref
+from typing import TYPE_CHECKING, Any, TypedDict
+
+import numpy as np
 
 import paddle
 from paddle import framework
@@ -27,13 +34,29 @@ from paddle.framework import core, in_dynamic_mode
 
 from ..utils.log_util import logger
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from typing_extensions import NotRequired
+
+    from paddle.nn import Sequential
+
+    class _Ctx(TypedDict):
+        segments: int = 1
+        preserve_rng_state: NotRequired[bool]
+
+
 __all__ = []
 
 
 def _varbase_help(param):
     state = copy.deepcopy(param.__dict__)
     new_param = EagerParamBase(
-        shape=param.shape, dtype=param.dtype, name=param.name, **state
+        shape=param.shape,
+        dtype=param.dtype,
+        trainable=param.trainable,
+        name=param.name,
+        **state,
     )
     param._share_buffer_to(new_param)
     return new_param
@@ -78,12 +101,12 @@ def detach_variable(inputs):
 def check_recompute_necessary(inputs):
     necessary_for_each_input = []
     for input_ in inputs:
-        if isinstance(input_, (core.eager.Tensor, paddle.Tensor)):
+        if isinstance(input_, paddle.Tensor):
             necessary_for_each_input.append(input_.stop_gradient)
         elif type(input_) is tuple:
             for i in input_:
                 # traverse all tensors in the tuple
-                if isinstance(i, (core.eager.Tensor, paddle.Tensor)):
+                if isinstance(i, paddle.Tensor):
                     necessary_for_each_input.append(i.stop_gradient)
     if all(necessary_for_each_input):
         logger.warning(
@@ -92,30 +115,127 @@ def check_recompute_necessary(inputs):
         )
 
 
+class CustomStatesManager:
+    """CustomStatesManager"""
+
+    def __init__(self):
+        """__init__"""
+        self.custom_get_state_func = None
+        self.custom_set_state_func = None
+
+    def set_custom_get_state_func(self, custom_get_state_func):
+        assert_msg = (
+            "The custom_state_manager does not support duplicate settings."
+        )
+        assert self.custom_get_state_func is None, assert_msg
+        self.custom_get_state_func = custom_get_state_func
+
+    def set_custom_set_state_func(self, custom_set_state_func):
+        assert_msg = (
+            "The custom_state_manager does not support duplicate settings."
+        )
+        assert self.custom_set_state_func is None, assert_msg
+        self.custom_set_state_func = custom_set_state_func
+
+
+custom_state_manager = CustomStatesManager()
+
+
 @contextlib.contextmanager
-def swith_rng_state_tracker(rng_state, tracker):
+def switch_rng_state_tracker(
+    rng_state,
+    tracker,
+    numpy_state,
+    random_state,
+    custom_state=None,
+    custom_get_state_func=None,
+    custom_set_state_func=None,
+):
     orig_rng_state = paddle.get_rng_state()
     orig_rng_tracker = get_rng_state_tracker().get_states_tracker()
     paddle.set_rng_state(rng_state)
     get_rng_state_tracker().set_states_tracker(tracker)
+
+    orig_numpy_state = np.random.get_state()
+    orig_random_state = random.getstate()
+    np.random.set_state(numpy_state)
+    random.setstate(random_state)
+
+    if custom_state is not None:
+        assert custom_get_state_func is not None
+        assert custom_set_state_func is not None
+        orig_custom_state = custom_get_state_func()
+        custom_set_state_func(custom_state)
     try:
         yield
     finally:
         paddle.set_rng_state(orig_rng_state)
         get_rng_state_tracker().set_states_tracker(orig_rng_tracker)
+        np.random.set_state(orig_numpy_state)
+        random.setstate(orig_random_state)
+
+        if custom_state is not None:
+            custom_set_state_func(orig_custom_state)
 
 
 class RecomputeFunction(PyLayer):
     @staticmethod
-    def forward(ctx, run_function, preserve_rng_state, *args, **kwargs):
+    def forward(
+        ctx,
+        run_function,
+        preserve_rng_state,
+        offload_indices,
+        custom_get_state_func,
+        custom_set_state_func,
+        *args,
+        **kwargs,
+    ):
         # store for recomputing
         ctx.run_function = run_function
         ctx.preserve_rng_state = preserve_rng_state
+        ctx.offload_indices = offload_indices
         ctx.kwargs = kwargs
 
         # NOTE the number of outputs of backward() should be equal to the number of tensors in forward()'s input
         # the order of tensors in backward()'s output should be the same as tensors in forward()'s input
         # None tensor inputs will be filtered in backward inputs.
+
+        # NOTE recompute with restore RNG only support one scenario where one process for one cuda gpu.
+        # one process with multiple gpu and mix-gpu-cpu scenarios are not support
+        if ctx.preserve_rng_state:
+            ctx.fw_rng_state = paddle.get_rng_state()
+            ctx.fwd_rng_state_tracker = (
+                get_rng_state_tracker().get_states_tracker()
+            )
+            ctx.fwd_numpy_state = np.random.get_state()
+            ctx.fwd_random_state = random.getstate()
+            ctx.fwd_custom_state = custom_get_state_func()
+            ctx.custom_get_state_func = custom_get_state_func
+            ctx.custom_set_state_func = custom_set_state_func
+
+        # TODO support AMP
+        tracer = framework._dygraph_tracer()
+        ctx.is_fw_autocast = (
+            False if tracer._amp_level == core.AmpLevel.O0 else True
+        )
+        if tracer._amp_level == core.AmpLevel.O2:
+            ctx.amp_level = 'O2'
+        elif tracer._amp_level in (core.AmpLevel.O1, core.AmpLevel.O0):
+            ctx.amp_level = 'O1'
+        else:
+            raise ValueError(f"unsupported amp level: {tracer._amp_level}")
+
+        if tracer._amp_dtype == 'float16':
+            ctx.amp_dtype = 'float16'
+        elif tracer._amp_dtype in ('bfloat16', 'float32'):
+            ctx.amp_dtype = 'bfloat16'
+        else:
+            raise ValueError(f"unsupported amp dtype: {tracer._amp_dtype}")
+
+        ctx.amp_white_list, ctx.amp_black_list = tracer._get_amp_op_list()
+
+        with paddle.no_grad():
+            outputs = run_function(*args, **kwargs)
 
         # save input for backward
         ctx.inputs = []
@@ -124,10 +244,20 @@ class RecomputeFunction(PyLayer):
         tensor_inputs = []
         for i, arg in enumerate(args):
             if paddle.is_tensor(arg):
+                if i in ctx.offload_indices:
+                    cpu_arg = (
+                        arg.pin_memory()
+                        if core.is_compiled_with_cuda()
+                        else arg.cpu()
+                    )
+                    cpu_arg._share_buffer_to(arg)
                 tensor_inputs.append(arg)
                 ctx.tensor_indices.append(i)
                 ctx.inputs.append(None)
             elif type(arg) is tuple:
+                assert (
+                    i not in ctx.offload_indices
+                ), f"offload_indices should not contain tensor tuple in position{i}"
                 is_tensors = [paddle.is_tensor(a) for a in arg]
                 if all(is_tensors):
                     # the tuple is a tuple of tensors
@@ -153,45 +283,15 @@ class RecomputeFunction(PyLayer):
                     ctx.inputs.append(arg)
             else:
                 ctx.inputs.append(arg)
+
         ctx.save_for_backward(*tensor_inputs)
 
-        # NOTE recompute with restore RNG only support one senario where one process for one cuda gpu.
-        # one process with multiple gpu and mix-gpu-cpu senarios are not support
-        if ctx.preserve_rng_state:
-            ctx.fw_rng_state = paddle.get_rng_state()
-            ctx.fwd_rng_state_tracker = (
-                get_rng_state_tracker().get_states_tracker()
-            )
-
-        # TODO support AMP
-        tracer = framework._dygraph_tracer()
-        ctx.is_fw_autocast = (
-            False if tracer._amp_level == core.AmpLevel.O0 else True
-        )
-        if tracer._amp_level == core.AmpLevel.O2:
-            ctx.amp_level = 'O2'
-        elif tracer._amp_level in (core.AmpLevel.O1, core.AmpLevel.O0):
-            ctx.amp_level = 'O1'
-        else:
-            raise ValueError(f"unsupported amp level: {tracer._amp_level}")
-
-        if tracer._amp_dtype == 'float16':
-            ctx.amp_dtype = 'float16'
-        elif tracer._amp_dtype in ('bfloat16', 'float32'):
-            ctx.amp_dtype = 'bfloat16'
-        else:
-            raise ValueError(f"unsupported amp dtype: {tracer._amp_dtype}")
-
-        ctx.amp_white_list, ctx.amp_black_list = tracer._get_amp_op_list()
-
-        with paddle.no_grad():
-            outputs = run_function(*args, **kwargs)
         return outputs
 
     @staticmethod
     def backward(ctx, *args):
         with paddle.base.dygraph.guard():
-            # TODO need to check the recompute calling is vaild or not
+            # TODO need to check the recompute calling is valid or not
 
             # Restore inputs
             inputs = list(ctx.inputs)
@@ -199,8 +299,16 @@ class RecomputeFunction(PyLayer):
             duplicate_tensor = ctx.duplicate_tensor
             tensors = ctx.saved_tensor()
             for i, idx in enumerate(tensor_indices):
-                inputs[idx] = tensors[i]
-
+                inputs[idx] = (
+                    tensors[i].to(
+                        paddle.base.framework._current_expected_place()
+                    )
+                    if i in ctx.offload_indices
+                    else tensors[i]
+                )
+                if i in ctx.offload_indices:
+                    # NOTE(zhiqiu): tensor.to(device) will set stop_gradient=True, which may break the gragh
+                    inputs[idx].stop_gradient = tensors[i].stop_gradient
             # paddle.enable_grad()
             tracer = framework._dygraph_tracer()
             tracer._has_grad = True
@@ -208,20 +316,26 @@ class RecomputeFunction(PyLayer):
             # NOTE support AMP
             # need restore auto_cast state as well as w/b list
             if ctx.preserve_rng_state:
-                with swith_rng_state_tracker(
-                    ctx.fw_rng_state, ctx.fwd_rng_state_tracker
-                ):
-                    with paddle.amp.auto_cast(
+                with (
+                    switch_rng_state_tracker(
+                        ctx.fw_rng_state,
+                        ctx.fwd_rng_state_tracker,
+                        ctx.fwd_numpy_state,
+                        ctx.fwd_random_state,
+                        ctx.fwd_custom_state,
+                        ctx.custom_get_state_func,
+                        ctx.custom_set_state_func,
+                    ),
+                    paddle.amp.auto_cast(
                         enable=ctx.is_fw_autocast,
                         custom_white_list=ctx.amp_white_list,
                         custom_black_list=ctx.amp_black_list,
                         level=ctx.amp_level,
                         dtype=ctx.amp_dtype,
-                    ):
-                        detached_inputs = detach_variable(tuple(inputs))
-                        outputs = ctx.run_function(
-                            *detached_inputs, **ctx.kwargs
-                        )
+                    ),
+                ):
+                    detached_inputs = detach_variable(tuple(inputs))
+                    outputs = ctx.run_function(*detached_inputs, **ctx.kwargs)
             else:
                 with paddle.amp.auto_cast(
                     enable=ctx.is_fw_autocast,
@@ -273,7 +387,7 @@ class RecomputeFunction(PyLayer):
                         # all tensors in the tuple doesn't need grad, only return a None for the whole tuple
                         grads.append(None)
                     else:
-                        # all tensors in the tuple nees grad, should return a tuple of grads
+                        # all tensors in the tuple need grad, should return a tuple of grads
                         grads.append(tuple(i._grad_ivar() for i in inp))
 
             if in_dynamic_mode():
@@ -284,7 +398,12 @@ class RecomputeFunction(PyLayer):
 
 
 def _recompute_without_reentrant(
-    function, preserve_rng_state=True, *args, **kwargs
+    function,
+    custom_get_state_func,
+    custom_set_state_func,
+    preserve_rng_state=True,
+    *args,
+    **kwargs,
 ):
     """
     recompute without reentrant, that means use hook to implement the recompute function rather than re-entrant autograd.
@@ -294,6 +413,8 @@ def _recompute_without_reentrant(
         cur_device = paddle.get_device()
         if 'gpu:' in cur_device:
             fw_cuda_rng_state = paddle.get_cuda_rng_state()
+        elif 'cpu' in cur_device:
+            fw_cuda_rng_state = paddle.get_rng_state()
         elif 'xpu:' in cur_device:
             fw_cuda_rng_state = paddle.get_rng_state()
         elif (
@@ -303,13 +424,15 @@ def _recompute_without_reentrant(
             fw_cuda_rng_state = paddle.get_rng_state(cur_device)
         else:
             raise RuntimeError(
-                "Recompute with RNG perserve is not support current device: {}.".format(
-                    cur_device
-                )
+                f"Recompute with RNG preserve is not support current device: {cur_device}."
             )
         fwd_cuda_rng_state_tracker = (
             get_rng_state_tracker().get_states_tracker()
         )
+        fwd_numpy_state = np.random.get_state()
+        fwd_random_state = random.getstate()
+        fwd_custom_state = custom_get_state_func()
+
     tracer = framework._dygraph_tracer()
     is_fw_autocast = False if tracer._amp_level == core.AmpLevel.O0 else True
     if tracer._amp_level == core.AmpLevel.O2:
@@ -345,55 +468,75 @@ def _recompute_without_reentrant(
 
                 if holder_list[unpack_counter - 1]() is None:
                     return
-
-                tmp_tensor = core.eager.Tensor(
-                    inner_x.dtype,
-                    inner_x.shape,
-                    inner_x.name + "cpy",
-                    core.VarDesc.VarType.LOD_TENSOR,
-                    inner_x.persistable,
-                )
-                inner_x._share_buffer_to(tmp_tensor)
-                storage[holder_list[unpack_counter - 1]()] = tmp_tensor
+                if inner_x is None:
+                    storage[holder_list[unpack_counter - 1]()] = None
+                    return
+                if hasattr(inner_x, "main_grad") or inner_x.grad is not None:
+                    storage[holder_list[unpack_counter - 1]()] = inner_x
+                else:
+                    if inner_x.is_dist():
+                        tmp_tensor = core.eager.Tensor(inner_x)
+                    else:
+                        tmp_tensor = core.eager.Tensor(
+                            inner_x.dtype,
+                            inner_x.shape,
+                            inner_x.name + "cpy",
+                            core.VarDesc.VarType.DENSE_TENSOR,
+                            inner_x.persistable,
+                        )
+                    inner_x._unsafe_share_buffer_to(tmp_tensor)
+                    storage[holder_list[unpack_counter - 1]()] = tmp_tensor
                 return
 
             def inner_unpack(inner_x):
-                raise Exception("An unexcepted backward called on a tensor!")
+                raise Exception("An unexpected backward called on a tensor!")
 
             if preserve_rng_state:
-                with swith_rng_state_tracker(
-                    fw_cuda_rng_state, fwd_cuda_rng_state_tracker
+                with (
+                    switch_rng_state_tracker(
+                        fw_cuda_rng_state,
+                        fwd_cuda_rng_state_tracker,
+                        fwd_numpy_state,
+                        fwd_random_state,
+                        fwd_custom_state,
+                        custom_get_state_func,
+                        custom_set_state_func,
+                    ),
+                    paddle.set_grad_enabled(True),
+                    paddle.amp.auto_cast(
+                        enable=is_fw_autocast,
+                        custom_white_list=amp_white_list,
+                        custom_black_list=amp_black_list,
+                        level=amp_level,
+                        dtype=amp_dtype,
+                    ),
+                    paddle.autograd.saved_tensors_hooks(
+                        inner_pack, inner_unpack
+                    ),
                 ):
-                    with paddle.set_grad_enabled(True):
-                        with paddle.amp.auto_cast(
-                            enable=is_fw_autocast,
-                            custom_white_list=amp_white_list,
-                            custom_black_list=amp_black_list,
-                            level=amp_level,
-                            dtype=amp_dtype,
-                        ):
-                            with paddle.autograd.saved_tensors_hooks(
-                                inner_pack, inner_unpack
-                            ):
-                                unused_outputs = function(*args, **kwargs)
+                    function(*args, **kwargs)
             else:
-                with paddle.set_grad_enabled(True), paddle.amp.auto_cast(
-                    enable=is_fw_autocast,
-                    custom_white_list=amp_white_list,
-                    custom_black_list=amp_black_list,
-                    level=amp_level,
-                    dtype=amp_dtype,
-                ), paddle.autograd.saved_tensors_hooks(
-                    inner_pack, inner_unpack
+                with (
+                    paddle.set_grad_enabled(True),
+                    paddle.amp.auto_cast(
+                        enable=is_fw_autocast,
+                        custom_white_list=amp_white_list,
+                        custom_black_list=amp_black_list,
+                        level=amp_level,
+                        dtype=amp_dtype,
+                    ),
+                    paddle.autograd.saved_tensors_hooks(
+                        inner_pack, inner_unpack
+                    ),
                 ):
-                    unused_outputs = function(*args, **kwargs)
+                    function(*args, **kwargs)
 
         if x not in storage:
             raise Exception(
                 "Not supported to retrieve a tensor saved by autograd multiple times that is no need to recompute."
             )
 
-        return storage[x]
+        return storage.pop(x)
 
     with paddle.autograd.saved_tensors_hooks(pack, unpack):
         outputs = function(*args, **kwargs)
@@ -512,6 +655,20 @@ def recompute(function, *args, **kwargs):
             normal_loss: [0.0018744759727269411, 0.0, 0.035971127450466156, 0.0, 0.0], recompute_loss: [0.0018744759727269411, 0.0, 0.035971127450466156, 0.0, 0.0]
 
     """
+    # Hack to mix *args with **kwargs in a python 2.7-compliant way
+    preserve = kwargs.pop('preserve_rng_state', True)
+
+    # whether to use reentrant method to implement recompute
+    use_reentrant = kwargs.pop('use_reentrant', True)
+
+    if custom_state_manager.custom_get_state_func is None:
+        assert custom_state_manager.custom_set_state_func is None
+        custom_get_state_func = lambda x=None: None
+        custom_set_state_func = lambda x=None: None
+    else:
+        custom_get_state_func = custom_state_manager.custom_get_state_func
+        custom_set_state_func = custom_state_manager.custom_set_state_func
+
     if not in_dynamic_mode():
         from paddle.distributed.auto_parallel.interface import (
             recompute as static_auto_recompute,
@@ -519,27 +676,67 @@ def recompute(function, *args, **kwargs):
 
         return static_auto_recompute(function)(*args, **kwargs)
 
-    # Hack to mix *args with **kwargs in a python 2.7-compliant way
-    preserve = kwargs.pop('preserve_rng_state', True)
-
-    # whether to use reentrant method to implement recompute
-    use_reentrant = kwargs.pop('use_reentrant', True)
-
-    if kwargs and use_reentrant:
-        raise ValueError(
-            "Error, if you want to send kwargs(dict parameter) to function, please set use_reentrant=False."
-        )
-
     if framework._dygraph_tracer()._has_grad:
-        check_recompute_necessary(args)
+        check_args = list(args)
+        check_args.extend(list(kwargs.values()))
+        check_recompute_necessary(check_args)
 
     if use_reentrant:
-        return RecomputeFunction.apply(function, preserve, *args)
+        offload_indices = kwargs.pop('offload_indices', [])
+        input_args = []
+        # rearrange `position-args + keyword-args` into `position-args`
+        if isinstance(function, paddle.nn.Layer):
+            dyfunc_sig = inspect.signature(function.forward)
+        else:
+            dyfunc_sig = inspect.signature(function)
+
+        bound_args = dyfunc_sig.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+
+        for arg, param in zip(
+            bound_args.arguments.values(), dyfunc_sig.parameters.values()
+        ):
+            if param.kind == param.VAR_POSITIONAL:
+                input_args.extend(arg)
+            elif param.kind in (
+                param.POSITIONAL_ONLY,
+                param.POSITIONAL_OR_KEYWORD,
+            ):
+                input_args.append(arg)
+            elif param.kind == param.VAR_KEYWORD:
+                input_args.extend(arg.values())
+            elif param.kind == param.KEYWORD_ONLY:
+                raise ValueError(
+                    "Currently, keyword-only arguments are not supported when you want to send kwargs(dict parameter) to function with use_reentrant=True."
+                )
+            else:
+                raise ValueError("Unknown parameter kind.")
+
+        return RecomputeFunction.apply(
+            function,
+            preserve,
+            offload_indices,
+            custom_get_state_func,
+            custom_set_state_func,
+            *input_args,
+        )
     else:
-        return _recompute_without_reentrant(function, preserve, *args, **kwargs)
+        return _recompute_without_reentrant(
+            function,
+            custom_get_state_func,
+            custom_set_state_func,
+            preserve,
+            *args,
+            **kwargs,
+        )
 
 
-def recompute_sequential(ctx, functions, *args, **kwargs):
+def recompute_sequential(
+    ctx: _Ctx,
+    functions: Sequential | Sequence[Callable[..., Any]],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     """
     recompute intermediate activations to save the memory for 'Sequential' models. use 'ctx' to transmit some context params, it is similar to 'recompute_hybrid' API.
 
@@ -592,4 +789,4 @@ def recompute_sequential(ctx, functions, *args, **kwargs):
             preserve_rng_state=preserve_rng_state,
             **kwargs,
         )
-    return _run_func(end + 1, len(functions) - 1, functions)(args)
+    return _run_func(end + 1, len(functions) - 1, functions)(*args)

@@ -21,7 +21,6 @@
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/activation_functor.h"
-
 namespace phi {
 
 #define DEFINE_ONEDNN_ACTIVATION_KERNEL(name, functor_class)            \
@@ -49,11 +48,6 @@ void EltwiseForward(const OneDNNContext& dev_ctx,
                     float beta,
                     DenseTensor* out,
                     dnnl::algorithm algorithm) {
-  PADDLE_ENFORCE_EQ(dev_ctx.GetPlace().GetType() == phi::AllocationType::CPU,
-                    true,
-                    phi::errors::PreconditionNotMet(
-                        "Operator DNNL eletwise_forward must use ONEDNNPlace"));
-
   bool is_inplaced = x.IsSharedBufferWith(*out);
 
   funcs::ActivationOneDNNHandler<T> handler(
@@ -84,6 +78,10 @@ struct OneDNNActivationFunc : public funcs::BaseActivationFunctor<T> {
                   float alpha,
                   float beta,
                   DenseTensor* out) const {
+    if (out && out->numel() == 0) {
+      dev_ctx.template Alloc<T>(out);
+      return;
+    }
     EltwiseForward<T>(dev_ctx, x, alpha, beta, out, algorithm);
   }
 };
@@ -149,7 +147,30 @@ DEFINE_ONEDNN_ACTIVATION_KERNEL(Sqrt, SqrtOneDNNFunctor)
 DEFINE_ONEDNN_ACTIVATION_KERNEL(Tanh, TanhOneDNNFunctor)
 
 // round eltwise primitive doesn't support BF16, nor does it support grad
-DEFINE_ONEDNN_ACTIVATION_KERNEL(Round, RoundOneDNNFunctor)
+template <typename T, typename Context>
+void RoundKernel(const Context& dev_ctx,
+                 const DenseTensor& x,
+                 const int decimals,
+                 DenseTensor* out) {
+  float ten_pow_decimals = std::pow(10, decimals);
+
+  DenseTensor out1;
+  DenseTensorMeta meta_out(x.dtype(), x.dims());
+  out1.set_meta(meta_out);
+  out1.set_lod(x.lod());
+  out1.set_mem_desc(x.mem_desc());
+  dev_ctx.template Alloc<T>(&out1);
+
+  for (int i = 0; i < x.numel(); i++) {
+    out1.data<T>()[i] = x.data<T>()[i] * ten_pow_decimals;
+  }
+  RoundOneDNNFunctor<T> functor;
+  functor(dev_ctx, out1, 0, 0, out);
+
+  for (int i = 0; i < x.numel(); i++) {
+    out->data<T>()[i] = out->data<T>()[i] * (1 / ten_pow_decimals);
+  }
+}
 
 DEFINE_ONEDNN_ACT_KERNEL_WITH_ONE_ATTRS(Elu, EluOneDNNFunctor, alpha)
 DEFINE_ONEDNN_ACT_KERNEL_WITH_ONE_ATTRS(LeakyRelu, ReluOneDNNFunctor, alpha)

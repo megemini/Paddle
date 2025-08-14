@@ -14,7 +14,7 @@ limitations under the License. */
 
 #include <numeric>
 
-#include "paddle/utils/flags.h"
+#include "paddle/common/flags.h"
 #include "test/cpp/inference/api/trt_test_helper.h"
 
 namespace paddle {
@@ -22,6 +22,7 @@ namespace inference {
 
 TEST(quant_int8, yolov3_resnet50) {
   AnalysisConfig config;
+  config.EnableNewIR(false);
   config.EnableUseGpu(100, 0);
   config.SetModel(FLAGS_infer_model + "/model", FLAGS_infer_model + "/params");
   config.EnableTensorRtEngine(

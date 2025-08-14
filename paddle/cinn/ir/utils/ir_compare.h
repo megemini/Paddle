@@ -22,7 +22,7 @@ namespace cinn {
 namespace ir {
 namespace ir_utils {
 
-// Determine whether two ir AST trees are euqal by comparing their struct and
+// Determine whether two ir AST trees are equal by comparing their struct and
 // fields of each node through dfs visitor
 class IrEqualVisitor : public IRVisitorRequireReImpl<bool, const Expr*> {
  public:
@@ -30,8 +30,12 @@ class IrEqualVisitor : public IRVisitorRequireReImpl<bool, const Expr*> {
                           bool only_compare_structure = false)
       : allow_name_suffix_diff_(allow_name_suffix_diff),
         only_compare_structure_(only_compare_structure) {}
-  // Return true if they are euqal, otherwise false;
+  // Return true if they are equal, otherwise false;
   bool Compare(const Expr& lhs, const Expr& rhs);
+
+  bool Compare(const Module& lhs, const Module& rhs);
+
+  bool Compare(const LoweredFunc& lhs, const LoweredFunc& rhs);
 
  private:
   bool Compare(const std::string& lhs, const std::string& rhs);
@@ -43,6 +47,16 @@ class IrEqualVisitor : public IRVisitorRequireReImpl<bool, const Expr*> {
 #define __(op__) bool Visit(const op__* lhs, const Expr* other) override;
   NODETY_FORALL(__)
 #undef __
+
+  bool Visit(const IterMark* lhs, const Expr* other);
+
+  bool Visit(const IterSplit* lhs, const Expr* other);
+
+  bool Visit(const IterSum* lhs, const Expr* other);
+
+  bool Visit(const _Module_* lhs, const _Module_* rhs);
+
+  bool Visit(const _LoweredFunc_* lhs, const _LoweredFunc_* rhs);
 
   // whether allowing name suffix ends with "_[0-9]+" different
   bool allow_name_suffix_diff_ = false;

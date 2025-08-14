@@ -20,6 +20,7 @@
 #include <iomanip>
 
 #include "glog/logging.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace utils {
@@ -46,7 +47,7 @@ std::string StringFormat(const std::string &fmt_str, ...) {
 
 std::string RemoveSuffix(const std::string &name) {
   std::string res = name;
-  while (Endswith(res, "_outer") || Endswith(res, "_inner")) {
+  while (EndsWith(res, "_outer") || EndsWith(res, "_inner")) {
     res = res.substr(0, res.size() - 6);
   }
   return res;
@@ -68,10 +69,10 @@ std::string Uppercase(const std::string &x) {
   return res;
 }
 
-bool Startswith(const std::string &x, const std::string &str) {
+bool StartsWith(const std::string &x, const std::string &str) {
   return x.find(str) == 0;
 }
-bool Endswith(const std::string &x, const std::string &str) {
+bool EndsWith(const std::string &x, const std::string &str) {
   if (x.length() >= str.length()) {
     return std::equal(str.rbegin(), str.rend(), x.rbegin());
   }
@@ -138,43 +139,43 @@ std::string TransValidVarName(std::string name) {
 
 std::string Attribute2String(const utils::Attribute &attr) {
   std::stringstream ss;
-  if (absl::holds_alternative<bool>(attr)) {
-    ss << (absl::get<bool>(attr) ? "True" : "False");
-  } else if (absl::holds_alternative<float>(attr)) {
+  if (std::holds_alternative<bool>(attr)) {
+    ss << (std::get<bool>(attr) ? "True" : "False");
+  } else if (std::holds_alternative<float>(attr)) {
     ss << std::setprecision(std::numeric_limits<float>::max_digits10)
-       << std::showpoint << absl::get<float>(attr);
-  } else if (absl::holds_alternative<double>(attr)) {
+       << std::showpoint << std::get<float>(attr);
+  } else if (std::holds_alternative<double>(attr)) {
     ss << std::setprecision(std::numeric_limits<double>::max_digits10)
-       << std::showpoint << absl::get<double>(attr);
-  } else if (absl::holds_alternative<int>(attr)) {
-    ss << absl::get<int>(attr);
-  } else if (absl::holds_alternative<int64_t>(attr)) {
-    ss << absl::get<int64_t>(attr);
-  } else if (absl::holds_alternative<std::string>(attr)) {
-    ss << "\"" << absl::get<std::string>(attr) << "\"";
-  } else if (absl::holds_alternative<std::vector<bool>>(attr)) {
-    ss << "[" + cinn::utils::Join(absl::get<std::vector<bool>>(attr), ", ") +
+       << std::showpoint << std::get<double>(attr);
+  } else if (std::holds_alternative<int>(attr)) {
+    ss << std::get<int>(attr);
+  } else if (std::holds_alternative<int64_t>(attr)) {
+    ss << std::get<int64_t>(attr);
+  } else if (std::holds_alternative<std::string>(attr)) {
+    ss << "\"" << std::get<std::string>(attr) << "\"";
+  } else if (std::holds_alternative<std::vector<bool>>(attr)) {
+    ss << "[" + cinn::utils::Join(std::get<std::vector<bool>>(attr), ", ") +
               "]";
-  } else if (absl::holds_alternative<std::vector<int>>(attr)) {
-    ss << "[" + cinn::utils::Join(absl::get<std::vector<int>>(attr), ", ") +
+  } else if (std::holds_alternative<std::vector<int>>(attr)) {
+    ss << "[" + cinn::utils::Join(std::get<std::vector<int>>(attr), ", ") + "]";
+  } else if (std::holds_alternative<std::vector<int64_t>>(attr)) {
+    ss << "[" + cinn::utils::Join(std::get<std::vector<int64_t>>(attr), ", ") +
               "]";
-  } else if (absl::holds_alternative<std::vector<int64_t>>(attr)) {
-    ss << "[" + cinn::utils::Join(absl::get<std::vector<int64_t>>(attr), ", ") +
+  } else if (std::holds_alternative<std::vector<float>>(attr)) {
+    ss << "[" + cinn::utils::Join(std::get<std::vector<float>>(attr), ", ") +
               "]";
-  } else if (absl::holds_alternative<std::vector<float>>(attr)) {
-    ss << "[" + cinn::utils::Join(absl::get<std::vector<float>>(attr), ", ") +
+  } else if (std::holds_alternative<std::vector<double>>(attr)) {
+    ss << "[" + cinn::utils::Join(std::get<std::vector<double>>(attr), ", ") +
               "]";
-  } else if (absl::holds_alternative<std::vector<double>>(attr)) {
-    ss << "[" + cinn::utils::Join(absl::get<std::vector<double>>(attr), ", ") +
-              "]";
-  } else if (absl::holds_alternative<std::vector<std::string>>(attr)) {
-    auto attrs = absl::get<std::vector<std::string>>(attr);
+  } else if (std::holds_alternative<std::vector<std::string>>(attr)) {
+    auto attrs = std::get<std::vector<std::string>>(attr);
     for (auto &str : attrs) {
       str = "\"" + str + "\"";
     }
     ss << "[" + cinn::utils::Join(attrs, ", ") + "]";
   } else {
-    LOG(FATAL) << "Unkown attribute data type! Please check.";
+    PADDLE_THROW(::common::errors::InvalidArgument(
+        "Unknown attribute data type! Please check."));
   }
   return ss.str();
 }

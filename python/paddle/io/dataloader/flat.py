@@ -96,7 +96,7 @@ def _flatten_batch(batch):
 def _restore_batch(flat_batch, structure):
     """
     After reading list of Tensor data from lod_blocking_queue outputs,
-    use this function to restore the batch data structrue, replace
+    use this function to restore the batch data structure, replace
     :attr:`_paddle_field_x` with data from flat_batch
     """
 
@@ -108,7 +108,7 @@ def _restore_batch(flat_batch, structure):
                     field_idx = max(field_idx, cur_field_idx)
                     assert (
                         flat_batch[cur_field_idx] is not None
-                    ), "flat_batch[{}] parsed repeatly"
+                    ), "flat_batch[{}] parsed repeatedly"
                     structure[i] = flat_batch[cur_field_idx]
                     flat_batch[cur_field_idx] = None
                 elif isinstance(field, (str, bytes, numbers.Number)):
@@ -122,7 +122,7 @@ def _restore_batch(flat_batch, structure):
                     field_idx = max(field_idx, cur_field_idx)
                     assert (
                         flat_batch[cur_field_idx] is not None
-                    ), "flat_batch[{}] parsed repeatly"
+                    ), "flat_batch[{}] parsed repeatedly"
                     structure[k] = flat_batch[cur_field_idx]
                     flat_batch[cur_field_idx] = None
                 elif isinstance(field, (str, bytes, numbers.Number)):

@@ -22,11 +22,11 @@
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/selected_rows_utils.h"
 #include "paddle/fluid/imperative/layer.h"
-#include "paddle/fluid/platform/bfloat16.h"
-#include "paddle/fluid/platform/complex.h"
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/float16.h"
-#include "paddle/fluid/platform/profiler.h"
+#include "paddle/phi/common/bfloat16.h"
+#include "paddle/phi/common/complex.h"
+#include "paddle/phi/common/float16.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/phi/core/platform/profiler.h"
 #include "paddle/phi/kernels/funcs/blas/blas.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/phi/kernels/funcs/selected_rows_functor.h"
@@ -40,8 +40,7 @@
 #include "paddle/phi/api/lib/data_transform.h"
 #include "paddle/phi/kernels/elementwise_add_kernel.h"
 
-namespace paddle {
-namespace imperative {
+namespace paddle::imperative {
 
 static void MoveOrCopyVar(framework::Variable* dst,
                           framework::Variable* src,
@@ -73,47 +72,10 @@ static void MoveOrCopyVar(framework::Variable* dst,
     dst_selected_rows->set_rows(src_selected_rows.rows());
     dst_selected_rows->set_height(src_selected_rows.height());
   } else {
-    PADDLE_THROW(platform::errors::PermissionDenied(
-        "Only support LoDTensor and SelectedRows for sum gradient"));
+    PADDLE_THROW(common::errors::PermissionDenied(
+        "Only support DenseTensor and SelectedRows for sum gradient"));
   }
 }
-
-#ifdef PADDLE_WITH_XPU
-template <typename T>
-void XPUTensorAddFunctor(const platform::Place& place,
-                         const phi::DenseTensor& src,
-                         phi::DenseTensor* dst) {
-  using XPUType = typename XPUTypeTrait<T>::Type;
-  platform::XPUDeviceContext* ctx = dynamic_cast<platform::XPUDeviceContext*>(
-      platform::DeviceContextPool::Instance().Get(place));
-  const XPUType* x = reinterpret_cast<const XPUType*>(src.data<T>());
-  XPUType* y = reinterpret_cast<XPUType*>(dst->mutable_data<T>(place));
-  int r = -1;
-  int numel = static_cast<int>(src.numel());
-  if (std::is_same<T, double>::value) {
-    xpu::ctx_guard RAII_GUARD(ctx->x_context());
-    float* x_cast_to_fp32 = RAII_GUARD.alloc<float>(numel);
-    PADDLE_ENFORCE_XDNN_NOT_NULL(x_cast_to_fp32);
-    float* y_cast_to_fp32 = RAII_GUARD.alloc<float>(numel);
-    PADDLE_ENFORCE_XDNN_NOT_NULL(y_cast_to_fp32);
-    r = xpu::cast<XPUType, float>(ctx->x_context(), x, x_cast_to_fp32, numel);
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-    r = xpu::cast<XPUType, float>(ctx->x_context(), y, y_cast_to_fp32, numel);
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-    r = xpu::add<float>(ctx->x_context(),
-                        x_cast_to_fp32,
-                        y_cast_to_fp32,
-                        y_cast_to_fp32,
-                        numel);
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "add");
-    r = xpu::cast<float, XPUType>(ctx->x_context(), y_cast_to_fp32, y, numel);
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-  } else {
-    r = xpu::add<XPUType>(ctx->x_context(), x, y, y, numel);
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "add");
-  }
-}
-#endif
 
 template <typename TType>
 TType* GetInnerMutableTensor(framework::Variable* dst) {
@@ -135,11 +97,11 @@ const TType& GetInnerTensor(const framework::Variable& src) {
 template <typename TType>
 TType& GetInnerTensor(const paddle::Tensor& src) {
   PADDLE_ENFORCE_EQ(
-      src.initialized(),
+      (src.has_allocation()),
       true,
-      platform::errors::Fatal("We only add tensor with value if a tensor is "
-                              "NOT INITILIZED, it should just move instead of "
-                              "calling this method."));
+      common::errors::Fatal("We only add tensor with value if a tensor is "
+                            "NOT INITIALIZED, it should just move instead of "
+                            "calling this method."));
   auto* src_tensor = static_cast<TType*>(src.impl().get());
   return *src_tensor;
 }
@@ -149,7 +111,7 @@ TType* GetEmptyInnerTensor(paddle::Tensor* dst) {
   PADDLE_ENFORCE_EQ(
       dst->defined(),
       false,
-      platform::errors::Fatal(
+      common::errors::Fatal(
           "The underlying Tensor implementation should be nullptr"));
   dst->set_impl(std::make_shared<TType>());
   auto* dst_tensor = static_cast<TType*>(dst->impl().get());
@@ -182,7 +144,7 @@ void TensorAdd(const VarType& src, VarType* dst) {
   PADDLE_ENFORCE_EQ(
       dst_tensor->numel(),
       numel,
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "The number of elements of source tensor and destination tensor "
           "should be equal, but got the number of elements of source tensor is "
           "%zu and the number of elements of destination tensor is %zu.",
@@ -198,41 +160,53 @@ void TensorAdd(const VarType& src, VarType* dst) {
   }
 
   // AddKernel already support inputs of different dtype. For AMP master_grad,
-  // the dtype of source tensor and destination tensor will be diferent. So the
+  // the dtype of source tensor and destination tensor will be different. So the
   // check requiring input dtypes to be the same have been removed.
 #define PADDLE_TENSOR_ADD(T, CONTEXT)                                          \
   if (data_type == framework::DataTypeTrait<T>::DataType()) {                  \
-    auto cpu_ctx = static_cast<CONTEXT*>(                                      \
-        platform::DeviceContextPool::Instance().Get(place));                   \
-    phi::AddKernel<T, CONTEXT>(*cpu_ctx, src_tensor, *dst_tensor, dst_tensor); \
+    auto cpu_ctx =                                                             \
+        static_cast<CONTEXT*>(phi::DeviceContextPool::Instance().Get(place));  \
+    phi::AddKernel<T, CONTEXT>(*cpu_ctx, *dst_tensor, src_tensor, dst_tensor); \
     return;                                                                    \
   }
 
-  if (platform::is_gpu_place(place)) {
+  if (phi::is_gpu_place(place)) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
     PADDLE_TENSOR_ADD(float, phi::GPUContext);
     PADDLE_TENSOR_ADD(double, phi::GPUContext);
     PADDLE_TENSOR_ADD(phi::dtype::float16, phi::GPUContext);
     PADDLE_TENSOR_ADD(phi::dtype::bfloat16, phi::GPUContext);
-    PADDLE_TENSOR_ADD(platform::complex<float>, phi::GPUContext);
-    PADDLE_TENSOR_ADD(platform::complex<double>, phi::GPUContext);
+    PADDLE_TENSOR_ADD(phi::dtype::complex<float>, phi::GPUContext);
+    PADDLE_TENSOR_ADD(phi::dtype::complex<double>, phi::GPUContext);
 #endif
   }
 
-#define TENSOR_ADD_EIGEN(T)                                \
-  auto cpu_ctx = static_cast<phi::CPUContext*>(            \
-      platform::DeviceContextPool::Instance().Get(place)); \
-  auto in = phi::EigenVector<T>::Flatten(src_tensor);      \
-  auto out = phi::EigenVector<T>::Flatten(*dst_tensor);    \
-  auto& p = *(cpu_ctx->eigen_device());                    \
-  out.device(p) = out + in;                                \
+  if (phi::is_xpu_place(place)) {
+#if defined(PADDLE_WITH_XPU)
+    PADDLE_TENSOR_ADD(float, phi::XPUContext);
+    PADDLE_TENSOR_ADD(double, phi::XPUContext);
+    PADDLE_TENSOR_ADD(phi::dtype::float16, phi::XPUContext);
+    PADDLE_TENSOR_ADD(phi::dtype::bfloat16, phi::XPUContext);
+#ifdef PADDLE_WITH_XPU_FFT
+    PADDLE_TENSOR_ADD(phi::dtype::complex<float>, phi::XPUContext);
+#endif
+#endif
+  }
+
+#define TENSOR_ADD_EIGEN(T)                             \
+  auto cpu_ctx = static_cast<phi::CPUContext*>(         \
+      phi::DeviceContextPool::Instance().Get(place));   \
+  auto in = phi::EigenVector<T>::Flatten(src_tensor);   \
+  auto out = phi::EigenVector<T>::Flatten(*dst_tensor); \
+  auto& p = *(cpu_ctx->eigen_device());                 \
+  out.device(p) = out + in;                             \
   return;
 
-  if (platform::is_cpu_place(place)) {
+  if (phi::is_cpu_place(place)) {
     PADDLE_TENSOR_ADD(float, phi::CPUContext);
     PADDLE_TENSOR_ADD(double, phi::CPUContext);
-    PADDLE_TENSOR_ADD(platform::complex<float>, phi::CPUContext);
-    PADDLE_TENSOR_ADD(platform::complex<double>, phi::CPUContext);
+    PADDLE_TENSOR_ADD(phi::dtype::complex<float>, phi::CPUContext);
+    PADDLE_TENSOR_ADD(phi::dtype::complex<double>, phi::CPUContext);
     if (data_type == framework::proto::VarType::BF16) {
       TENSOR_ADD_EIGEN(phi::dtype::bfloat16);
     }
@@ -243,12 +217,11 @@ void TensorAdd(const VarType& src, VarType* dst) {
 
 #define PADDLE_TENSOR_ADD_CUSTOM(T)                              \
   if (data_type == framework::DataTypeTrait<T>::DataType()) {    \
-    platform::CustomDeviceContext* ctx =                         \
-        static_cast<platform::CustomDeviceContext*>(             \
-            platform::DeviceContextPool::Instance().Get(place)); \
+    phi::CustomContext* ctx = static_cast<phi::CustomContext*>(  \
+        phi::DeviceContextPool::Instance().Get(place));          \
     phi::stream::Stream stream(place, ctx->stream());            \
     auto device = phi::DeviceManager::GetDeviceWithPlace(place); \
-    device->BlasAXPBY<T>(stream,                                 \
+    device->BlasAXPBY<T>(stream.raw_stream(),                    \
                          static_cast<size_t>(numel),             \
                          1.,                                     \
                          src_tensor.data<T>(),                   \
@@ -257,39 +230,16 @@ void TensorAdd(const VarType& src, VarType* dst) {
     return;                                                      \
   }
 
-  if (platform::is_custom_place(place)) {
+  if (phi::is_custom_place(place)) {
 #if defined(PADDLE_WITH_CUSTOM_DEVICE)
     PADDLE_TENSOR_ADD_CUSTOM(float);
     PADDLE_TENSOR_ADD_CUSTOM(double);
-    PADDLE_TENSOR_ADD_CUSTOM(platform::complex<float>);
-    PADDLE_TENSOR_ADD_CUSTOM(platform::complex<double>);
+    PADDLE_TENSOR_ADD_CUSTOM(phi::dtype::complex<float>);
+    PADDLE_TENSOR_ADD_CUSTOM(phi::dtype::complex<double>);
 #endif
   }
 
-#ifdef PADDLE_WITH_XPU
-  if (platform::is_xpu_place(place)) {
-    if (data_type == framework::DataTypeTrait<float>::DataType()) {
-      XPUTensorAddFunctor<float>(place, src_tensor, dst_tensor);
-    } else if (data_type ==
-               framework::DataTypeTrait<platform::float16>::DataType()) {
-      XPUTensorAddFunctor<platform::float16>(place, src_tensor, dst_tensor);
-    } else if (data_type == framework::DataTypeTrait<double>::DataType()) {
-      XPUTensorAddFunctor<double>(place, src_tensor, dst_tensor);
-    } else if (data_type ==
-               framework::DataTypeTrait<platform::bfloat16>::DataType()) {
-      XPUTensorAddFunctor<platform::bfloat16>(place, src_tensor, dst_tensor);
-    } else {
-      PADDLE_THROW(platform::errors::Unimplemented(
-          "Gradient accumulation of data type (%s) on place (%s) is not "
-          "supported in imperative mode",
-          framework::DataTypeToString(data_type),
-          place));
-    }
-    return;
-  }
-#endif
-
-  PADDLE_THROW(platform::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Gradient accumulation of data type (%s) on place (%s) is not "
       "supported in imperative mode",
       framework::DataTypeToString(data_type),
@@ -314,11 +264,11 @@ void SelectedRowsAddToTensor(const VarType& src, VarType* dst) {
   auto place = dst_tensor->place();
   auto data_type =
       framework::TransToProtoVarType(src_selected_rows.value().dtype());
-  platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
+  phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
 
 #define PADDLE_SELECTED_ROWS_ADD_TO_TENSOR(dev_ctx_type, cpp_type)       \
   if (data_type == framework::DataTypeTrait<cpp_type>::DataType()) {     \
-    paddle::platform::DeviceContext* dev_ctx = pool.Get(place);          \
+    phi::DeviceContext* dev_ctx = pool.Get(place);                       \
     phi::funcs::SelectedRowsAddToTensor<dev_ctx_type, cpp_type> functor; \
     functor(*(dynamic_cast<dev_ctx_type*>(dev_ctx)),                     \
             src_selected_rows,                                           \
@@ -327,7 +277,7 @@ void SelectedRowsAddToTensor(const VarType& src, VarType* dst) {
   }
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  if (paddle::platform::is_gpu_place(place)) {
+  if (phi::is_gpu_place(place)) {
     PADDLE_SELECTED_ROWS_ADD_TO_TENSOR(phi::GPUContext, float);
     PADDLE_SELECTED_ROWS_ADD_TO_TENSOR(phi::GPUContext, double);
   } else {
@@ -340,7 +290,7 @@ void SelectedRowsAddToTensor(const VarType& src, VarType* dst) {
 
 #undef PADDLE_SELECTED_ROWS_ADD_TO_TENSOR
 
-  PADDLE_THROW(platform::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "Not supported data type %s for SelectedRowsAddToTensor",
       framework::DataTypeToString(data_type)));
 }
@@ -364,7 +314,7 @@ void SelectedRowsAddTensor(const VarType& src_selected_rows_var,
 
   const auto& place = src_tensor.place();
   auto data_type = framework::TransToProtoVarType(src_tensor.dtype());
-  auto* dev_ctx = platform::DeviceContextPool::Instance().Get(place);
+  auto* dev_ctx = phi::DeviceContextPool::Instance().Get(place);
 
   phi::DenseTensor* dst_tensor =
       GetInnerMutableTensor<phi::DenseTensor>(dst_tensor_var);
@@ -382,7 +332,7 @@ void SelectedRowsAddTensor(const VarType& src_selected_rows_var,
   }
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  if (platform::is_gpu_place(place)) {
+  if (phi::is_gpu_place(place)) {
     PADDLE_SELECTED_ROWS_ADD_TENSOR(phi::GPUContext, float);
     PADDLE_SELECTED_ROWS_ADD_TENSOR(phi::GPUContext, double);
   } else {
@@ -393,7 +343,7 @@ void SelectedRowsAddTensor(const VarType& src_selected_rows_var,
   }
 #endif
 
-  PADDLE_THROW(platform::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "Not supported data type %s for SelectedRowsAddToTensor",
       framework::DataTypeToString(data_type)));
 
@@ -427,7 +377,7 @@ std::shared_ptr<ReturnVarType> SelectedRowsMerge(const VarType& src1,
   auto place = src_selected_rows1.value().place();
   auto data_type =
       framework::TransToProtoVarType(src_selected_rows1.value().dtype());
-  platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
+  phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
 
   std::vector<const phi::SelectedRows*> src_selected_rows;
   src_selected_rows.emplace_back(&src_selected_rows1);
@@ -439,7 +389,7 @@ std::shared_ptr<ReturnVarType> SelectedRowsMerge(const VarType& src1,
 
 #define PADDLE_SELECTED_ROWS_ADD(dev_ctx_type, cpp_type)             \
   if (data_type == framework::DataTypeTrait<cpp_type>::DataType()) { \
-    paddle::platform::DeviceContext* dev_ctx = pool.Get(place);      \
+    phi::DeviceContext* dev_ctx = pool.Get(place);                   \
     phi::funcs::scatter::MergeAdd<dev_ctx_type, cpp_type> merge_add; \
     merge_add(*(dynamic_cast<dev_ctx_type*>(dev_ctx)),               \
               src_selected_rows,                                     \
@@ -448,13 +398,13 @@ std::shared_ptr<ReturnVarType> SelectedRowsMerge(const VarType& src1,
   }
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  if (paddle::platform::is_gpu_place(place)) {
+  if (phi::is_gpu_place(place)) {
     PADDLE_SELECTED_ROWS_ADD(phi::GPUContext, float);
     PADDLE_SELECTED_ROWS_ADD(phi::GPUContext, double);
   } else {
 #endif
 #if defined(PADDLE_WITH_XPU)
-    if (paddle::platform::is_xpu_place(place)) {
+    if (phi::is_xpu_place(place)) {
       PADDLE_SELECTED_ROWS_ADD(phi::XPUContext, float);
     } else {
 #endif
@@ -468,7 +418,7 @@ std::shared_ptr<ReturnVarType> SelectedRowsMerge(const VarType& src1,
 #endif
 
 #undef PADDLE_SELECTED_ROWS_ADD
-  PADDLE_THROW(platform::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "Not supported data type %s for SelectedRowsMerge",
       framework::DataTypeToString(data_type)));
 }
@@ -489,7 +439,7 @@ void VariableWrapperAdd(std::shared_ptr<VariableWrapper> var,
     } else if (src.IsType<phi::SelectedRows>()) {
       SelectedRowsAddToTensor(src, dst);
     } else {
-      PADDLE_THROW(platform::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Unexpected branch, output variable type is %s",
           framework::ToTypeName(dst->Type())));
     }
@@ -508,23 +458,22 @@ void VariableWrapperAdd(std::shared_ptr<VariableWrapper> var,
       auto temp = SelectedRowsMerge<VariableWrapper>(src, *dst);
       *dst = std::move(*(temp->MutableVar()));
     } else {
-      PADDLE_THROW(platform::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Unexpected branch, output variable type is %s",
           framework::ToTypeName(dst->Type())));
     }
   }
 }
 
-static platform::Place GetPlaceOfVar(
-    const std::shared_ptr<VariableWrapper>& var) {
-  platform::Place place;
-  if (var->Var().IsType<phi::DenseTensor>()) {
+static phi::Place GetPlaceOfVar(const std::shared_ptr<VariableWrapper>& var) {
+  phi::Place place;
+  if (var->Var().IsType<phi::DenseTensor>()) {  // NOLINT
     place = var->Var().Get<phi::DenseTensor>().place();
   } else if (var->Var().IsType<phi::SelectedRows>()) {
     place = var->Var().Get<phi::SelectedRows>().place();
   } else {
-    PADDLE_THROW(platform::errors::InvalidArgument(
-        "only support LoDTensor and SelectedRows in dygraph"));
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "only support DenseTensor and SelectedRows in dygraph"));
   }
   return place;
 }
@@ -539,18 +488,18 @@ void GradientAccumulator::AccumulateGrad() {
   }
   PADDLE_ENFORCE_EQ(HasInnerVar(),
                     true,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Leaf tensor should have inner var to store results of "
                         "this auto-grad"));
   PADDLE_ENFORCE_EQ(inner_var_->Var().IsInitialized(),
                     true,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Interior var of Leaf tensor should be initialized."));
   auto* src = inner_var_->MutableVar();
   auto* dst = var_->MutableVar();
   if (!var_->IsEmpty()) {
     VLOG(6) << "Leaf Var(" << var_->Name()
-            << ")'s Gradient has been initizlized, will accumulate on "
+            << ")'s Gradient has been initialized, will accumulate on "
                "previous gradient.";
     if (dst->IsType<phi::DenseTensor>()) {
       if (src->IsType<phi::DenseTensor>()) {
@@ -567,8 +516,8 @@ void GradientAccumulator::AccumulateGrad() {
         *dst = std::move(*(temp->MutableVar()));
       }
     } else {
-      PADDLE_THROW(platform::errors::PermissionDenied(
-          "Only support LoDTensor and SelectedRows for gradient var"));
+      PADDLE_THROW(common::errors::PermissionDenied(
+          "Only support DenseTensor and SelectedRows for gradient var"));
     }
   } else {
     VLOG(6)
@@ -585,25 +534,25 @@ void GradientAccumulator::AccumulateGrad() {
 void GradientAccumulator::CallGradientHooks() {
   PADDLE_ENFORCE_EQ(var_->IsLeafGrad(),
                     true,
-                    platform::errors::Unavailable(
+                    common::errors::Unavailable(
                         "Only leaf gradient Tensor can deal with by gradient "
                         "hook in gradient accumulator."));
   PADDLE_ENFORCE_EQ(
       SumGradCompleted(),
       true,
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Only can call gradient hooks after sum gradient completed."));
   PADDLE_ENFORCE_EQ(HasInnerVar(),
                     true,
-                    platform::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "Leaf Tensor's inner var is nullptr when "
                         "call gradient hook."));
   PADDLE_ENFORCE_EQ(
       inner_var_->Var().IsInitialized(),
       true,
-      platform::errors::PreconditionNotMet("Leaf Tensor's inner var "
-                                           "is not initialized when "
-                                           "call gradient hook."));
+      common::errors::PreconditionNotMet("Leaf Tensor's inner var "
+                                         "is not initialized when "
+                                         "call gradient hook."));
   if (var_->HasVariableWrapperHook()) {
     VLOG(3) << "Call " << var_->GetVariableWrapperHooks().size()
             << " hooks of leaf gradient accumulator's inner var `"
@@ -623,19 +572,19 @@ void GradientAccumulator::CallReduceHooks() {
   PADDLE_ENFORCE_EQ(
       var_->IsLeafGrad(),
       true,
-      platform::errors::Unavailable("Only leaf gradient Tensor can deal with "
-                                    "by reduce hook in gradient accumulator."));
+      common::errors::Unavailable("Only leaf gradient Tensor can deal with "
+                                  "by reduce hook in gradient accumulator."));
   PADDLE_ENFORCE_EQ(SumGradCompleted(),
                     true,
-                    platform::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "Only can call reduce hooks after the gradient "
                         "summation is completed in current batch."));
   PADDLE_ENFORCE_EQ(HasInnerVar(),
                     false,
-                    platform::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "Only can call reduce hooks after the "
                         "gradient accumulation is completed in "
-                        "current batch or across batchs."));
+                        "current batch or across batches."));
   if (var_->HasVoidHook()) {
     for (const auto& hook : var_->GetVoidHooks()) {
       VLOG(3) << "call gradient accumulator backward hooks.";
@@ -656,8 +605,8 @@ void EagerGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
   }
 
   auto* dst_var = Var();
-  platform::Place place = GetPlaceOfVar(var);
-  if (!dst_var->OverridedStopGradient()) {
+  phi::Place place = GetPlaceOfVar(var);
+  if (!dst_var->OverriddenStopGradient()) {
     if (CurCnt() == 0) {
       MoveOrCopyVar(dst_var->MutableVar(), var->MutableVar(), unchange_input);
     } else {
@@ -669,19 +618,17 @@ void EagerGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
     if (!dst_var->Var().IsInitialized() ||
         !dst_var->Var().Get<phi::DenseTensor>().IsInitialized()) {
       VLOG(6) << "Set StopGradient Grad: " << dst_var->Name() << " as zero ";
-      auto* dev_ctx = platform::DeviceContextPool::Instance().Get(place);
+      auto* dev_ctx = phi::DeviceContextPool::Instance().Get(place);
       if (!dst_var->Var().IsInitialized()) {
         auto* tensor = dst_var->MutableVar()->GetMutable<phi::DenseTensor>();
         VLOG(6) << "Dims of " << dst_var->Name()
                 << " is set as: " << var->Var().Get<phi::DenseTensor>().dims();
         tensor->Resize(var->Var().Get<phi::DenseTensor>().dims());
-        tensor->mutable_data(place,
-                             framework::TransToPhiDataType(var->DataType()));
+        tensor->mutable_data(place, phi::TransToPhiDataType(var->DataType()));
         phi::funcs::set_constant(*dev_ctx, tensor, 0.0f);
       } else {
         auto* tensor = dst_var->MutableVar()->GetMutable<phi::DenseTensor>();
-        tensor->mutable_data(place,
-                             framework::TransToPhiDataType(var->DataType()));
+        tensor->mutable_data(place, phi::TransToPhiDataType(var->DataType()));
         phi::funcs::set_constant(*dev_ctx, tensor, 0.0f);
       }
     }
@@ -690,12 +637,12 @@ void EagerGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
   // Type may be changed after OP run, such as VarTypeInference
   // so synchronous VariableWrapper with Variable.
   if (dst_var->Var().IsType<phi::DenseTensor>()) {
-    dst_var->SetType(framework::proto::VarType::LOD_TENSOR);
+    dst_var->SetType(framework::proto::VarType::DENSE_TENSOR);
   } else if (dst_var->Var().IsType<phi::SelectedRows>()) {
     dst_var->SetType(framework::proto::VarType::SELECTED_ROWS);
   }
 
-  // Increase curent count
+  // Increase current count
   IncreaseCurCnt();
 }
 
@@ -703,8 +650,8 @@ void SortedGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
                                         size_t trace_id,
                                         bool unchange_input) {
   auto* dst_var = Var();
-  platform::Place place = GetPlaceOfVar(var);
-  if (!dst_var->OverridedStopGradient()) {
+  phi::Place place = GetPlaceOfVar(var);
+  if (!dst_var->OverriddenStopGradient()) {
     if (ref_cnt_ == 1) {
       MoveOrCopyVar(dst_var->MutableVar(),
                     var->MutableVar(),
@@ -735,7 +682,7 @@ void SortedGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
       }
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-      if (paddle::platform::is_gpu_place(place)) {
+      if (phi::is_gpu_place(place)) {  // NOLINT
         // sum selected rows firstly
         for (auto& var_info : tmp_grad_vars_) {
           if (!var_info.var->Var().IsType<phi::SelectedRows>()) {
@@ -762,8 +709,8 @@ void SortedGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
 
           PADDLE_ENFORCE_EQ(var_info.var->Var().IsType<phi::DenseTensor>(),
                             true,
-                            platform::errors::PermissionDenied(
-                                "Gradient var must be LoDTensor"));
+                            common::errors::PermissionDenied(
+                                "Gradient var must be DenseTensor"));
           if (CurCnt() == 0) {
             MoveOrCopyVar(dst_var->MutableVar(),
                           var_info.var->MutableVar(),
@@ -786,9 +733,9 @@ void SortedGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
               var_info.var->Var().IsType<phi::DenseTensor>() ||
                   var_info.var->Var().IsType<phi::SelectedRows>(),
               true,
-              platform::errors::PermissionDenied("The type of Gradient "
-                                                 "var must be LoDTensor "
-                                                 "or SelectedRows"));
+              common::errors::PermissionDenied("The type of Gradient "
+                                               "var must be DenseTensor "
+                                               "or SelectedRows"));
           if (CurCnt() == 0) {
             MoveOrCopyVar(dst_var->MutableVar(),
                           var_info.var->MutableVar(),
@@ -809,19 +756,17 @@ void SortedGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
     if (!dst_var->Var().IsInitialized() ||
         !dst_var->Var().Get<phi::DenseTensor>().IsInitialized()) {
       VLOG(6) << "Set StopGradient Grad: " << var->Name() << " as zero";
-      auto* dev_ctx = platform::DeviceContextPool::Instance().Get(place);
+      auto* dev_ctx = phi::DeviceContextPool::Instance().Get(place);
       if (!dst_var->Var().IsInitialized()) {
         auto* tensor = dst_var->MutableVar()->GetMutable<phi::DenseTensor>();
         VLOG(6) << "Dims of " << dst_var->Name()
                 << " is set as: " << var->Var().Get<phi::DenseTensor>().dims();
         tensor->Resize(var->Var().Get<phi::DenseTensor>().dims());
-        tensor->mutable_data(place,
-                             framework::TransToPhiDataType(var->DataType()));
+        tensor->mutable_data(place, phi::TransToPhiDataType(var->DataType()));
         phi::funcs::set_constant(*dev_ctx, tensor, 0.0f);
       } else {
         auto* tensor = dst_var->MutableVar()->GetMutable<phi::DenseTensor>();
-        tensor->mutable_data(place,
-                             framework::TransToPhiDataType(var->DataType()));
+        tensor->mutable_data(place, phi::TransToPhiDataType(var->DataType()));
         phi::funcs::set_constant(*dev_ctx, tensor, 0.0f);
       }
     }
@@ -830,10 +775,9 @@ void SortedGradientAccumulator::SumGrad(std::shared_ptr<VariableWrapper> var,
   }
 
   if (dst_var->Var().IsType<phi::DenseTensor>()) {
-    dst_var->SetType(framework::proto::VarType::LOD_TENSOR);
+    dst_var->SetType(framework::proto::VarType::DENSE_TENSOR);
   } else if (dst_var->Var().IsType<phi::SelectedRows>()) {
     dst_var->SetType(framework::proto::VarType::SELECTED_ROWS);
   }
 }
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative

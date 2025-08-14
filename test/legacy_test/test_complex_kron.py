@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 import paddle.base.dygraph as dg
-from paddle import base
 
 
 class ComplexKronTestCase(unittest.TestCase):
@@ -29,9 +29,7 @@ class ComplexKronTestCase(unittest.TestCase):
 
     def setUp(self):
         self.ref_result = np.kron(self.x, self.y)
-        self._places = [paddle.CPUPlace()]
-        if base.is_compiled_with_cuda():
-            self._places.append(paddle.CUDAPlace(0))
+        self._places = get_places()
 
     def runTest(self):
         for place in self._places:
@@ -39,8 +37,8 @@ class ComplexKronTestCase(unittest.TestCase):
 
     def test_kron_api(self, place):
         with dg.guard(place):
-            x_var = dg.to_variable(self.x)
-            y_var = dg.to_variable(self.y)
+            x_var = paddle.to_tensor(self.x)
+            y_var = paddle.to_tensor(self.y)
             out_var = paddle.kron(x_var, y_var)
             np.testing.assert_allclose(
                 out_var.numpy(), self.ref_result, rtol=1e-05

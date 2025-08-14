@@ -17,11 +17,10 @@ import unittest
 import gradient_checker
 import numpy as np
 from decorator_helper import prog_scope
+from op_test import get_places
 
 import paddle
 from paddle import base
-from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestInstanceNormDoubleGradCheck(unittest.TestCase):
@@ -35,13 +34,12 @@ class TestInstanceNormDoubleGradCheck(unittest.TestCase):
             eps = 0.005
             atol = 1e-4
             x = paddle.create_parameter(dtype=dtype, shape=shape, name='x')
-            z = paddle.static.nn.instance_norm(input=x)
+            z = paddle.nn.InstanceNorm2D(3)(x)
             x_arr = np.random.uniform(-1, 1, shape).astype(dtype)
             gradient_checker.double_grad_check(
                 [x], z, x_init=x_arr, atol=atol, place=place, eps=eps
             )
 
-    @test_with_pir_api
     @prog_scope()
     def func_pir(self, place):
         prog = paddle.static.Program()
@@ -60,11 +58,9 @@ class TestInstanceNormDoubleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for p in places:
-            self.func(p)
+        for p in get_places():
+            with paddle.pir_utils.OldIrGuard():
+                self.func(p)
             self.func_pir(p)
 
 
@@ -81,15 +77,14 @@ class TestInstanceNormDoubleGradCheckWithoutParamBias(
             eps = 0.005
             atol = 1e-4
             x = paddle.create_parameter(dtype=dtype, shape=shape, name='x')
-            z = paddle.static.nn.instance_norm(
-                input=x, param_attr=False, bias_attr=False
+            z = paddle.nn.InstanceNorm2D(3, weight_attr=False, bias_attr=False)(
+                x
             )
             x_arr = np.random.uniform(-1, 1, shape).astype(dtype)
             gradient_checker.double_grad_check(
                 [x], z, x_init=x_arr, atol=atol, place=place, eps=eps
             )
 
-    @test_with_pir_api
     @prog_scope()
     def func_pir(self, place):
         prog = paddle.static.Program()
@@ -111,7 +106,6 @@ class TestInstanceNormDoubleGradEagerCheck(unittest.TestCase):
     def instance_norm_wrapper(self, x):
         return paddle.nn.functional.instance_norm(x[0])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
         prog = base.Program()
@@ -140,10 +134,7 @@ class TestInstanceNormDoubleGradEagerCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for p in places:
+        for p in get_places():
             self.func(p)
 
 
@@ -154,7 +145,6 @@ class TestInstanceNormDoubleGradEagerCheckWithParams(
         instance_norm = paddle.nn.InstanceNorm2D(3)
         return instance_norm(x[0])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
         prog = paddle.static.Program()
@@ -227,7 +217,6 @@ class TestBatchNormDoubleGradCheck(unittest.TestCase):
                 place=place,
             )
 
-    @test_with_pir_api
     @prog_scope()
     def func_pir(self, place):
         prog = base.Program()
@@ -258,11 +247,9 @@ class TestBatchNormDoubleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for p in places:
-            self.func(p)
+        for p in get_places():
+            with paddle.pir_utils.OldIrGuard():
+                self.func(p)
             self.func_pir(p)
 
 
@@ -305,7 +292,6 @@ class TestBatchNormDoubleGradCheckCase4(TestBatchNormDoubleGradCheck):
         )
         return batch_norm(x[0])
 
-    @test_with_pir_api
     @prog_scope()
     def func_pir(self, place):
         prog = base.Program()
@@ -366,7 +352,6 @@ class TestBatchNormDoubleGradCheckCase5(TestBatchNormDoubleGradCheck):
                 eps=eps,
             )
 
-    @test_with_pir_api
     @prog_scope()
     def func_pir(self, place):
         prog = base.Program()

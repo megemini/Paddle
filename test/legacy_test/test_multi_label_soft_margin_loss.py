@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_devices
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 def call_MultiLabelSoftMarginLoss_layer(
@@ -26,10 +26,10 @@ def call_MultiLabelSoftMarginLoss_layer(
     weight=None,
     reduction='mean',
 ):
-    multilabel_margin_loss = paddle.nn.MultiLabelSoftMarginLoss(
+    multi_label_margin_loss = paddle.nn.MultiLabelSoftMarginLoss(
         weight=weight, reduction=reduction
     )
-    res = multilabel_margin_loss(
+    res = multi_label_margin_loss(
         input=input,
         label=label,
     )
@@ -115,7 +115,7 @@ def test_dygraph(
         return dy_result
 
 
-def calc_multilabel_margin_loss(
+def calc_multi_label_margin_loss(
     input,
     label,
     weight=None,
@@ -140,18 +140,16 @@ def calc_multilabel_margin_loss(
 
 
 class TestMultiLabelMarginLoss(unittest.TestCase):
-    @test_with_pir_api
+
     def test_MultiLabelSoftMarginLoss(self):
         input = np.random.uniform(0.1, 0.8, size=(5, 5)).astype(np.float64)
         label = np.random.randint(0, 2, size=(5, 5)).astype(np.float64)
 
-        places = ['cpu']
-        if paddle.device.is_compiled_with_cuda():
-            places.append('gpu')
+        places = get_devices()
         reductions = ['sum', 'mean', 'none']
         for place in places:
             for reduction in reductions:
-                expected = calc_multilabel_margin_loss(
+                expected = calc_multi_label_margin_loss(
                     input=input, label=label, reduction=reduction
                 )
 
@@ -198,7 +196,7 @@ class TestMultiLabelMarginLoss(unittest.TestCase):
         self.assertRaises(
             ValueError,
             paddle.nn.MultiLabelSoftMarginLoss,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         input = paddle.to_tensor([[0.1, 0.3]], dtype='float32')
         label = paddle.to_tensor([[0.0, 1.0]], dtype='float32')
@@ -207,18 +205,17 @@ class TestMultiLabelMarginLoss(unittest.TestCase):
             paddle.nn.functional.multi_label_soft_margin_loss,
             input=input,
             label=label,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_MultiLabelSoftMarginLoss_weights(self):
         input = np.random.uniform(0.1, 0.8, size=(5, 5)).astype(np.float64)
         label = np.random.randint(0, 2, size=(5, 5)).astype(np.float64)
         weight = np.random.randint(0, 2, size=(5, 5)).astype(np.float64)
         place = 'cpu'
         reduction = 'mean'
-        expected = calc_multilabel_margin_loss(
+        expected = calc_multi_label_margin_loss(
             input=input, label=label, weight=weight, reduction=reduction
         )
 

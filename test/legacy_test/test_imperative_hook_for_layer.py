@@ -12,14 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
-from test_imperative_lod_tensor_to_selected_rows import SimpleNet
 
+sys.path.append("../deprecated/legacy_test")
+from op_test import get_places
+from test_imperative_lod_tensor_to_selected_rows_deprecated import SimpleNet
+
+import paddle
 from paddle import base
-from paddle.base import core
-from paddle.base.dygraph import base as imperative_base
 
 call_forward_post_hook = False
 call_forward_pre_hook = False
@@ -49,14 +52,9 @@ class Test_Forward_Hook(unittest.TestCase):
     def test_forward_hook_return_value(self):
         seed = 90
 
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-
-        for place in places:
+        for place in get_places():
             with base.dygraph.guard(place):
-                base.default_startup_program().random_seed = seed
-                base.default_main_program().random_seed = seed
+                paddle.seed(seed)
                 base.set_flags({'FLAGS_sort_sum_gradient': True})
 
                 input_word = (
@@ -78,9 +76,9 @@ class Test_Forward_Hook(unittest.TestCase):
                 )
                 y_data = y_data.reshape((-1, 1))
 
-                input = imperative_base.to_variable(input_word)
-                input1 = imperative_base.to_variable(input_word1)
-                y = imperative_base.to_variable(y_data)
+                input = paddle.to_tensor(input_word)
+                input1 = paddle.to_tensor(input_word1)
+                y = paddle.to_tensor(y_data)
 
                 simplenet = SimpleNet(
                     hidden_size=20,
@@ -131,14 +129,9 @@ class Test_Forward_Hook(unittest.TestCase):
     def test_forward_hook(self):
         seed = 90
 
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-
-        for place in places:
+        for place in get_places():
             with base.dygraph.guard(place):
-                base.default_startup_program().random_seed = seed
-                base.default_main_program().random_seed = seed
+                paddle.seed(seed)
                 base.set_flags({'FLAGS_sort_sum_gradient': True})
 
                 global call_forward_post_hook
@@ -161,8 +154,8 @@ class Test_Forward_Hook(unittest.TestCase):
                 )
                 y_data = y_data.reshape((-1, 1))
 
-                input = imperative_base.to_variable(input_word)
-                y = imperative_base.to_variable(y_data)
+                input = paddle.to_tensor(input_word)
+                y = paddle.to_tensor(y_data)
 
                 simplenet = SimpleNet(
                     hidden_size=20,
@@ -208,6 +201,41 @@ class Test_Forward_Hook(unittest.TestCase):
                 outs_remove_hook = simplenet(input, y)
                 self.assertFalse(call_forward_post_hook)
                 self.assertFalse(call_forward_pre_hook)
+
+
+def forward_pre_hook_with_kwargs(layer, args, kwargs):
+    kwargs['x'] = kwargs['x'] * 2
+    return (args, kwargs)
+
+
+class SimpleNetWithKWArgs(paddle.nn.Layer):
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+    def forward(self, x, y):
+        z = x + y
+
+        return z
+
+
+class TestHookWithKWArgs(unittest.TestCase):
+    def test_kwargs_hook(self):
+        net = SimpleNetWithKWArgs()
+        remove_handler = net.register_forward_pre_hook(
+            forward_pre_hook_with_kwargs, with_kwargs=True
+        )
+
+        x = paddle.randn((2, 3))
+        y = paddle.randn((2, 3))
+
+        out = net(x=x, y=y)
+        np.testing.assert_allclose(out.numpy(), (x * 2 + y).numpy())
+
+        remove_handler.remove()
+        out = net(x=x, y=y)
+        np.testing.assert_allclose(out.numpy(), (x + y).numpy())
 
 
 if __name__ == '__main__':

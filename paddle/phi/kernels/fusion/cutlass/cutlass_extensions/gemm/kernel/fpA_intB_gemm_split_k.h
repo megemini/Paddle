@@ -259,17 +259,23 @@ struct GemmFpAIntBSplitK {
                           ? device_sms
                           : fast_min(args.avail_sms, device_sms);
 
-      // Initialize the block mapping structure
+      static_assert(WarpCount::kK == 1, "WarpCount::kK should always == 1");
+      // NOTE: (changwenbin) Adapt cutlass upgraded to version 3.8.0
+      //  Initialize the block mapping structure
       block_mapping = ThreadblockSwizzle(
-          typename ThreadblockSwizzle::template KernelTraits<
-              GemmFpAIntBSplitK>(),
           args.mode,
           args.problem_size,
           {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
           args.batch_count,
           sm_occupancy,
           device_sms,
-          avail_sms);
+          avail_sms,
+          cutlass::sizeof_bits<ElementA>::value,
+          cutlass::sizeof_bits<ElementB>::value,
+          cutlass::sizeof_bits<ElementC>::value,
+          ThreadblockShape::kK /
+              (WarpCount::kK *
+               InstructionShape::kK));  // epilogue_acc_fragments_
     }
 
     /// Returns the workspace size (in bytes) needed for these parameters
@@ -847,7 +853,7 @@ struct GemmFpAIntBSplitK {
     // static_assert(print_type<Mma::>());
 
     // Perform this tile's range of multiply-accumulate (MAC) iterations
-    Mma mma(shared_storage.main_loop, thread_idx, warp_idx, lane_idx);
+    Mma mma(shared_storage.main_loop, -1, thread_idx, warp_idx, lane_idx);
 
     mma(tile_work.k_iters_remaining,
         accumulator_tile,
@@ -1031,7 +1037,7 @@ struct GemmFpAIntBSplitK {
     gemm();
 #elif defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 750) && (__CUDA_ARCH__ < 800)
     gemm();
-#elif defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && (__CUDA_ARCH__ < 900)
+#elif defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && (__CUDA_ARCH__ < 910)
     gemm();
 #else
     CUTLASS_NOT_IMPLEMENTED();

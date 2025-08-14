@@ -20,8 +20,6 @@ limitations under the License. */
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 
-#include "paddle/fluid/distributed/auto_parallel/spmd_rules/common.h"
-#include "paddle/fluid/distributed/auto_parallel/spmd_rules/dist_tensor_spec.h"
 #include "paddle/phi/core/distributed/auto_parallel/dist_attr.h"
 #include "paddle/phi/core/distributed/auto_parallel/inferspmd_utils.h"
 #include "paddle/phi/core/distributed/auto_parallel/process_mesh.h"
@@ -33,6 +31,9 @@ namespace paddle {
 namespace distributed {
 namespace auto_parallel {
 
+using phi::distributed::ProcessMesh;
+using phi::distributed::TensorDistAttr;
+
 const std::vector<int64_t>& get_dims_mapping(
     const phi::distributed::ArgDistAttr& dist_attr);
 
@@ -40,9 +41,21 @@ bool is_partial(const phi::distributed::ArgDistAttr& dist_attr);
 
 const std::set<int64_t> get_partial_dims(
     const phi::distributed::ArgDistAttr& dist_attr);
+
+const std::vector<std::vector<int64_t>>& get_multi_dims_mapping(
+    const phi::distributed::ArgDistAttr& dist_attr);
+
 void check_dim_mapping(const phi::distributed::ArgDistAttr& dist_attr,
                        const std::vector<int64_t>& dim_mapping,
                        const std::string& line = "");
+
+void check_multi_dims_mapping(
+    const phi::distributed::ArgDistAttr& dist_attr,
+    const std::vector<std::vector<int64_t>>& dim_mapping,
+    const std::string& line = "");
+
+void check_empty_dist_attr(const phi::distributed::ArgDistAttr& dist_attr,
+                           const std::string& line = "");
 
 void check_partial_dims(const phi::distributed::ArgDistAttr& dist_attr,
                         const std::set<int64_t>& dims,

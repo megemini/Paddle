@@ -18,7 +18,6 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle.base import core
 from paddle.base.dygraph import guard
 from paddle.base.executor import Executor
 from paddle.base.framework import Variable, default_main_program
@@ -29,26 +28,29 @@ main_program = default_main_program()
 
 class ParameterChecks(unittest.TestCase):
     def test_parameter(self):
-        shape = [784, 100]
-        val = 1.0625
-        b = main_program.global_block()
-        param = b.create_parameter(
-            name='fc.w',
-            shape=shape,
-            dtype='float32',
-            initializer=paddle.nn.initializer.Constant(val),
-        )
-        self.assertIsNotNone(param)
-        self.assertEqual('fc.w', param.name)
-        self.assertEqual((784, 100), param.shape)
-        self.assertEqual(core.VarDesc.VarType.FP32, param.dtype)
-        self.assertEqual(0, param.block.idx)
-        exe = Executor(paddle.CPUPlace())
-        p = exe.run(main_program, fetch_list=[param])[0]
-        np.testing.assert_array_equal(p, np.ones(shape) * val)
+        with paddle.pir_utils.OldIrGuard():
+            shape = [784, 100]
+            val = 1.0625
+            b = main_program.global_block()
+            param = b.create_parameter(
+                name='fc.w',
+                shape=shape,
+                dtype='float32',
+                initializer=paddle.nn.initializer.Constant(val),
+            )
+            self.assertIsNotNone(param)
+            self.assertEqual('fc.w', param.name)
+            self.assertEqual((784, 100), param.shape)
+            self.assertEqual(paddle.float32, param.dtype)
+            self.assertEqual(0, param.block.idx)
+            exe = Executor(paddle.CPUPlace())
+            p = exe.run(main_program, fetch_list=[param])[0]
+            np.testing.assert_array_equal(p, np.ones(shape) * val)
 
-        zero_dim_param = b.create_parameter(name='x', shape=[], dtype='float32')
-        self.assertEqual(zero_dim_param.shape, ())
+            zero_dim_param = b.create_parameter(
+                name='x', shape=[], dtype='float32'
+            )
+            self.assertEqual(zero_dim_param.shape, ())
 
     def test_parambase(self):
         with guard():
@@ -72,6 +74,22 @@ class ParameterChecks(unittest.TestCase):
 
             pram_copy2 = copy.deepcopy(param, memo)
             self.assertEqual(id(param_copy), id(pram_copy2))
+
+    def test_create_0_size_param(self):
+        with guard():
+            shape = [0, 4]
+            for dtype in [
+                paddle.float32,
+                paddle.float64,
+            ]:
+                zero_size_param = paddle.create_parameter(
+                    shape,
+                    dtype,
+                )
+                self.assertEqual(zero_size_param.shape, shape)
+                self.assertEqual(zero_size_param.data_ptr(), 0)
+                # strides will be same with shape for 0-size tensor in paddle
+                self.assertEqual(zero_size_param.strides, shape)
 
     def func_exception(self):
         b = main_program.global_block()
@@ -117,6 +135,61 @@ class ParameterChecks(unittest.TestCase):
             )
             self.assertTrue(linear2.weight.is_leaf, True)
             self.assertTrue(linear2.bias.is_leaf, True)
+
+    def test_parambase_to_vector_zero(self):
+        with guard():
+            initializer = paddle.ParamAttr(
+                initializer=paddle.nn.initializer.Constant(3.0)
+            )
+            linear1 = paddle.nn.Linear(0, 15, initializer)
+
+            vec = paddle.nn.utils.parameters_to_vector(linear1.parameters())
+            self.assertEqual(linear1.weight.shape, [0, 15])
+            self.assertEqual(linear1.bias.shape, [15])
+            self.assertTrue(isinstance(vec, Variable))
+            self.assertEqual(vec.shape, [15])
+
+
+class TestVectorToParam(unittest.TestCase):
+    def test_vector_to_param_zerosize(self):
+        # test the case that the parameters contains zero size tensor
+        with guard():
+            vec = paddle.randn([18], dtype='float32')
+            param1 = paddle.empty([5], dtype='float32')
+            param2 = paddle.empty([5], dtype='float32')
+            param3 = paddle.empty([8], dtype='float32')
+            param4 = paddle.empty([0], dtype='float32')
+            params = [param1, param2, param3, param4]
+            paddle.nn.utils.vector_to_parameters(vec, params)
+            # concat the parameters and get the original vector
+            vec_ = paddle.concat(params, axis=0)
+            np.testing.assert_array_equal(vec_.numpy(), vec.numpy())
+
+    def test_vector_to_param1(self):
+        # test the case that the sum of parameter's elements less than vector elements
+        with guard():
+            vec = paddle.randn([18], dtype='float32')
+            param1 = paddle.empty([5], dtype='float32')
+            param2 = paddle.empty([5], dtype='float32')
+            param3 = paddle.empty([7], dtype='float32')
+            params = [param1, param2, param3]
+            paddle.nn.utils.vector_to_parameters(vec, params)
+            # concat the parameters and get the original vector
+            vec_ = paddle.concat(params, axis=0)
+            np.testing.assert_array_equal(vec_.numpy(), vec[:17].numpy())
+
+    def test_vector_to_param2(self):
+        # test the case that the sum of parameter's elements grater than vector elements
+        def _test_vector_to_param():
+            with guard():
+                vec = paddle.randn([18], dtype='float32')
+                param1 = paddle.empty([5], dtype='float32')
+                param2 = paddle.empty([5], dtype='float32')
+                param3 = paddle.empty([9], dtype='float32')
+                params = [param1, param2, param3]
+                paddle.nn.utils.vector_to_parameters(vec, params)
+
+        self.assertRaises(ValueError, _test_vector_to_param)
 
 
 if __name__ == '__main__':

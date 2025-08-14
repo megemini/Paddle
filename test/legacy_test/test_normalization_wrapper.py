@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 from paddle import base
-from paddle.base import core
 
 
 class TestNormalization(unittest.TestCase):
@@ -48,11 +48,7 @@ class TestNormalization(unittest.TestCase):
 
     def run_program(self):
         """Run the test program."""
-        places = [core.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(core.CUDAPlace(0))
-
-        for place in places:
+        for place in get_places():
             self.set_inputs(place)
             exe = base.Executor(place)
 

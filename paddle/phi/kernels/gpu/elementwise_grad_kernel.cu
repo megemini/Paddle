@@ -23,6 +23,7 @@
 #include "paddle/phi/common/float16.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_utils.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/elementwise_functor.h"
 #include "paddle/phi/kernels/gpu/elementwise_grad.h"
 #include "paddle/phi/kernels/impl/elementwise_grad_kernel_impl.h"
@@ -39,6 +40,23 @@ void SubtractGradKernel(const Context& dev_ctx,
                         DenseTensor* dy) {
   // skip out
   auto* out = &dout;
+  if (dout.numel() == 0) {
+    if (dx) {
+      dev_ctx.template Alloc<T>(dx);
+      if (dx->numel() != 0) {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      dev_ctx.template Alloc<T>(dy);
+      if (dy->numel() != 0) {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
   if (dx != nullptr && dy != nullptr && (dx->dims() == dy->dims())) {
     elementwise_sub_grad<T>(dev_ctx, x, y, *out, dout, dx, dy);
   } else {
@@ -157,6 +175,25 @@ void MaximumGradKernel(const Context& dev_ctx,
                        const DenseTensor& dout,
                        DenseTensor* dx,
                        DenseTensor* dy) {
+  if (dout.numel() == 0) {
+    if (dx) {
+      if (dx->numel() == 0) {
+        dev_ctx.template Alloc<T>(dx);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      if (dy->numel() == 0) {
+        dev_ctx.template Alloc<T>(dy);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
   const auto place = dev_ctx.GetPlace();
   int axis = -1;
   if (dx != nullptr && dy != nullptr) {
@@ -187,6 +224,26 @@ void MinimumGradKernel(const Context& dev_ctx,
                        const DenseTensor& dout,
                        DenseTensor* dx,
                        DenseTensor* dy) {
+  if (dout.numel() == 0) {
+    if (dx) {
+      if (dx->numel() == 0) {
+        dev_ctx.template Alloc<T>(dx);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      if (dy->numel() == 0) {
+        dev_ctx.template Alloc<T>(dy);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
+
   const auto place = dev_ctx.GetPlace();
   int axis = -1;
   if (dx != nullptr && dy != nullptr) {
@@ -207,6 +264,95 @@ void MinimumGradKernel(const Context& dev_ctx,
     std::vector<const DenseTensor*> ins = {&x, &y, &dout};
     GetGradXOrYOut<T>(
         dev_ctx, place, axis, ins, dout, dy, funcs::MinGradYFunctor<T>());
+  }
+}
+
+template <typename T, typename Context>
+void RemainderGradKernel(const Context& dev_ctx,
+                         const DenseTensor& x,
+                         const DenseTensor& y,
+                         const DenseTensor& dout,
+                         DenseTensor* dx,
+                         DenseTensor* dy) {
+  if (dout.numel() == 0) {
+    if (dx) {
+      if (dx->numel() == 0) {
+        dev_ctx.template Alloc<T>(dx);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dx->dims())), 0, dx);
+      }
+    }
+    if (dy) {
+      if (dy->numel() == 0) {
+        dev_ctx.template Alloc<T>(dy);
+      } else {
+        phi::Full<T, Context>(
+            dev_ctx, phi::IntArray(common::vectorize(dy->dims())), 0, dy);
+      }
+    }
+    return;
+  }
+  const auto place = dev_ctx.GetPlace();
+  int axis = -1;
+  if (dx != nullptr && dy != nullptr) {
+    std::vector<const DenseTensor*> ins = {&x, &y, &dout};
+    GetGradXAndYOut<T>(dev_ctx,
+                       place,
+                       axis,
+                       ins,
+                       dout,
+                       dx,
+                       dy,
+                       funcs::RemainderGradXYFunctor<T, T>());
+  } else if (dx != nullptr && dy == nullptr) {
+    std::vector<const DenseTensor*> ins = {&x, &y, &dout};
+    GetGradXOrYOut<T>(
+        dev_ctx, place, axis, ins, dout, dx, funcs::RemainderGradXFunctor<T>());
+  } else if (dy != nullptr && dx == nullptr) {
+    std::vector<const DenseTensor*> ins = {&x, &y, &dout};
+    GetGradXOrYOut<T>(
+        dev_ctx, place, axis, ins, dout, dy, funcs::RemainderGradYFunctor<T>());
+  }
+}
+
+template <typename T, typename Context>
+void CopySignGradKernel(const Context& dev_ctx,
+                        const DenseTensor& x,
+                        const DenseTensor& y,
+                        const DenseTensor& out_grad,
+                        DenseTensor* x_grad,
+                        DenseTensor* y_grad) {
+  const auto place = dev_ctx.GetPlace();
+  int axis = -1;
+  if (x_grad != nullptr && y_grad != nullptr) {
+    std::vector<const DenseTensor*> ins = {&x, &y, &out_grad};
+    GetGradXAndYOut<T>(dev_ctx,
+                       place,
+                       axis,
+                       ins,
+                       out_grad,
+                       x_grad,
+                       y_grad,
+                       funcs::CopySignGradXYFunctor<T, T>());
+  } else if (x_grad != nullptr && y_grad == nullptr) {
+    std::vector<const DenseTensor*> ins = {&x, &y, &out_grad};
+    GetGradXOrYOut<T>(dev_ctx,
+                      place,
+                      axis,
+                      ins,
+                      out_grad,
+                      x_grad,
+                      funcs::CopySignGradXFunctor<T>());
+  } else if (y_grad != nullptr && x_grad == nullptr) {
+    std::vector<const DenseTensor*> ins = {&x, &y, &out_grad};
+    GetGradXOrYOut<T>(dev_ctx,
+                      place,
+                      axis,
+                      ins,
+                      out_grad,
+                      y_grad,
+                      funcs::CopySignGradYFunctor<T>());
   }
 }
 }  // namespace phi
@@ -255,6 +401,17 @@ PD_REGISTER_KERNEL(minimum_grad,
                    phi::dtype::float16,
                    phi::dtype::bfloat16) {}
 
+PD_REGISTER_KERNEL(remainder_grad,
+                   GPU,
+                   ALL_LAYOUT,
+                   phi::RemainderGradKernel,
+                   float,
+                   double,
+                   int,
+                   int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
+
 PD_REGISTER_KERNEL(heaviside_grad,
                    GPU,
                    ALL_LAYOUT,
@@ -275,7 +432,9 @@ PD_REGISTER_KERNEL(elementwise_pow_grad,
                    int,
                    phi::dtype::float16,
                    phi::dtype::bfloat16,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 
 PD_REGISTER_KERNEL(add_grad,
                    GPU,
@@ -414,3 +573,18 @@ PD_REGISTER_KERNEL(subtract_double_grad,
                    phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
                    phi::dtype::complex<double>) {}
+
+PD_REGISTER_KERNEL(copysign_grad,
+                   GPU,
+                   ALL_LAYOUT,
+                   phi::CopySignGradKernel,
+                   bool,
+                   uint8_t,
+                   int8_t,
+                   int16_t,
+                   int,
+                   int64_t,
+                   float,
+                   double,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}

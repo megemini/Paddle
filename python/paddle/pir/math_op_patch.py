@@ -13,7 +13,12 @@
 # limitations under the License.
 
 
+import inspect
+import textwrap
 import warnings
+from functools import reduce
+
+import numpy as np
 
 from paddle import _C_ops
 from paddle.base.libpaddle import DataType
@@ -30,6 +35,60 @@ _supported_int_dtype_ = [
     DataType.INT16,
     DataType.INT32,
     DataType.INT64,
+]
+
+_supported_dtype_conversions = {
+    # float
+    'float16': 'float16',
+    'half': 'float16',
+    'bfloat16': 'bfloat16',
+    'float32': 'float32',
+    'float': 'float32',
+    'float64': 'float64',
+    'double': 'float64',
+    # int
+    'int8': 'int8',
+    'char': 'int8',
+    # We handle uint8 conversion separately
+    # 'uint8': 'uint8',
+    # 'byte': 'uint8',
+    'int16': 'int16',
+    'short': 'int16',
+    'int32': 'int32',
+    'int': 'int32',
+    'int64': 'int64',
+    'long': 'int64',
+    # other
+    'bool': 'bool',
+    'complex64': 'complex64',
+    'complex128': 'complex128',
+    'cfloat': 'complex64',
+    'cdouble': 'complex128',
+}
+
+SUPPORT_PROMOTION_OPS = [
+    "__add__",
+    "__radd__",
+    "__sub__",
+    "__rsub__",
+    "__mul__",
+    "__rmul__",
+    "__mod__",
+    "__rmod__",
+    "__div__",
+    "__rdiv__",
+    "__truediv__",
+    "__rtruediv__",
+    "__floordiv__",
+    "__rfloordiv__",
+    "__pow__",
+    "__rpow__",
+    "__eq__",
+    "__ne__",
+    "__lt__",
+    "__le__",
+    "__gt__",
+    "__ge__",
 ]
 
 
@@ -141,15 +200,38 @@ def monkey_patch_value():
         # 1 means cuda place, see paddle/phi/kernels/memcpy_kernel.cc
         return _C_ops.memcpy(self, 1)
 
+    @property
     def place(self):
         """
         Value don't have 'place' interface in static graph mode
         But this interface can greatly facilitate dy2static.
-        So we give a warnning here and return None.
+        So we give a warning here and return None.
         """
         warnings.warn(
             "Value do not have 'place' interface for pir graph mode, try not to use it. None will be returned."
         )
+
+    def contiguous(self):
+        """
+        Value don't have 'contiguous' interface in static graph mode
+        But this interface can greatly facilitate dy2static.
+        So we give a warning here and return None.
+        """
+        warnings.warn(
+            "Value do not have 'contiguous' interface for static graph mode, try not to use it. self will be returned."
+        )
+        return self
+
+    def is_contiguous(self):
+        """
+        Value don't have 'is_contiguous' interface in static graph mode
+        But this interface can greatly facilitate dy2static.
+        So we give a warning here and return None.
+        """
+        warnings.warn(
+            "Value do not have 'is_contiguous' interface for static graph mode, try not to use it. True will be returned."
+        )
+        return True
 
     @property
     def _ndim(self):
@@ -218,22 +300,69 @@ def monkey_patch_value():
         """
         return len(self.shape)
 
-    def _item(self):
+    def _item(self, *args: int):
         """
         In order to be compatible with the item interface introduced by the dynamic graph, it does nothing but returns self.
         It will check that the shape must be a 1-D tensor
         """
-        if len(self.shape) > 1:
-            raise TypeError(
-                f"Required input var should be 1-D Value, but received {self.shape}"
-            )
-        return self
+
+        if self.is_dist() and not self._is_initialized():
+            return None
+
+        from paddle.jit.dy2static import Shape
+
+        # Python implementation of the input validation logic for the C++ function `tensor__getitem_from_offset`.
+        dims = Shape(self)
+        numel = reduce(lambda x, y: int(x * y), dims) if len(dims) != 0 else 1
+        offset = 0
+
+        if len(args) == 0:
+            if not isinstance(numel, paddle.pir.Value) and numel != 1:
+                raise ValueError(
+                    "only one element tensors can be converted to Python "
+                    "scalars when no input coordinates"
+                )
+            # NOTE: This is to maintain consistency with the original code.
+            return self
+        elif len(args) == 1:
+            (offset,) = args
+            if not isinstance(numel, paddle.pir.Value) and offset >= numel:
+                raise ValueError(
+                    f"index {offset} is out of bounds for size {numel}"
+                )
+        else:
+            if len(args) != len(dims):
+                raise ValueError("incorrect number of indices for Tensor")
+
+            # TODO(dev): In certain cases, the stride calculation of the tensor may be modified by as_strided.
+            # This scenario needs to be considered in the future.
+            strides = [1] * len(dims)
+            for i in range(1, len(strides)):
+                strides[-i - 1] = strides[-i] * dims[-i]
+
+            for i in range(len(args)):
+                index = args[i]
+                if not isinstance(index, int):
+                    raise TypeError(
+                        f"argument (position {i}) must be long, but got {type(index)}",
+                    )
+                if (
+                    not isinstance(dims[i], paddle.pir.Value)
+                    and index >= dims[i]
+                ):
+                    raise ValueError(
+                        f"index {index} is out of bounds for axis {i} with size {dims[i]}"
+                    )
+                offset += index * strides[i]
+
+        return self.flatten()[offset]
 
     def astype(self, dtype):
         """
         **Notes**:
 
-        Cast a Value to a specified data type.
+        Convert a value to a specified data type if it differs from the current dtype;
+        otherwise, return the original value.
 
         Args:
 
@@ -264,7 +393,49 @@ def monkey_patch_value():
 
         if not isinstance(dtype, DataType):
             dtype = paddle.pir.core.convert_np_dtype_to_dtype_(dtype)
+
+        if self.dtype == dtype:
+            return self
+
         return _C_ops.cast(self, dtype)
+
+    def byte(self):
+        # since paddle don't support float to uint8, so we need to convert it to int8 first
+        if self.is_floating_point():
+            tensor = astype(self, 'int8')
+            return astype(tensor, 'uint8')
+        elif self.is_complex():
+            real = astype(self.real(), 'int8')
+            return astype(real, 'uint8')
+        else:
+            return astype(self, 'uint8')
+
+    def _create_dtype_conversion_methods():
+        """
+        Batch create all data type conversion methods
+        """
+        methods = []
+        for method_name, target_dtype in _supported_dtype_conversions.items():
+
+            def make_conversion_method(dtype):
+                def conversion_method(self):
+                    return astype(self, dtype)
+
+                return conversion_method
+
+            method_impl = make_conversion_method(target_dtype)
+            method_impl.__name__ = method_name
+            method_impl.__doc__ = f"""
+            Cast a Value to {target_dtype} data type if it differs from the current dtype;
+            otherwise, return the original Value.
+            Returns:
+                Value: a new Value with {target_dtype} dtype
+            """
+            methods.append((method_name, method_impl))
+        return methods
+
+    def type_as(self, other):
+        return self.astype(other.dtype)
 
     def _scalar_add_(var, value):
         return paddle.scale(var, 1.0, value)
@@ -283,6 +454,9 @@ def monkey_patch_value():
 
     def _scalar_neg_(var):
         return paddle.scale(var, -1.0, 0.0)
+
+    def _scalar_abs_(var):
+        return paddle.abs(var)
 
     def _binary_creator_(
         method_name,
@@ -316,7 +490,10 @@ def monkey_patch_value():
                     python_api == paddle.divide
                     and self.dtype in _supported_int_dtype_
                 ):
-                    paddle.cast(self, DataType.FLOAT32)
+                    self = paddle.cast(self, DataType.FLOAT32)
+                # bool(tensor) + int(scalar) will do type promotion to int64
+                if self.dtype == paddle.bool:
+                    self = paddle.cast(self, DataType.INT64)
                 # here use `scale` replace `elementwise` to get better performance
                 # but only +, -, *, / can use this method
                 if scalar_method is not None:
@@ -327,47 +504,36 @@ def monkey_patch_value():
 
             # 2. create Value for scalar
             lhs_dtype = safe_get_dtype(self)
-            other_var_value = other_var
             if not isinstance(other_var, Value):
                 if reverse:
                     for elem in self.shape:
                         if elem < 0:
-                            other_var_value = create_tensor_with_batchsize(
+                            other_var = create_tensor_with_batchsize(
                                 self, other_var, lhs_dtype
                             )
 
                             break
                     else:
                         # when break is not triggered, enter the else branch
-                        other_var_value = paddle.tensor.creation.fill_constant(
+                        other_var = paddle.tensor.creation.fill_constant(
                             self.shape,
                             lhs_dtype,
                             other_var,
                         )
                 else:
                     # add fill_op to current_block
-                    other_var_value = paddle.tensor.creation.fill_constant(
+                    other_var = paddle.tensor.creation.fill_constant(
                         [],
                         lhs_dtype,
                         other_var,
                     )
 
-            # 3. unify right var type to left var
-            rhs_dtype = safe_get_dtype(other_var_value)
-            if lhs_dtype != rhs_dtype:
-                other_var_value = paddle.cast(other_var_value, lhs_dtype)
             if reverse:
                 tmp = self
-                self = other_var_value
-                other_var_value = tmp
+                self = other_var
+                other_var = tmp
 
-            if (
-                python_api == paddle.divide
-            ) and self.dtype in _supported_int_dtype_:
-                self = paddle.cast(self, DataType.FLOAT32)
-                other_var_value = paddle.cast(other_var_value, DataType.FLOAT32)
-
-            out = python_api(self, other_var_value)
+            out = python_api(self, other_var)
             return out
 
         __impl__.__doc__ = """
@@ -404,6 +570,207 @@ def monkey_patch_value():
             value's size is: 24
         """
         return paddle.numel(self)
+
+    @property
+    def _T_(self):
+        """
+
+        Permute current Value with its dimensions reversed.
+
+        If `n` is the dimensions of `x` , `x.T` is equivalent to `x.transpose([n-1, n-2, ..., 0])`.
+
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> paddle.enable_static()
+
+                >>> x = paddle.ones(shape=[2, 3, 5])
+                >>> x_T = x.T
+
+                >>> exe = paddle.static.Executor()
+                >>> x_T_np = exe.run(paddle.static.default_main_program(), fetch_list=[x_T])[0]
+                >>> print(x_T_np.shape)
+                (5, 3, 2)
+
+        """
+        if len(self.shape) == 1:
+            return self
+        perm = list(reversed(range(len(self.shape))))
+
+        return _C_ops.transpose(self, perm)
+
+    @property
+    def _mT_(self):
+        """
+
+        Permute current Value with its last two dimensions reversed.
+
+        If `n` is the dimensions of `x` , `x.mT` is equivalent to `x.transpose([0, 1, ..., n-1, n-2])`.
+
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> paddle.enable_static()
+
+                >>> x = paddle.ones(shape=[2, 3, 5])
+                >>> x_mT = x.mT
+
+                >>> exe = paddle.static.Executor()
+                >>> x_mT_np = exe.run(paddle.static.default_main_program(), fetch_list=[x_mT])[0]
+                >>> print(x_mT_np.shape)
+                (2, 5, 3)
+
+        """
+        if len(self.shape) < 2:
+            raise ValueError(
+                f"Tensor.ndim({len(self.shape)}) is required to be greater than or equal to 2."
+            )
+
+        perm = list(range(len(self.shape)))
+        perm[-1], perm[-2] = perm[-2], perm[-1]
+
+        return _C_ops.transpose(self, perm)
+
+    @property
+    def requires_grad(self) -> bool:
+        """
+        Whether this Tensor requires gradient computation.
+
+        This is a convenience property that returns the opposite of stop_gradient.
+        Setting requires_grad=True is equivalent to setting stop_gradient=False.
+
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> x = paddle.randn([2, 3])
+                >>> print(x.requires_grad)  # False by default
+                >>>
+                >>> x.requires_grad = False
+                >>> print(x.stop_gradient)  # True
+        """
+        return not self.stop_gradient
+
+    @requires_grad.setter
+    def requires_grad(self, value: bool) -> None:
+        """
+        Set whether this Tensor requires gradient computation.
+
+        Args:
+            value (bool): True to enable gradient computation, False to disable.
+        """
+        if not isinstance(value, bool):
+            raise TypeError(
+                f"requires_grad must be bool, but got {type(value)}"
+            )
+        self.stop_gradient = not value
+
+    def _int_(self):
+        error_msg = """\
+            int(Tensor) is not supported in static graph mode. Because it's value is not available during the static mode.
+            It's usually triggered by the logging implicitly, for example:
+                >>> logging.info("The value of x is: {int(x)}")
+                                                          ^ `x` is Tensor, `int(x)` triggers int(Tensor)
+
+                There are two common workarounds available:
+                If you are logging Tensor values, then consider logging only at dynamic graphs, for example:
+
+                    Modify the following code
+                    >>> logging.info("The value of x is: {int(x)}")
+                    to
+                    >>> if paddle.in_dynamic_mode():
+                    ...     logging.info("The value of x is: {int(x)}")
+
+                If you need to convert the Tensor type, for example:
+                    Modify the following code
+                    >>> x = int(x)
+                    to
+                    >>> x = x.astype("int64")
+        """
+
+        raise TypeError(textwrap.dedent(error_msg))
+
+    def _float_(self):
+        error_msg = """\
+            float(Tensor) is not supported in static graph mode. Because it's value is not available during the static mode.
+            It's usually triggered by the logging implicitly, for example:
+                >>> logging.info("The value of x is: {float(x)}")
+                                                            ^ `x` is Tensor, `float(x)` triggers float(Tensor)
+
+                There are two common workarounds available:
+                If you are logging Tensor values, then consider logging only at dynamic graphs, for example:
+
+                    Modify the following code
+                    >>> logging.info("The value of x is: {float(x)}")
+                    to
+                    >>> if paddle.in_dynamic_mode():
+                    ...     logging.info("The value of x is: {float(x)}")
+
+                If you need to convert the Tensor type, for example:
+                    Modify the following code
+                    >>> x = float(x)
+                    to
+                    >>> x = x.astype("float64")
+        """
+        raise TypeError(textwrap.dedent(error_msg))
+
+    def _bool_(self):
+        error_msg = """\
+            bool(Tensor) is not supported in static graph mode. Because it's value is not available during the static mode.
+            If you haven't call bool(Tensor) explicitly, it's usually triggered by the control flow implicitly, for example:
+                >>> if x > 0:
+                       ^ `x` is Tensor, `x` > 0 is also a Tensor, `if x > 0` triggers bool(Tensor)
+                ...     y = y + 1
+
+            There are two common workarounds available:
+            If you are checking for Tensor values, then consider checking only at dynamic graphs, for example:
+
+                Modify the following code
+                >>> if x > 0:
+                ...     raise ValueError("x should be positive")
+                to
+                >>> if paddle.in_dynamic_mode() and x < 0:
+                >>>     raise ValueError("x should be positive")
+
+            If you need to control the flow of execution based on the value of the Tensor, then you need to rewrite the code as a control flow, for example:
+
+                Modify the following code
+                >>> if x < y:
+                ...     y = y + 1
+                ... else:
+                ...     y = y - 1
+                to
+                >>> pred = paddle.less_than(x=x, y=y, name=None)
+                >>> y = paddle.static.nn.cond(pred, lambda: y + 1, lambda: y - 1)
+                For more info, please refer to https://www.paddlepaddle.org.cn/documentation/docs/zh/api/paddle/static/nn/cond_cn.html
+            """
+        raise TypeError(textwrap.dedent(error_msg))
+
+    def _complex_(self):
+        error_msg = """\
+            complex(Tensor) is not supported in static graph mode. Because it's value is not available during the static mode.
+            It's usually triggered by the logging implicitly, for example:
+                >>> logging.info("The value of x is: {complex(x)}")
+                                                              ^ `x` is Tensor, `complex(x)` triggers complex(Tensor)
+
+                There are two common workarounds available:
+                If you are logging Tensor values, then consider logging only at dynamic graphs, for example:
+
+                    Modify the following code
+                    >>> logging.info("The value of x is: {complex(x)}")
+                    to
+                    >>> if paddle.in_dynamic_mode():
+                    ...     logging.info("The value of x is: {complex(x)}")
+
+                If you need to convert the Tensor type, for example:
+                    Modify the following code
+                    >>> x = complex(x)
+                    to
+                    >>> x = x.astype("complex64")
+        """
+        raise TypeError(textwrap.dedent(error_msg))
 
     def clone(self):
         """
@@ -446,13 +813,12 @@ def monkey_patch_value():
             .. code-block:: python
 
                 >>> import paddle
-                >>> import paddle.base as base
                 >>> import numpy as np
 
                 >>> x = np.ones([2, 2], np.float32)
                 >>> inputs2 = []
                 >>> for _ in range(10):
-                >>>     tmp = base.dygraph.base.to_variable(x)
+                >>>     tmp = paddle.to_tensor(x)
                 >>>     tmp.stop_gradient=False
                 >>>     inputs2.append(tmp)
                 >>> ret2 = paddle.add_n(inputs2)
@@ -469,19 +835,50 @@ def monkey_patch_value():
 
     def append(self, var):
         """
-        **Notes**:
-           **The type Value must be LoD Tensor Array.
+        Notes:
+           The type of Value must be Tensor Array.
 
         """
         if not self.is_dense_tensor_array_type():
             raise TypeError(
-                "Only Value with pd_op.tensor_array support `append` method, but received type: {}".format(
-                    self.type()
-                )
+                f"Only Value with DenseTensorArray support `append` method, but received {self}"
             )
         from paddle.tensor.array import array_length, array_write
 
         array_write(x=var, i=array_length(self), array=self)
+
+    def pop(self, *args):
+        """
+        The type of Value must be Tensor Array.
+        When self is TensorArray, calling pop is similar to Python's pop on list.
+        This interface is used to simplify dygraph to static graph operations.
+
+        Args:
+            self(Value): The source variable, which must be DenseTensorArray
+            *args: optional, a int means index.
+        Returns:
+            Value: self[index]
+        """
+
+        if not self.is_dense_tensor_array_type():
+            raise TypeError(
+                f"Only Value with DenseTensorArray support `pop` method, but received {self}"
+            )
+        if len(args) == 0:
+            idx = -1
+        else:
+            idx = args[0]
+
+        return paddle._pir_ops.array_pop(self, idx)
+
+    def to_dense(self):
+        return _C_ops.sparse_to_dense(self)
+
+    def values(self):
+        return _C_ops.sparse_values(self)
+
+    def indices(self):
+        return _C_ops.sparse_indices(self)
 
     def set_shape(self, shape):
         assert (
@@ -497,7 +894,308 @@ def monkey_patch_value():
             )
 
     def value_hash(self):
-        raise NotImplementedError('In python Value can not hash!')
+        return hash(id(self))
+
+    def _to(
+        self,
+        device=None,
+        dtype=None,
+        blocking=None,
+    ):
+        if device is None and dtype is None and blocking is None:
+            return self
+
+        if device is not None:
+            if isinstance(device, str):
+                device = paddle.device._convert_to_place(device)
+            elif isinstance(
+                device,
+                (
+                    paddle.core.Place,
+                    paddle.CPUPlace,
+                    paddle.CUDAPlace,
+                    paddle.CUDAPinnedPlace,
+                    # paddle.XPUPlace, # no support
+                    # paddle.CustomPlace, # no support
+                ),
+            ):
+                pass
+            else:
+                raise ValueError(
+                    "device value error, must be str, paddle.CPUPlace(), paddle.CUDAPlace(), paddle.CUDAPinnedPlace(), paddle.XPUPlace() or paddle.CustomPlace(), but the type of device is "
+                    + type(device).__name__
+                )
+
+        if blocking is None:
+            blocking = True
+        else:
+            assert isinstance(
+                blocking, bool
+            ), "blocking value error, must be the True, False or None"
+
+        def transform(t, device, dtype, blocking):
+            if dtype is None:
+                dtype = t.dtype
+            t_used = t
+
+            # 1. cast Tensor to dtype
+            if dtype != t_used.dtype:
+                with paddle.base.framework._dygraph_place_guard(
+                    place=t_used.place
+                ):
+                    t_casted = t_used.cast(dtype=dtype)
+            else:
+                t_casted = t_used
+
+            # 2. Copy casted Tensor(in CPU or GPU) to device
+            if isinstance(device, paddle.CUDAPlace):
+                new_t = t_casted.cuda(blocking=blocking)
+            elif isinstance(device, paddle.CUDAPinnedPlace):
+                if blocking is not True:
+                    warnings.warn(
+                        "blocking is not supported, and it will be ignored."
+                    )
+                new_t = _C_ops.memcpy(self, 2)
+            elif isinstance(device, paddle.CPUPlace):
+                new_t = t_casted.cpu()
+            else:
+                new_t = t_casted
+
+            return new_t
+
+        return transform(self, device, dtype, blocking)
+
+    def to(self, *args, **kwargs):
+        """
+        Performs Tensor dtype and/or device conversion. A paddle.dtype and place
+        are inferred from the arguments of ``self.to(*args, **kwargs)``.There are
+        three ways to call `to`:
+
+            1. to(dtype, blocking=True)
+            2. to(device, dtype=None, blocking=True)
+            3. to(other, blocking=True)
+
+        Returns:
+            Tensor: self
+
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> x = paddle.to_tensor([1,2,3])
+                >>> print(x)
+                Tensor(shape=[3], dtype=int64, place=Place(gpu:0), stop_gradient=True,
+                    [1, 2, 3])
+
+                >>> x = x.to("cpu")
+                >>> print(x.place)
+                Place(cpu)
+
+                >>> x = x.to("float32")
+                >>> print(x.dtype)
+                paddle.float32
+
+                >>> x = x.to("gpu", "int16")
+                >>> print(x)
+                Tensor(shape=[3], dtype=int16, place=Place(gpu:0), stop_gradient=True,
+                    [1, 2, 3])
+                >>> y = paddle.to_tensor([4,5,6])
+                >>> y
+                Tensor(shape=[3], dtype=int64, place=Place(gpu:0), stop_gradient=True,
+                    [4, 5, 6])
+                >>> y = y.to(x)
+                >>> print(y)
+                Tensor(shape=[3], dtype=int16, place=Place(gpu:0), stop_gradient=True,
+                    [4, 5, 6])
+        """
+
+        size_args = len(args)
+        size_kwargs = len(kwargs)
+
+        if size_args + size_kwargs > 3 or size_args + size_kwargs == 0:
+            raise TypeError(
+                "to() received too many arguments - expected one of:\n  \
+                * (Union[str, paddle.CPUPlace(), paddle.CUDAPlace(), paddle.CUDAPinnedPlace(), paddle.XPUPlace(), paddle.CustomPlace()] \
+                device, Union[str, paddle.dtype, numpy.dtype] dtype, bool blocking)\n \
+                * (Union[str, paddle.dtype, numpy.dtype] dtype, bool blocking)\n \
+                * (paddle.Tensor other, bool blocking) "
+            )
+        valid_keys = {"device", "dtype", "blocking", "other"}
+        invalid_keys = set(kwargs.keys()) - valid_keys
+        if len(invalid_keys) != 0:
+            raise TypeError(
+                "to() got an unexpected keyword argument "
+                + next(iter(invalid_keys))
+            )
+
+        def dtype_first_sig(dtype, blocking=None): ...
+
+        def device_first_sig(device, dtype=None, blocking=None): ...
+
+        def tensor_like_first_sig(other, blocking=None): ...
+
+        class _NoArg: ...
+
+        def is_dtype(arg):
+            valid_dtypes = [
+                "bfloat16",
+                "float16",
+                "float32",
+                "float64",
+                "int8",
+                "int16",
+                "int32",
+                "int64",
+                "uint8",
+                "complex64",
+                "complex128",
+                "bool",
+            ]
+            return isinstance(arg, (paddle.dtype, np.dtype)) or (
+                isinstance(arg, str) and arg.lower() in valid_dtypes
+            )
+
+        def is_device(arg):
+            # in dy2static, arg can be None
+            return arg is None or isinstance(arg, (paddle.core.Place, str))
+
+        def is_tensor(arg):
+            return isinstance(arg, paddle.pir.Value)
+
+        def create_positional_arg_extractor(position: int):
+            def extract_positional_arg(args, kwargs):
+                if len(args) > position:
+                    return args[position]
+                return _NoArg()
+
+            return extract_positional_arg
+
+        def create_keyword_arg_extractor(key: str, position: int):
+            def extract_keyword_arg(args, kwargs):
+                if (
+                    key in kwargs
+                    and len(kwargs) > position
+                    and list(kwargs.keys())[position] == key
+                ):
+                    return kwargs[key]
+                return _NoArg()
+
+            return extract_keyword_arg
+
+        def chain_extractors(*extractors):
+            def chain(args, kwargs):
+                for extractor in extractors:
+                    if not isinstance(arg := extractor(args, kwargs), _NoArg):
+                        return arg
+                return _NoArg()
+
+            return chain
+
+        def dispatch_to_signature(*args, **kwargs):
+            # dict[signature, (extractor, condition)]
+            signature_map = {
+                dtype_first_sig: (
+                    chain_extractors(
+                        create_positional_arg_extractor(position=0),
+                        create_keyword_arg_extractor(key="dtype", position=0),
+                    ),
+                    is_dtype,
+                ),
+                device_first_sig: (
+                    chain_extractors(
+                        create_positional_arg_extractor(position=0),
+                        create_keyword_arg_extractor(key="device", position=0),
+                    ),
+                    is_device,
+                ),
+                tensor_like_first_sig: (
+                    chain_extractors(
+                        create_positional_arg_extractor(position=0),
+                        create_keyword_arg_extractor(key="other", position=0),
+                    ),
+                    is_tensor,
+                ),
+            }
+
+            for sig, (extractor, condition) in signature_map.items():
+                if not isinstance(
+                    arg := extractor(args, kwargs), _NoArg
+                ) and condition(arg):
+                    bound_args = inspect.signature(sig).bind(*args, **kwargs)
+                    bound_args.apply_defaults()
+                    return bound_args.arguments
+            raise ValueError("No matching signature found.")
+
+        args = dispatch_to_signature(*args, **kwargs)
+        other = args.get("other", None)
+        if other is not None:
+            args.pop("other")
+            args["dtype"] = other.dtype
+            # in dy2static, we need show warning for this case
+            other.place  # noqa: B018
+
+        return self._to(**args)
+
+    @fake_interface_only
+    def numpy(self):
+        """
+        **Notes**:
+            **This API is ONLY available in Dygraph mode**
+        Returns a numpy array shows the value of current :ref:`api_guide_Variable_en`
+        Returns:
+            ndarray: The numpy value of current Variable.
+        Returns type:
+            ndarray: dtype is same as current Variable
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> import paddle.base as base
+                >>> from paddle.nn import Linear
+                >>> import numpy as np
+                >>> data = np.random.uniform(-1, 1, [30, 10, 32]).astype('float32')
+                >>> with base.dygraph.guard():
+                ...     linear = Linear(32, 64)
+                ...     data_tensor = paddle.to_tensor(data)
+                ...     x = linear(data_tensor)
+                ...     print(x.numpy())
+        """
+        pass
+
+    @fake_interface_only
+    def tolist(self):
+        """
+        **Notes**:
+            **This API is ONLY available in Dygraph mode**
+        Returns a Python list that contains the elements of current :ref:`api_guide_Variable_en`
+
+        Returns:
+            list: The Python list containing the elements of current Variable.
+
+        Returns type:
+            list: Elements have the same dtype as current Variable
+
+        Examples:
+            .. code-block:: python
+
+                >>> import paddle
+                >>> import paddle.base as base
+                >>> import numpy as np
+                >>> data = np.random.uniform(-1, 1, [2, 3]).astype('float32')
+                >>> with base.dygraph.guard():
+                ...     x = paddle.to_tensor(data)
+                ...     print(x.tolist())  # Convert tensor to Python list
+        """
+        pass
+
+    @fake_interface_only
+    def register_hook(self, hook):
+        """
+        Value don't have 'register_hook' interface in static graph mode
+        But this interface can greatly facilitate dy2static.
+        So we give a error here.
+        """
+        pass
 
     import paddle
 
@@ -505,17 +1203,34 @@ def monkey_patch_value():
         ('cpu', cpu),
         ('cuda', cuda),
         ('place', place),
+        ('contiguous', contiguous),
+        ('is_contiguous', is_contiguous),
         ('item', _item),
         ('dim', dim),
         ('ndimension', ndimension),
         ('ndim', _ndim),
         ('astype', astype),
+        ('byte', byte),
+        ('uint8', byte),
+        ('type_as', type_as),
         ('size', _size_),
+        ('T', _T_),
+        ('mT', _mT_),
+        ("requires_grad", requires_grad),
         ('clone', clone),
         ('clear_gradient', clear_gradient),
         ('append', append),
+        ('pop', pop),
         ('set_shape', set_shape),
         ('__hash__', value_hash),
+        ('to_dense', to_dense),
+        ('indices', indices),
+        ('values', values),
+        ("_to", _to),
+        ("to", to),
+        ("tolist", tolist),
+        ("numpy", numpy),
+        ("register_hook", register_hook),
         # For basic operators
         (
             '__add__',
@@ -588,15 +1303,30 @@ def monkey_patch_value():
             ),
         ),
         (
+            '__rfloordiv__',
+            _binary_creator_(
+                '__rfloordiv__', paddle.tensor.floor_divide, True, None
+            ),
+        ),
+        (
             '__mod__',
             _binary_creator_('__mod__', paddle.tensor.remainder, False, None),
+        ),
+        (
+            '__rmod__',
+            _binary_creator_('__rmod__', paddle.tensor.remainder, True, None),
         ),
         (
             '__matmul__',
             _binary_creator_('__matmul__', paddle.tensor.matmul, False, None),
         ),
+        (
+            '__rmatmul__',
+            _binary_creator_('__rmatmul__', paddle.tensor.matmul, True, None),
+        ),
         ('__neg__', _scalar_neg_),
-        # For compare opeartors
+        ('__abs__', _scalar_abs_),
+        # For compare operators
         (
             '__eq__',
             _binary_creator_('__eq__', paddle.tensor.equal, False, None),
@@ -623,7 +1353,13 @@ def monkey_patch_value():
                 '__ge__', paddle.tensor.greater_equal, False, None
             ),
         ),
+        ('__float__', _float_),
+        ('__int__', _int_),
+        ('__bool__', _bool_),
+        ('__complex__', _complex_),
     ]
+    dtype_conversion_methods = _create_dtype_conversion_methods()
+    value_methods.extend(dtype_conversion_methods)
 
     global _already_patch_value
     if not _already_patch_value:

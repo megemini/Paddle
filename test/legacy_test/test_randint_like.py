@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 # Test python API
@@ -31,13 +31,8 @@ class TestRandintLikeAPI(unittest.TestCase):
         self.x_float64 = np.zeros((10, 12)).astype("float64")
 
         self.dtype = ["bool", "int32", "int64", "float16", "float32", "float64"]
-        self.place = (
-            paddle.CUDAPlace(0)
-            if paddle.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
+        self.place = get_device_place()
 
-    @test_with_pir_api
     def test_static_api(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -59,7 +54,6 @@ class TestRandintLikeAPI(unittest.TestCase):
                 self.assertTrue(((out >= -10) & (out <= 10)).all(), True)
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_static_api_with_int32(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -84,7 +78,6 @@ class TestRandintLikeAPI(unittest.TestCase):
                 self.assertTrue(((out2 >= -5) & (out2 <= 10)).all(), True)
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_static_api_with_int64(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -105,7 +98,6 @@ class TestRandintLikeAPI(unittest.TestCase):
                 self.assertTrue(((out >= -100) & (out <= 100)).all(), True)
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_static_api_with_fp16(self):
         paddle.enable_static()
         if paddle.is_compiled_with_cuda():
@@ -129,7 +121,6 @@ class TestRandintLikeAPI(unittest.TestCase):
                     self.assertTrue(((out >= -3) & (out <= 25)).all(), True)
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_static_api_with_float32(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -152,7 +143,6 @@ class TestRandintLikeAPI(unittest.TestCase):
                 self.assertTrue(((out >= -25) & (out <= 25)).all(), True)
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_static_api_with_float64(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -209,7 +199,6 @@ class TestRandintLikeAPI(unittest.TestCase):
                 )
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_errors(self):
         paddle.enable_static()
         with paddle.static.program_guard(

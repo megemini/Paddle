@@ -17,11 +17,11 @@ import tempfile
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.base.dygraph.base import to_variable
 from paddle.nn import Embedding
 from paddle.optimizer import Adam
 from paddle.optimizer.lr import LRScheduler
@@ -58,7 +58,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                     low=-self._init_scale, high=self._init_scale
                 ),
             )
-            self.weight_1_arr.append(self.add_parameter('w_%d' % i, weight_1))
+            self.weight_1_arr.append(self.add_parameter(f'w_{i}', weight_1))
             bias_1 = self.create_parameter(
                 attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Uniform(
@@ -69,7 +69,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                 dtype="float32",
                 default_initializer=paddle.nn.initializer.Constant(0.0),
             )
-            self.bias_arr.append(self.add_parameter('b_%d' % i, bias_1))
+            self.bias_arr.append(self.add_parameter(f'b_{i}', bias_1))
 
     def forward(self, input_embedding, init_hidden=None, init_cell=None):
         self.cell_array = []
@@ -271,11 +271,7 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 new_lr = 1.0
                 lr_arr.append(new_lr)
 
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             scheduler = paddle.optimizer.lr.PiecewiseDecay(
                 boundaries=bd, values=lr_arr
             )
@@ -298,10 +294,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
                 dy_loss, last_hidden, last_cell = ptb_model(
                     x, y, init_hidden, init_cell
                 )
@@ -374,11 +370,7 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 new_lr = 1.0
                 lr_arr.append(new_lr)
 
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             scheduler = paddle.optimizer.lr.PiecewiseDecay(
                 boundaries=bd, values=lr_arr
             )
@@ -401,10 +393,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
                 dy_loss, last_hidden, last_cell = ptb_model(
                     x, y, init_hidden, init_cell
                 )
@@ -496,11 +488,7 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 new_lr = 1.0
                 lr_arr.append(new_lr)
 
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             scheduler = paddle.optimizer.lr.PiecewiseDecay(
                 boundaries=bd, values=lr_arr
             )
@@ -523,10 +511,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
                 dy_loss, last_hidden, last_cell = ptb_model(
                     x, y, init_hidden, init_cell
                 )
@@ -614,11 +602,7 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 new_lr = 1.0
                 lr_arr.append(new_lr)
 
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             scheduler = paddle.optimizer.lr.PiecewiseDecay(
                 boundaries=bd, values=lr_arr
             )
@@ -641,10 +625,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
                 dy_loss, last_hidden, last_cell = ptb_model(
                     x, y, init_hidden, init_cell
                 )
@@ -730,11 +714,7 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_scale=init_scale,
             )
 
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             adam = Adam(
                 learning_rate=0.0,
                 beta1=0.8,
@@ -760,10 +740,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
                 dy_loss, last_hidden, last_cell = ptb_model(
                     x, y, init_hidden, init_cell
                 )
@@ -827,11 +807,7 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 new_lr = 0.0
                 lr_arr.append(new_lr)
 
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             adam = Adam(
                 learning_rate=0.0,
                 beta1=0.8,
@@ -860,10 +836,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
                 dy_loss, last_hidden, last_cell = ptb_model(
                     x, y, init_hidden, init_cell
                 )
@@ -929,11 +905,7 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 new_lr = 0.0
                 lr_arr.append(new_lr)
 
-            place = (
-                base.CPUPlace()
-                if not core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             scheduler = paddle.optimizer.lr.PiecewiseDecay(
                 boundaries=bd, values=lr_arr
             )
@@ -973,10 +945,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
                 dy_loss, last_hidden, last_cell = ptb_model(
                     x, y, init_hidden, init_cell
                 )

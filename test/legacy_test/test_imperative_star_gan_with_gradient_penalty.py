@@ -109,6 +109,7 @@ class InstanceNorm(paddle.nn.Layer):
     def __init__(self, num_channels, epsilon=1e-5):
         super().__init__()
         self.epsilon = epsilon
+        self.num_channels = num_channels
 
         self.scale = self.create_parameter(shape=[num_channels], is_bias=False)
         self.bias = self.create_parameter(shape=[num_channels], is_bias=True)
@@ -120,12 +121,12 @@ class InstanceNorm(paddle.nn.Layer):
             )
             return out
         else:
-            return paddle.static.nn.instance_norm(
-                input,
+            return paddle.nn.InstanceNorm2D(
+                num_features=self.num_channels,
                 epsilon=self.epsilon,
-                param_attr=base.ParamAttr(self.scale.name),
+                weight_attr=base.ParamAttr(self.scale.name),
                 bias_attr=base.ParamAttr(self.bias.name),
-            )
+            )(input)
 
 
 class Conv2DLayer(paddle.nn.Layer):
@@ -520,9 +521,9 @@ class DyGraphTrainModel:
             self.d_optimizer.clear_gradients()
 
     def run(self, image_real, label_org, label_trg):
-        image_real = base.dygraph.to_variable(image_real)
-        label_org = base.dygraph.to_variable(label_org)
-        label_trg = base.dygraph.to_variable(label_trg)
+        image_real = paddle.to_tensor(image_real)
+        label_org = paddle.to_tensor(label_org)
+        label_trg = paddle.to_tensor(label_trg)
 
         g_loss = get_generator_loss(
             image_real,
@@ -578,37 +579,41 @@ class StaticGraphTrainModel:
         self.gen_program = base.Program()
         gen_startup_program = base.Program()
 
-        with base.program_guard(self.gen_program, gen_startup_program):
-            with base.unique_name.guard():
-                image_real, label_org, label_trg = create_data_layer()
-                generator = Generator(cfg)
-                discriminator = Discriminator(cfg)
-                g_loss = get_generator_loss(
-                    image_real,
-                    label_org,
-                    label_trg,
-                    generator,
-                    discriminator,
-                    cfg,
-                )
-                build_optimizer(generator, cfg, loss=g_loss)
+        with (
+            base.program_guard(self.gen_program, gen_startup_program),
+            base.unique_name.guard(),
+        ):
+            image_real, label_org, label_trg = create_data_layer()
+            generator = Generator(cfg)
+            discriminator = Discriminator(cfg)
+            g_loss = get_generator_loss(
+                image_real,
+                label_org,
+                label_trg,
+                generator,
+                discriminator,
+                cfg,
+            )
+            build_optimizer(generator, cfg, loss=g_loss)
 
         self.dis_program = base.Program()
         dis_startup_program = base.Program()
-        with base.program_guard(self.dis_program, dis_startup_program):
-            with base.unique_name.guard():
-                image_real, label_org, label_trg = create_data_layer()
-                generator = Generator(cfg)
-                discriminator = Discriminator(cfg)
-                d_loss = get_discriminator_loss(
-                    image_real,
-                    label_org,
-                    label_trg,
-                    generator,
-                    discriminator,
-                    cfg,
-                )
-                build_optimizer(discriminator, cfg, loss=d_loss)
+        with (
+            base.program_guard(self.dis_program, dis_startup_program),
+            base.unique_name.guard(),
+        ):
+            image_real, label_org, label_trg = create_data_layer()
+            generator = Generator(cfg)
+            discriminator = Discriminator(cfg)
+            d_loss = get_discriminator_loss(
+                image_real,
+                label_org,
+                label_trg,
+                generator,
+                discriminator,
+                cfg,
+            )
+            build_optimizer(discriminator, cfg, loss=d_loss)
 
         self.executor = base.Executor(cfg.place)
         self.scope = base.Scope()

@@ -13,10 +13,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 #include <Python.h>
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
 
 #include <algorithm>
 #include <cctype>
@@ -37,6 +33,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/custom_operator.h"
 #include "paddle/fluid/framework/data_layout.h"
 #include "paddle/fluid/framework/data_type_transform.h"
+#include "paddle/fluid/framework/dense_tensor_array.h"
 #include "paddle/fluid/framework/executor.h"
 #include "paddle/fluid/framework/executor_cache.h"
 #include "paddle/fluid/framework/executor_gc_helper.h"
@@ -48,17 +45,13 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/cost_model.h"
 #include "paddle/fluid/framework/ir/generate_pass.h"
 #include "paddle/fluid/framework/ir/pass_builder.h"
-#include "paddle/fluid/framework/lod_rank_table.h"
-#include "paddle/fluid/framework/lod_tensor_array.h"
 #include "paddle/fluid/framework/new_executor/executor_statistics.h"
 #include "paddle/fluid/framework/new_executor/standalone_executor.h"
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/op_version_registry.h"
-#include "paddle/fluid/framework/parallel_executor.h"
 #include "paddle/fluid/framework/phi_utils.h"
 #include "paddle/fluid/framework/prune.h"
-#include "paddle/fluid/framework/reader.h"
 #include "paddle/fluid/framework/scope_pool.h"
 #include "paddle/fluid/framework/selected_rows_utils.h"
 #include "paddle/fluid/framework/tensor_util.h"
@@ -67,28 +60,16 @@ limitations under the License. */
 #include "paddle/fluid/framework/version.h"
 #include "paddle/fluid/imperative/amp_auto_cast.h"
 #include "paddle/fluid/imperative/layer.h"
-#include "paddle/fluid/memory/allocation/allocator_strategy.h"
+#include "paddle/phi/core/framework/reader.h"
+#include "paddle/phi/core/memory/allocation/allocator_strategy.h"
 #ifdef PADDLE_WITH_CUDA
-#include "paddle/fluid/memory/allocation/cuda_ipc_allocator.h"
+#include "paddle/phi/core/memory/allocation/cuda_ipc_allocator.h"
 #endif
-#include "paddle/fluid/memory/allocation/mmap_allocator.h"
-#include "paddle/fluid/operators/activation_op.h"
-#include "paddle/fluid/operators/common_infer_shape_functions.h"
-#include "paddle/fluid/operators/py_func_op.h"
-#include "paddle/fluid/platform/cpu_helper.h"
-#include "paddle/fluid/platform/device/device_wrapper.h"
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/dynload/dynamic_loader.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/init.h"
-#include "paddle/fluid/platform/monitor.h"
-#include "paddle/fluid/platform/place.h"
-#include "paddle/fluid/platform/profiler.h"
 #include "paddle/fluid/platform/profiler/event_python.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/fluid/platform/profiler/profiler.h"
 #include "paddle/fluid/pybind/bind_cost_model.h"
-#include "paddle/fluid/pybind/bind_fleet_executor.h"
 #include "paddle/fluid/pybind/box_helper_py.h"
 #include "paddle/fluid/pybind/communication.h"
 #include "paddle/fluid/pybind/compatible.h"
@@ -113,8 +94,17 @@ limitations under the License. */
 #include "paddle/fluid/pybind/pybind_variant_caster.h"
 #include "paddle/phi/backends/cpu/cpu_info.h"
 #include "paddle/phi/backends/device_manager.h"
+#include "paddle/phi/backends/dynload/dynamic_loader.h"
+#include "paddle/phi/common/place.h"
 #include "paddle/phi/core/compat/convert_utils.h"
 #include "paddle/phi/core/lod_utils.h"
+#include "paddle/phi/core/memory/allocation/mmap_allocator.h"
+#include "paddle/phi/core/platform/cpu_helper.h"
+#include "paddle/phi/core/platform/device/device_wrapper.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/phi/core/platform/monitor.h"
+#include "paddle/phi/core/platform/profiler.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 #include "paddle/utils/none.h"
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
@@ -125,27 +115,27 @@ limitations under the License. */
 #include "paddle/fluid/pybind/pybind.h"  // NOLINT
 #include "paddle/fluid/pybind/reader_py.h"
 #include "paddle/fluid/pybind/tensor_py.h"
-#include "paddle/fluid/string/to_string.h"
+#include "paddle/utils/string/to_string.h"
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/fluid/operators/nccl/nccl_gpu_common.h"
 #endif
 #ifndef PADDLE_WITH_HIP
-#include "paddle/fluid/platform/device/gpu/cuda/cuda_profiler.h"
+#include "paddle/phi/core/platform/device/gpu/cuda/cuda_profiler.h"
 #endif
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 #endif
 
 #ifdef PADDLE_WITH_XPU
-#include "paddle/fluid/platform/device/xpu/xpu_info.h"
-#include "paddle/fluid/platform/device/xpu/xpu_op_list.h"
+#include "paddle/phi/core/platform/device/xpu/xpu_info.h"
+#include "paddle/phi/core/platform/device/xpu/xpu_op_list.h"
 #endif
 
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
 #include "paddle/phi/capi/capi.h"
 #endif
 
-#include "paddle/fluid/platform/cuda_graph_with_memory_pool.h"
+#include "paddle/phi/core/platform/cuda_graph_with_memory_pool.h"
 
 #ifdef PADDLE_WITH_IPU
 #include "paddle/fluid/platform/device/ipu/ipu_backend.h"
@@ -160,53 +150,130 @@ limitations under the License. */
 #include "paddle/fluid/pybind/fleet_py.h"
 #endif
 
-#ifdef PADDLE_WITH_CINN
-#include "paddle/fluid/framework/paddle2cinn/cinn_compiler.h"
-#endif
-
+#include "paddle/common/flags.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
 #include "paddle/fluid/imperative/layout_autotune.h"
 #include "paddle/fluid/pybind/eager_utils.h"
 #include "paddle/fluid/pybind/place.h"
 #include "paddle/phi/api/ext/op_meta_info.h"
-#include "paddle/phi/core/flags.h"
 #include "paddle/phi/kernels/autotune/cache.h"
 #include "paddle/phi/kernels/autotune/switch_autotune.h"
 #include "pybind11/stl.h"
 
-PHI_DECLARE_bool(use_mkldnn);
+COMMON_DECLARE_bool(use_mkldnn);
+COMMON_DECLARE_bool(use_onednn);
 
 // disable auto conversion to list in Python
-PYBIND11_MAKE_OPAQUE(paddle::framework::LoDTensorArray);
+PYBIND11_MAKE_OPAQUE(phi::TensorArray);
 PYBIND11_MAKE_OPAQUE(paddle::framework::FetchUnmergedList);
 PYBIND11_MAKE_OPAQUE(paddle::framework::FetchList);
 PYBIND11_MAKE_OPAQUE(paddle::framework::FetchType);
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 PyTypeObject *g_place_pytype = nullptr;
 PyTypeObject *g_customplace_pytype = nullptr;
 PyTypeObject *g_cudaplace_pytype = nullptr;
 PyTypeObject *g_cpuplace_pytype = nullptr;
 PyTypeObject *g_xpuplace_pytype = nullptr;
 PyTypeObject *g_cudapinnedplace_pytype = nullptr;
+PyTypeObject *g_xpupinnedplace_pytype = nullptr;
 PyTypeObject *g_ipuplace_pytype = nullptr;
 
 template <typename PlaceType>
 static inline int PlaceIndex(const PlaceType &p) {  // NOLINT
-  return static_cast<int>(paddle::platform::Place(p).GetType());
+  return static_cast<int>(phi::Place(p).GetType());
 }
 
 template <typename PlaceType1, typename PlaceType2>
 static inline bool IsSamePlace(const PlaceType1 &p1, const PlaceType2 &p2) {
-  return paddle::platform::Place(p1) == paddle::platform::Place(p2);
+  if (std::is_same_v<PlaceType1, phi::Place> ||
+      std::is_same_v<PlaceType2, phi::Place> ||
+      std::is_same_v<PlaceType1, PlaceType2>) {
+    return phi::Place(p1) == phi::Place(p2);
+  }
+  return false;
 }
 
 void BindPlace(pybind11::module &m) {  // NOLINT
   using namespace paddle::framework;   // NOLINT
-  py::class_<platform::CustomPlace> customplace(m,
-                                                "CustomPlace",
-                                                R"DOC(
+
+  py::class_<phi::Place> platformplace(m, "Place");
+  g_place_pytype = reinterpret_cast<PyTypeObject *>(platformplace.ptr());
+  platformplace.def(py::init<>())
+      .def("_type", &PlaceIndex<phi::Place>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::Place>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::IPUPlace>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::XPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::Place, phi::CustomPlace>)
+      .def("__eq__",
+           [](const py::object &self, const py::object &other) -> bool {
+             if (py::isinstance<phi::Place>(other)) {
+               return self.attr("_equals")(other).cast<bool>();
+             }
+             return false;
+           })
+      .def("__hash__",
+           [](const phi::Place &self) { return phi::Place::Hash()(self); })
+      .def("is_gpu_place",
+           [](phi::Place &self) { return phi::is_gpu_place(self); })
+      .def("is_cpu_place",
+           [](phi::Place &self) { return phi::is_cpu_place(self); })
+      .def("is_xpu_place",
+           [](phi::Place &self) { return phi::is_xpu_place(self); })
+      .def("is_ipu_place",
+           [](phi::Place &self) { return phi::is_ipu_place(self); })
+      .def("is_cuda_pinned_place",
+           [](phi::Place &self) { return phi::is_cuda_pinned_place(self); })
+      .def("is_xpu_pinned_place",
+           [](phi::Place &self) { return phi::is_xpu_pinned_place(self); })
+      .def("is_custom_place",
+           [](phi::Place &self) { return phi::is_custom_place(self); })
+      .def("gpu_device_id", [](phi::Place &self) { return self.device; })
+      .def("xpu_device_id", [](phi::Place &self) { return self.device; })
+      .def("ipu_device_id", [](phi::Place &self) { return self.device; })
+      .def("custom_device_id", [](phi::Place &self) { return self.device; })
+      .def("custom_device_type",
+           [](phi::Place &self) { return self.GetDeviceType(); })
+      .def("set_place",
+           [](phi::Place &self, const phi::Place &other) { self = other; })
+      .def("set_place",
+           [](phi::Place &self, const phi::CPUPlace &cpu_place) {
+             self = cpu_place;
+           })
+      .def("set_place",
+           [](phi::Place &self, const phi::XPUPlace &xpu_place) {
+             self = xpu_place;
+           })
+      .def("set_place",
+           [](phi::Place &self, const phi::GPUPlace &gpu_place) {
+             self = gpu_place;
+           })
+      .def("set_place",
+           [](phi::Place &self, const phi::GPUPinnedPlace &cuda_pinned_place) {
+             self = cuda_pinned_place;
+           })
+      .def("set_place",
+           [](phi::Place &self, const phi::XPUPinnedPlace &xpu_pinned_place) {
+             self = xpu_pinned_place;
+           })
+      .def("set_place",
+           [](phi::Place &self, const phi::IPUPlace &ipu_place) {
+             self = ipu_place;
+           })
+      .def("set_place",
+           [](phi::Place &self, const phi::CustomPlace &plug_place) {
+             self = plug_place;
+           })
+      .def("__repr__", string::to_string<const phi::Place &>)
+      .def("__str__", string::to_string<const phi::Place &>);
+
+  py::class_<phi::CustomPlace, phi::Place> customplace(m,
+                                                       "CustomPlace",
+                                                       R"DOC(
     CustomPlace is a descriptor of a device.
     It represents a custom device on which a tensor will be allocated and a model will run.
 
@@ -220,7 +287,7 @@ void BindPlace(pybind11::module &m) {  // NOLINT
   g_customplace_pytype = reinterpret_cast<PyTypeObject *>(customplace.ptr());
   customplace
       .def("__init__",
-           [](platform::CustomPlace &self,
+           [](phi::CustomPlace &self,
               const std::string &device_type,
               int dev_id) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
@@ -231,7 +298,8 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                    "positive integer",
                    device_type,
                    dev_id);
-               std::exit(-1);
+               PADDLE_THROW(::common::errors::InvalidArgument(
+                   "use wrong place, Please check."));
              }
 
              if (LIKELY(phi::DeviceManager::HasDeviceType(device_type) &&
@@ -244,7 +312,8 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                               << " because there is no " << device_type
                               << " detected on your "
                                  "machine.";
-                   std::exit(-1);
+                   PADDLE_THROW(::common::errors::InvalidArgument(
+                       "use wrong place, Please check."));
                  } else {
                    LOG(ERROR) << string::Sprintf(
                        "Invalid CustomPlace(%s, %d), dev_id must "
@@ -256,10 +325,11 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                        dev_count,
                        device_type,
                        dev_count);
-                   std::exit(-1);
+                   PADDLE_THROW(::common::errors::InvalidArgument(
+                       "use wrong place, Please check."));
                  }
                }
-               new (&self) platform::CustomPlace(device_type, dev_id);
+               new (&self) phi::CustomPlace(device_type, dev_id);
              } else {
                LOG(ERROR) << string::Sprintf(
                    "Invalid CustomPlace(%s, %d), the device type is "
@@ -267,31 +337,39 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                    "as a custom device.",
                    device_type,
                    dev_id);
-               std::exit(-1);
+               PADDLE_THROW(::common::errors::InvalidArgument(
+                   "use wrong place, Please check."));
              }
 #else
              LOG(ERROR) << string::Sprintf(
-                 "Cannot use CustomDevice because you have installed CPU/GPU"
+                 "Cannot use CustomDevice because you have installed CPU/GPU "
                  "version PaddlePaddle.\n"
-                 "If you want to use CustomDevice, please try to install"
+                 "If you want to use CustomDevice, please try to install "
                  "CustomDevice version "
                  "PaddlePaddle by: pip install paddlepaddle\n"
                  "If you only have CPU, please change "
                  "CustomPlace(%s, %d) to be CPUPlace().\n",
                  device_type, dev_id);
-             std::exit(-1);
+              PADDLE_THROW(::common::errors::InvalidArgument(
+            "use wrong place, Please check."));
 #endif
            })
-      .def("_type", &PlaceIndex<platform::CustomPlace>)
+      .def("_type", &PlaceIndex<phi::CustomPlace>)
       .def("get_device_id",
-           [](const platform::CustomPlace &self) { return self.GetDeviceId(); })
+           [](const phi::CustomPlace &self) { return self.GetDeviceId(); })
       .def("get_device_type",
-           [](const platform::CustomPlace &self) {
-             return self.GetDeviceType();
-           })
-      .def("__repr__", string::to_string<const platform::CustomPlace &>)
-      .def("__str__", string::to_string<const platform::CustomPlace &>);
-  py::class_<platform::CUDAPlace> cudaplace(m, "CUDAPlace", R"DOC(
+           [](const phi::CustomPlace &self) { return self.GetDeviceType(); })
+      .def("__repr__", string::to_string<const phi::CustomPlace &>)
+      .def("__str__", string::to_string<const phi::CustomPlace &>);
+#if defined(PADDLE_WITH_CUSTOM_DEVICE)
+  m.def("is_float16_supported", [](const phi::CustomPlace &place) -> bool {
+    return phi::DeviceManager::IsFloat16Supported(place);
+  });
+  m.def("is_bfloat16_supported", [](const phi::CustomPlace &place) -> bool {
+    return phi::DeviceManager::IsBFloat16Supported(place);
+  });
+#endif
+  py::class_<phi::GPUPlace, phi::Place> cudaplace(m, "CUDAPlace", R"DOC(
 
     CUDAPlace is a descriptor of a device.
     It represents a GPU device allocated or to be allocated with Tensor.
@@ -318,14 +396,15 @@ void BindPlace(pybind11::module &m) {  // NOLINT
   g_cudaplace_pytype = reinterpret_cast<PyTypeObject *>(cudaplace.ptr());
   cudaplace
       .def("__init__",
-           [](platform::CUDAPlace &self, int dev_id) {
+           [](phi::GPUPlace &self, int dev_id) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
              if (UNLIKELY(dev_id < 0)) {
                LOG(ERROR) << string::Sprintf(
                    "Invalid CUDAPlace(%d), device id must be 0 or "
                    "positive integer",
                    dev_id);
-               std::exit(-1);
+               PADDLE_THROW(::common::errors::InvalidArgument(
+                   "use wrong place, Please check."));
              }
 
              if (UNLIKELY(dev_id >= platform::GetGPUDeviceCount())) {
@@ -333,7 +412,8 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                  LOG(ERROR) << "Cannot use GPU because there is no GPU "
                                "detected on your "
                                "machine.";
-                 std::exit(-1);
+                 PADDLE_THROW(::common::errors::InvalidArgument(
+                     "use wrong place, Please check."));
                } else {
                  LOG(ERROR) << string::Sprintf(
                      "Invalid CUDAPlace(%d), must inside [0, %d), because GPU "
@@ -341,11 +421,12 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                      dev_id,
                      platform::GetGPUDeviceCount(),
                      platform::GetGPUDeviceCount());
-                 std::exit(-1);
+                 PADDLE_THROW(::common::errors::InvalidArgument(
+                     "use wrong place, Please check."));
                }
              }
 
-             new (&self) platform::CUDAPlace(dev_id);
+             new (&self) phi::GPUPlace(dev_id);
 #else
              LOG(ERROR) << string::Sprintf(
                  "Cannot use GPU because you have installed CPU version "
@@ -355,26 +436,27 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                  "If you only have CPU, please change CUDAPlace(%d) to be "
                  "CPUPlace().\n",
                  dev_id);
-             std::exit(-1);
+              PADDLE_THROW(::common::errors::InvalidArgument(
+            "use wrong place, Please check."));
 #endif
            })
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
       .def("get_device_id",
-           [](const platform::CUDAPlace &self) { return self.GetDeviceId(); })
-      .def("_type", &PlaceIndex<platform::CUDAPlace>)
-      .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::Place>)
-      .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::CUDAPlace>)
-      .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::CPUPlace>)
-      .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::XPUPlace>)
-      .def("_equals",
-           &IsSamePlace<platform::CUDAPlace, platform::CUDAPinnedPlace>)
+           [](const phi::GPUPlace &self) { return self.GetDeviceId(); })
+      .def("_type", &PlaceIndex<phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPlace, phi::Place>)
+      .def("_equals", &IsSamePlace<phi::GPUPlace, phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPlace, phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPlace, phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPlace, phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPlace, phi::XPUPinnedPlace>)
       .def("_get_device_id",
-           [](platform::CUDAPlace &self) -> int { return self.GetDeviceId(); })
+           [](phi::GPUPlace &self) -> int { return self.GetDeviceId(); })
 #endif
-      .def("__repr__", string::to_string<const platform::CUDAPlace &>)
-      .def("__str__", string::to_string<const platform::CUDAPlace &>);
+      .def("__repr__", string::to_string<const phi::GPUPlace &>)
+      .def("__str__", string::to_string<const phi::GPUPlace &>);
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  m.def("is_float16_supported", [](const platform::CUDAPlace &place) -> bool {
+  m.def("is_float16_supported", [](const phi::GPUPlace &place) -> bool {
   // Only GPUs with Compute Capability >= 53 support float16
 #ifdef PADDLE_WITH_HIP
     return true;
@@ -382,16 +464,16 @@ void BindPlace(pybind11::module &m) {  // NOLINT
     return platform::GetGPUComputeCapability(place.device) >= 53;
 #endif
   });
-  m.def("is_bfloat16_supported", [](const platform::CUDAPlace &place) -> bool {
+  m.def("is_bfloat16_supported", [](const phi::GPUPlace &place) -> bool {
   // Only GPUs with Compute Capability >= 80 support bfloat16
 #ifdef PADDLE_WITH_HIP
-    return false;
+    return true;
 #else
     return platform::GetGPUComputeCapability(place.device) >= 80;
 #endif
   });
 #endif
-  py::class_<platform::XPUPlace> xpuplace(m, "XPUPlace", R"DOC(
+  py::class_<phi::XPUPlace, phi::Place> xpuplace(m, "XPUPlace", R"DOC(
     Return a Baidu Kunlun Place
 
     Examples:
@@ -404,21 +486,23 @@ void BindPlace(pybind11::module &m) {  // NOLINT
   g_xpuplace_pytype = reinterpret_cast<PyTypeObject *>(xpuplace.ptr());
   xpuplace
       .def("__init__",
-           [](platform::XPUPlace &self, int dev_id) {
+           [](phi::XPUPlace &self, int dev_id) {
 #ifdef PADDLE_WITH_XPU
              if (UNLIKELY(dev_id < 0)) {
                LOG(ERROR) << string::Sprintf(
                    "Invalid XPUPlace(%d), device id must be 0 or "
                    "positive integer",
                    dev_id);
-               std::exit(-1);
+               PADDLE_THROW(::common::errors::InvalidArgument(
+                   "use wrong place, Please check."));
              }
              if (UNLIKELY(dev_id >= platform::GetXPUDeviceCount())) {
                if (platform::GetXPUDeviceCount() == 0) {
                  LOG(ERROR) << "Cannot use XPU because there is no XPU "
                                "detected on your "
                                "machine.";
-                 std::exit(-1);
+                 PADDLE_THROW(::common::errors::InvalidArgument(
+                     "use wrong place, Please check."));
                } else {
                  LOG(ERROR) << string::Sprintf(
                      "Invalid XPUPlace(%d), must inside [0, %d), because XPU "
@@ -426,10 +510,11 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                      dev_id,
                      platform::GetXPUDeviceCount(),
                      platform::GetXPUDeviceCount());
-                 std::exit(-1);
+                 PADDLE_THROW(::common::errors::InvalidArgument(
+                     "use wrong place, Please check."));
                }
              }
-             new (&self) platform::XPUPlace(dev_id);
+             new (&self) phi::XPUPlace(dev_id);
 #else
              LOG(ERROR) << string::Sprintf(
                  "Cannot use XPU because you have installed CPU/GPU version "
@@ -439,22 +524,24 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                  "If you only have CPU, please change XPUPlace(%d) to be "
                  "CPUPlace().\n",
                  dev_id);
-             std::exit(-1);
+
+              PADDLE_THROW(::common::errors::InvalidArgument(
+            "use wrong place, Please check."));
 #endif
            })
 #ifdef PADDLE_WITH_XPU
-      .def("_type", &PlaceIndex<platform::XPUPlace>)
-      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::Place>)
-      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::CUDAPlace>)
-      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::CPUPlace>)
-      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::XPUPlace>)
-      .def("_equals",
-           &IsSamePlace<platform::XPUPlace, platform::CUDAPinnedPlace>)
+      .def("_type", &PlaceIndex<phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPlace, phi::Place>)
+      .def("_equals", &IsSamePlace<phi::XPUPlace, phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPlace, phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPlace, phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPlace, phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPlace, phi::XPUPinnedPlace>)
       .def("get_device_id",
-           [](const platform::XPUPlace &self) { return self.GetDeviceId(); })
+           [](const phi::XPUPlace &self) { return self.GetDeviceId(); })
 #endif
-      .def("__repr__", string::to_string<const platform::XPUPlace &>)
-      .def("__str__", string::to_string<const platform::XPUPlace &>);
+      .def("__repr__", string::to_string<const phi::XPUPlace &>)
+      .def("__str__", string::to_string<const phi::XPUPlace &>);
 #ifdef PADDLE_WITH_XPU
   py::enum_<phi::backends::xpu::XPUVersion>(m, "XPUVersion", py::arithmetic())
       .value("XPU1", phi::backends::xpu::XPUVersion::XPU1)
@@ -462,6 +549,8 @@ void BindPlace(pybind11::module &m) {  // NOLINT
       .value("XPU3", phi::backends::xpu::XPUVersion::XPU3)
       .export_values();
   m.def("get_xpu_device_count", platform::GetXPUDeviceCount);
+  m.def("set_xpu_debug_level",
+        [](int level) { platform::set_xpu_debug_level(level); });
   m.def("get_xpu_device_version",
         [](int device_id) { return platform::get_xpu_version(device_id); });
 #ifdef PADDLE_WITH_XPU_KP
@@ -478,19 +567,19 @@ void BindPlace(pybind11::module &m) {  // NOLINT
   m.def("get_xpu_device_op_list", [](phi::backends::xpu::XPUVersion version) {
     return platform::get_xpu_op_list(version);
   });
-  m.def("is_float16_supported", [](const platform::XPUPlace &place) -> bool {
-    // XPUs with Compute Capability > xpu2 support float16 and bfloat16
+  m.def("is_float16_supported", [](const phi::XPUPlace &place) -> bool {
+    // XPUs with Compute Capability > xpu1 support float16
     return platform::get_xpu_version(place.device) >
            phi::backends::xpu::XPUVersion::XPU1;
   });
-  m.def("is_bfloat16_supported", [](const platform::XPUPlace &place) -> bool {
-    // XPUs with Compute Capability > xpu2 support float16 and bfloat16
+  m.def("is_bfloat16_supported", [](const phi::XPUPlace &place) -> bool {
+    // XPUs with Compute Capability > xpu2 support bfloat16
     return platform::get_xpu_version(place.device) >
-           phi::backends::xpu::XPUVersion::XPU1;
+           phi::backends::xpu::XPUVersion::XPU2;
   });
 #endif
 
-  py::class_<paddle::platform::CPUPlace> cpuplace(m, "CPUPlace", R"DOC(
+  py::class_<phi::CPUPlace, phi::Place> cpuplace(m, "CPUPlace", R"DOC(
     CPUPlace is a descriptor of a device.
     It represents a CPU device on which a tensor will be allocated and a model will run.
 
@@ -503,18 +592,18 @@ void BindPlace(pybind11::module &m) {  // NOLINT
         )DOC");
   g_cpuplace_pytype = reinterpret_cast<PyTypeObject *>(cpuplace.ptr());
   cpuplace.def(py::init<>())
-      .def("_type", &PlaceIndex<platform::CPUPlace>)
-      .def("_equals", &IsSamePlace<platform::CPUPlace, platform::Place>)
-      .def("_equals", &IsSamePlace<platform::CPUPlace, platform::XPUPlace>)
-      .def("_equals", &IsSamePlace<platform::CPUPlace, platform::CUDAPlace>)
-      .def("_equals", &IsSamePlace<platform::CPUPlace, platform::CPUPlace>)
-      .def("_equals",
-           &IsSamePlace<platform::CPUPlace, platform::CUDAPinnedPlace>)
-      .def("__repr__", string::to_string<const platform::CPUPlace &>)
-      .def("__str__", string::to_string<const platform::CPUPlace &>);
+      .def("_type", &PlaceIndex<phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::CPUPlace, phi::Place>)
+      .def("_equals", &IsSamePlace<phi::CPUPlace, phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::CPUPlace, phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::CPUPlace, phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::CPUPlace, phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::CPUPlace, phi::XPUPinnedPlace>)
+      .def("__repr__", string::to_string<const phi::CPUPlace &>)
+      .def("__str__", string::to_string<const phi::CPUPlace &>);
   m.def("is_float16_supported",
-        [](const platform::CPUPlace &place) -> bool { return false; });
-  m.def("is_bfloat16_supported", [](const platform::CPUPlace &place) -> bool {
+        [](const phi::CPUPlace &place) -> bool { return false; });
+  m.def("is_bfloat16_supported", [](const phi::CPUPlace &place) -> bool {
 #ifndef PADDLE_WITH_DNNL
     return false;
 #else
@@ -524,7 +613,7 @@ void BindPlace(pybind11::module &m) {  // NOLINT
       return false;
 #endif
   });
-  py::class_<paddle::platform::CUDAPinnedPlace> cudapinnedplace(
+  py::class_<phi::GPUPinnedPlace, phi::Place> cudapinnedplace(
       m, "CUDAPinnedPlace", R"DOC(
     CUDAPinnedPlace is a descriptor of a device.
     It refers to the page locked memory allocated by the CUDA function `cudaHostAlloc()` in the host memory.
@@ -544,30 +633,65 @@ void BindPlace(pybind11::module &m) {  // NOLINT
   g_cudapinnedplace_pytype =
       reinterpret_cast<PyTypeObject *>(cudapinnedplace.ptr());
   cudapinnedplace
-      .def("__init__",
-           [](platform::CUDAPinnedPlace &self) {
+      .def(py::init([]() {
 #if !defined(PADDLE_WITH_CUDA) && !defined(PADDLE_WITH_HIP)
-             PADDLE_THROW(platform::errors::PermissionDenied(
-                 "Cannot use CUDAPinnedPlace in CPU only version, "
-                 "Please recompile or reinstall Paddle with CUDA support."));
+        PADDLE_THROW(common::errors::PermissionDenied(
+            "Cannot use CUDAPinnedPlace in CPU only version, "
+            "Please recompile or reinstall Paddle with CUDA support."));
 #endif
-             new (&self) platform::CUDAPinnedPlace();
-           })
-      .def("_type", &PlaceIndex<platform::CUDAPinnedPlace>)
-      .def("_equals", &IsSamePlace<platform::CUDAPinnedPlace, platform::Place>)
-      .def("_equals",
-           &IsSamePlace<platform::CUDAPinnedPlace, platform::CUDAPlace>)
-      .def("_equals",
-           &IsSamePlace<platform::CUDAPinnedPlace, platform::XPUPlace>)
-      .def("_equals",
-           &IsSamePlace<platform::CUDAPinnedPlace, platform::CPUPlace>)
-      .def("_equals",
-           &IsSamePlace<platform::CUDAPinnedPlace, platform::CUDAPinnedPlace>)
-      .def("__repr__", string::to_string<const platform::CUDAPinnedPlace &>)
-      .def("__str__", string::to_string<const platform::CUDAPinnedPlace &>);
+        return std::make_unique<phi::GPUPinnedPlace>();
+      }))
+      .def("_type", &PlaceIndex<phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPinnedPlace, phi::Place>)
+      .def("_equals", &IsSamePlace<phi::GPUPinnedPlace, phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPinnedPlace, phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPinnedPlace, phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPinnedPlace, phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::GPUPinnedPlace, phi::XPUPinnedPlace>)
+      .def("__repr__", string::to_string<const phi::GPUPinnedPlace &>)
+      .def("__str__", string::to_string<const phi::GPUPinnedPlace &>);
+
+  // XPUPinnedPlace
+  py::class_<phi::XPUPinnedPlace, phi::Place> xpupinnedplace(
+      m, "XPUPinnedPlace", R"DOC(
+    XPUPinnedPlace is a descriptor of a device.
+    It refers to the page locked memory allocated by the CUDA function `cudaHostAlloc()` in the host memory.
+    The host operating system will not paging and exchanging the memory.
+    It can be accessed through direct memory access technology to speed up the copy of data between the host and XPU.
+    For more information on XPU data transfer and `pinned memory`,
+    please refer to `official document <https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#pinned-memory>`_ .
+
+    Examples:
+        .. code-block:: python
+
+            >>> # doctest: +REQUIRES(env:XPU)
+            >>> import paddle
+            >>> place = paddle.XPUPinnedPlace()
+
+        )DOC");
+  g_xpupinnedplace_pytype =
+      reinterpret_cast<PyTypeObject *>(xpupinnedplace.ptr());
+  xpupinnedplace
+      .def(py::init([]() {
+#if !defined(PADDLE_WITH_XPU)
+        PADDLE_THROW(common::errors::PermissionDenied(
+            "Cannot use XPUPinnedPlace in CPU only version, "
+            "Please recompile or reinstall Paddle with XPU support."));
+#endif
+        return std::make_unique<phi::XPUPinnedPlace>();
+      }))
+      .def("_type", &PlaceIndex<phi::XPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPinnedPlace, phi::Place>)
+      .def("_equals", &IsSamePlace<phi::XPUPinnedPlace, phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPinnedPlace, phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPinnedPlace, phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPinnedPlace, phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::XPUPinnedPlace, phi::XPUPinnedPlace>)
+      .def("__repr__", string::to_string<const phi::XPUPinnedPlace &>)
+      .def("__str__", string::to_string<const phi::XPUPinnedPlace &>);
 
   // IPUPlace
-  py::class_<platform::IPUPlace> ipuplace(m, "IPUPlace", R"DOC(
+  py::class_<phi::IPUPlace, phi::Place> ipuplace(m, "IPUPlace", R"DOC(
     IPUPlace is a descriptor of a device.
     It represents a IPU device on which a tensor will be allocated and a model will run.
 
@@ -582,17 +706,18 @@ void BindPlace(pybind11::module &m) {  // NOLINT
   g_ipuplace_pytype = reinterpret_cast<PyTypeObject *>(ipuplace.ptr());
   ipuplace
       .def("__init__",
-           [](platform::IPUPlace &self) {
+           [](phi::IPUPlace &self) {
 #ifdef PADDLE_WITH_IPU
              if (platform::GetIPUDeviceCount() == 0) {
                LOG(ERROR) << "Cannot use IPU because there is no IPU "
                              "detected on your "
                              "machine.";
-               std::exit(-1);
+               PADDLE_THROW(::common::errors::InvalidArgument(
+                   "use wrong place, Please check."));
              }
-             // use ipu(0) to comile, while run with the number user configure
-             // in sharding and pipline.
-             new (&self) platform::IPUPlace(0);
+             // use ipu(0) to compile, while run with the number user configure
+             // in sharding and pipeline.
+             new (&self) phi::IPUPlace(0);
 #else
              LOG(ERROR) << string::Sprintf(
                  "Cannot use IPU because you didn't install IPU version "
@@ -601,84 +726,19 @@ void BindPlace(pybind11::module &m) {  // NOLINT
                  "PaddlePaddle by: pip install paddlepaddle*\n"
                  "If you only have CPU, please change IPUPlace to be "
                  "CPUPlace().\n");
-             std::exit(-1);
+              PADDLE_THROW(::common::errors::InvalidArgument(
+            "use wrong place, Please check."));
 #endif
            })
-      .def("_type", &PlaceIndex<platform::IPUPlace>)
-      .def("_equals", &IsSamePlace<platform::IPUPlace, platform::Place>)
-      .def("_equals", &IsSamePlace<platform::IPUPlace, platform::CUDAPlace>)
-      .def("_equals", &IsSamePlace<platform::IPUPlace, platform::CPUPlace>)
-      .def("_equals", &IsSamePlace<platform::IPUPlace, platform::XPUPlace>)
-      .def("_equals", &IsSamePlace<platform::IPUPlace, platform::IPUPlace>)
-      .def("_equals",
-           &IsSamePlace<platform::IPUPlace, platform::CUDAPinnedPlace>)
-      .def("__str__", string::to_string<const platform::IPUPlace &>);
-
-  py::class_<platform::Place> platformplace(m, "Place");
-  g_place_pytype = reinterpret_cast<PyTypeObject *>(platformplace.ptr());
-  platformplace.def(py::init<>())
-      .def("_type", &PlaceIndex<platform::Place>)
-      .def("_equals", &IsSamePlace<platform::Place, platform::Place>)
-      .def("_equals", &IsSamePlace<platform::Place, platform::CUDAPlace>)
-      .def("_equals", &IsSamePlace<platform::Place, platform::CPUPlace>)
-      .def("_equals", &IsSamePlace<platform::Place, platform::XPUPlace>)
-      .def("_equals", &IsSamePlace<platform::Place, platform::IPUPlace>)
-      .def("_equals", &IsSamePlace<platform::Place, platform::CUDAPinnedPlace>)
-      .def("_equals", &IsSamePlace<platform::Place, platform::CustomPlace>)
-      .def("is_gpu_place",
-           [](platform::Place &self) { return platform::is_gpu_place(self); })
-      .def("is_cpu_place",
-           [](platform::Place &self) { return platform::is_cpu_place(self); })
-      .def("is_xpu_place",
-           [](platform::Place &self) { return platform::is_xpu_place(self); })
-      .def("is_ipu_place",
-           [](platform::Place &self) { return platform::is_ipu_place(self); })
-      .def("is_cuda_pinned_place",
-           [](platform::Place &self) {
-             return platform::is_cuda_pinned_place(self);
-           })
-      .def(
-          "is_custom_place",
-          [](platform::Place &self) { return platform::is_custom_place(self); })
-      .def("gpu_device_id", [](platform::Place &self) { return self.device; })
-      .def("xpu_device_id", [](platform::Place &self) { return self.device; })
-      .def("ipu_device_id", [](platform::Place &self) { return self.device; })
-      .def("custom_device_id",
-           [](platform::Place &self) { return self.device; })
-      .def("custom_device_type",
-           [](platform::Place &self) { return self.GetDeviceType(); })
-      .def("set_place",
-           [](platform::Place &self, const platform::Place &other) {
-             self = other;
-           })
-      .def("set_place",
-           [](platform::Place &self, const platform::CPUPlace &cpu_place) {
-             self = cpu_place;
-           })
-      .def("set_place",
-           [](platform::Place &self, const platform::XPUPlace &xpu_place) {
-             self = xpu_place;
-           })
-      .def("set_place",
-           [](platform::Place &self, const platform::CUDAPlace &gpu_place) {
-             self = gpu_place;
-           })
-      .def("set_place",
-           [](platform::Place &self,
-              const platform::CUDAPinnedPlace &cuda_pinned_place) {
-             self = cuda_pinned_place;
-           })
-      .def("set_place",
-           [](platform::Place &self, const platform::IPUPlace &ipu_place) {
-             self = ipu_place;
-           })
-      .def("set_place",
-           [](platform::Place &self, const platform::CustomPlace &plug_place) {
-             self = plug_place;
-           })
-      .def("__repr__", string::to_string<const platform::Place &>)
-      .def("__str__", string::to_string<const platform::Place &>);
+      .def("_type", &PlaceIndex<phi::IPUPlace>)
+      .def("_equals", &IsSamePlace<phi::IPUPlace, phi::Place>)
+      .def("_equals", &IsSamePlace<phi::IPUPlace, phi::GPUPlace>)
+      .def("_equals", &IsSamePlace<phi::IPUPlace, phi::CPUPlace>)
+      .def("_equals", &IsSamePlace<phi::IPUPlace, phi::XPUPlace>)
+      .def("_equals", &IsSamePlace<phi::IPUPlace, phi::IPUPlace>)
+      .def("_equals", &IsSamePlace<phi::IPUPlace, phi::GPUPinnedPlace>)
+      .def("_equals", &IsSamePlace<phi::IPUPlace, phi::XPUPinnedPlace>)
+      .def("__str__", string::to_string<const phi::IPUPlace &>);
 }
 
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

@@ -14,12 +14,15 @@ limitations under the License. */
 #pragma once
 #ifndef _WIN32
 #include <cuda.h>
+#ifndef NVTX_SUPPRESS_V2_DEPRECATION_WARNING
+#define NVTX_SUPPRESS_V2_DEPRECATION_WARNING
+#endif
 #include <nvToolsExt.h>
 
 #include <mutex>  // NOLINT
 
 #include "paddle/phi/backends/dynload/dynamic_loader.h"
-#include "paddle/phi/backends/dynload/port.h"
+#include "paddle/phi/common/port.h"
 
 namespace phi {
 namespace dynload {

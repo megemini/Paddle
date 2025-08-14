@@ -14,9 +14,9 @@
 
 #pragma once
 
+#include "paddle/common/hostdevice.h"
 #include "paddle/phi/common/type_traits.h"
 #include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/core/hostdevice.h"
 #include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/for_range.h"
 
@@ -25,8 +25,8 @@
 namespace phi {
 namespace funcs {
 
-inline int ComputeStride(int axis, phi::DDim dims) {
-  int size = 1;
+inline int64_t ComputeStride(int axis, phi::DDim dims) {
+  int64_t size = 1;
   for (int i = axis + 1; i < dims.size(); i++) {
     size *= dims[i];
   }

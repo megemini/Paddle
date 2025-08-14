@@ -24,55 +24,55 @@
 namespace phi {
 
 template <typename T, typename Context>
-void TransposeKernel(const Context& ctx,
+void TransposeKernel(const Context& dev_ctx,
                      const DenseTensor& x,
                      const std::vector<int>& axis,
                      DenseTensor* out) {
   size_t x_rank = x.dims().size();
-  std::vector<int> formated_axis = axis;
+  std::vector<int> formatted_axis = axis;
   for (size_t i = 0; i < axis.size(); i++) {
     if (axis[i] < 0) {
-      formated_axis[i] = static_cast<int>(axis[i] + x_rank);
+      formatted_axis[i] = static_cast<int>(axis[i] + x_rank);
     }
   }
 
-  ctx.template Alloc<T>(out);
+  dev_ctx.template Alloc<T>(out);
   if (out->numel() == 0) {
     return;
   }
-  int rank = static_cast<int>(formated_axis.size());
+  int rank = static_cast<int>(formatted_axis.size());
   switch (rank) {
     case 0:
-      phi::Copy<Context>(ctx, x, ctx.GetPlace(), false, out);
+      phi::Copy<Context>(dev_ctx, x, dev_ctx.GetPlace(), false, out);
       break;
     case 1:
       funcs::Transpose<Context, T, 1> trans1;
-      trans1(ctx, x, out, formated_axis);
+      trans1(dev_ctx, x, out, formatted_axis);
       break;
     case 2:
       funcs::Transpose<Context, T, 2> trans2;
-      trans2(ctx, x, out, formated_axis);
+      trans2(dev_ctx, x, out, formatted_axis);
       break;
     case 3:
       funcs::Transpose<Context, T, 3> trans3;
-      trans3(ctx, x, out, formated_axis);
+      trans3(dev_ctx, x, out, formatted_axis);
       break;
     case 4:
       funcs::Transpose<Context, T, 4> trans4;
-      trans4(ctx, x, out, formated_axis);
+      trans4(dev_ctx, x, out, formatted_axis);
       break;
     case 5:
       funcs::Transpose<Context, T, 5> trans5;
-      trans5(ctx, x, out, formated_axis);
+      trans5(dev_ctx, x, out, formatted_axis);
       break;
     case 6:
       funcs::Transpose<Context, T, 6> trans6;
-      trans6(ctx, x, out, formated_axis);
+      trans6(dev_ctx, x, out, formatted_axis);
       break;
     default:
       // for rank >= 7 situation
       funcs::TransposeNormal<Context, T> trans_normal;
-      trans_normal(ctx, x, out, formated_axis);
+      trans_normal(dev_ctx, x, out, formatted_axis);
   }
 }
 
@@ -93,4 +93,6 @@ PD_REGISTER_KERNEL(transpose,
                    phi::dtype::float16,
                    phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
-                   phi::dtype::complex<double>) {}
+                   phi::dtype::complex<double>,
+                   phi::dtype::float8_e4m3fn,
+                   phi::dtype::float8_e5m2) {}

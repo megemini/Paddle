@@ -16,8 +16,11 @@ limitations under the License. */
 
 #include "glog/logging.h"
 
+#include "paddle/common/flags.h"
 #include "paddle/phi/common/memory_utils.h"
 #include "paddle/phi/core/enforce.h"
+
+COMMON_DECLARE_bool(use_default_stream);
 
 namespace phi {
 
@@ -34,7 +37,7 @@ static DeviceContextPool* pool = nullptr;
 
 TEST_API DeviceContextPool& DeviceContextPool::Instance() {
   PADDLE_ENFORCE_NOT_NULL(pool,
-                          phi::errors::PreconditionNotMet(
+                          common::errors::PreconditionNotMet(
                               "Need to Create DeviceContextPool firstly!"));
   return *pool;
 }
@@ -70,7 +73,7 @@ TEST_API phi::DeviceContext* DeviceContextPool::Get(const phi::Place& place) {
 
   auto it = ptr->find(place);
   if (it == ptr->end()) {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Place %s is not supported. Please check that your paddle compiles "
         "with WITH_GPU, WITH_XPU or WITH_IPU option "
         "or check "
@@ -108,7 +111,8 @@ DeviceContextPool::DeviceContextPool(const std::vector<phi::Place>& places) {
       &device_contexts_,
       places,
       /*disable_setting_default_stream_for_allocator=*/false,
-      /*stream_priority=*/0);
+      /*stream_priority=*/0,
+      FLAGS_use_default_stream);
 }
 
 }  // namespace phi

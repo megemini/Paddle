@@ -21,7 +21,7 @@ import numpy as np
 import paddle
 from paddle import nn
 from paddle.base import core
-from paddle.framework import in_dynamic_mode
+from paddle.framework import in_dynamic_or_pir_mode
 
 
 def copy_bits_from_float_to_uint16(f):
@@ -68,7 +68,7 @@ def _build_optimizer(
         grad_clip = paddle.nn.ClipGradByGlobalNorm(clip_norm=1.0)
     else:
         grad_clip = None
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         assert model is not None
         parameters = model.parameters()
     else:
@@ -82,7 +82,7 @@ def _build_optimizer(
         epsilon=1e-4,
         weight_decay=0.01,
     )
-    if not in_dynamic_mode() and use_amp:
+    if not in_dynamic_or_pir_mode() and use_amp:
         optimizer = paddle.static.amp.decorate(
             optimizer,
             amp_lists,
@@ -125,36 +125,38 @@ def build_add_model(
 ):
     main_program = paddle.static.Program()
     startup_program = paddle.static.Program()
-    with paddle.utils.unique_name.guard():
-        with paddle.static.program_guard(main_program, startup_program):
-            x_dtype = "float32"
-            if use_amp and amp_level == "O2":
-                if amp_dtype == "bfloat16":
-                    x_dtype = "uint16"
-                elif amp_dtype == "float16":
-                    x_dtype = "float16"
-            cast_add_param(amp_dtype)
-            model = SimpleAddNet(x_dtype)
-            x = paddle.static.data(name='input', shape=[16, 16], dtype=x_dtype)
-            out = model(x)
-            loss = paddle.mean(out)
+    with (
+        paddle.utils.unique_name.guard(),
+        paddle.static.program_guard(main_program, startup_program),
+    ):
+        x_dtype = "float32"
+        if use_amp and amp_level == "O2":
+            if amp_dtype == "bfloat16":
+                x_dtype = "uint16"
+            elif amp_dtype == "float16":
+                x_dtype = "float16"
+        cast_add_param(amp_dtype)
+        model = SimpleAddNet(x_dtype)
+        x = paddle.static.data(name='input', shape=[16, 16], dtype=x_dtype)
+        out = model(x)
+        loss = paddle.mean(out)
 
-            if use_amp:
-                amp_lists = paddle.static.amp.AutoMixedPrecisionLists(
-                    custom_white_list=["elementwise_add"],
-                    custom_black_list=["reduce_mean"],
-                    dtype=amp_dtype,
-                )
-            else:
-                amp_lists = None
-            optimizer = _build_optimizer(
-                use_amp,
-                amp_dtype,
-                amp_level,
-                amp_lists,
-                use_promote=use_promote,
+        if use_amp:
+            amp_lists = paddle.static.amp.AutoMixedPrecisionLists(
+                custom_white_list=["elementwise_add"],
+                custom_black_list=["reduce_mean"],
+                dtype=amp_dtype,
             )
-            optimizer.minimize(loss)
+        else:
+            amp_lists = None
+        optimizer = _build_optimizer(
+            use_amp,
+            amp_dtype,
+            amp_level,
+            amp_lists,
+            use_promote=use_promote,
+        )
+        optimizer.minimize(loss)
     feed_vars = [x]
     fetch_vars = [loss]
     return main_program, startup_program, optimizer, feed_vars, fetch_vars
@@ -178,7 +180,7 @@ class SimpleConvNet(nn.Layer):
 def build_conv_model(
     use_amp, amp_dtype="float16", amp_level="O1", use_promote=False
 ):
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         model = SimpleConvNet()
         optimizer = _build_optimizer(use_amp=False, model=model)
         if use_amp and amp_dtype == "float16":
@@ -196,18 +198,20 @@ def build_conv_model(
 
     main_program = paddle.static.Program()
     startup_program = paddle.static.Program()
-    with paddle.utils.unique_name.guard():
-        with paddle.static.program_guard(main_program, startup_program):
-            model = SimpleConvNet()
-            x = paddle.static.data(
-                name='input', shape=[None, 1, 6, 6], dtype='float32'
-            )
-            out = model(x)
-            loss = paddle.mean(out)
-            optimizer = _build_optimizer(
-                use_amp, amp_dtype, amp_level, use_promote=use_promote
-            )
-            optimizer.minimize(loss)
+    with (
+        paddle.utils.unique_name.guard(),
+        paddle.static.program_guard(main_program, startup_program),
+    ):
+        model = SimpleConvNet()
+        x = paddle.static.data(
+            name='input', shape=[None, 1, 6, 6], dtype='float32'
+        )
+        out = model(x)
+        loss = paddle.mean(out)
+        optimizer = _build_optimizer(
+            use_amp, amp_dtype, amp_level, use_promote=use_promote
+        )
+        optimizer.minimize(loss)
     feed_vars = [x]
     fetch_vars = [loss]
     return main_program, startup_program, optimizer, feed_vars, fetch_vars
@@ -239,30 +243,32 @@ def build_embedding_model(
 ):
     main_program = paddle.static.Program()
     startup_program = paddle.static.Program()
-    with paddle.utils.unique_name.guard():
-        with paddle.static.program_guard(main_program, startup_program):
-            model = SimpleEmbeddingNet()
-            x = paddle.static.data(name='x', shape=[None, 32], dtype='int64')
-            out = model(x)
-            loss = paddle.mean(out)
-            if use_amp:
-                amp_lists = paddle.static.amp.AutoMixedPrecisionLists(
-                    custom_white_list=["elementwise_mul"],
-                    custom_black_list=["reduce_mean"],
-                    dtype=amp_dtype,
-                )
-            else:
-                amp_lists = None
-            optimizer = _build_optimizer(
-                use_amp,
-                amp_dtype,
-                amp_level,
-                amp_lists,
-                True,
-                use_promote=use_promote,
-                use_master_grad=use_master_grad,
+    with (
+        paddle.utils.unique_name.guard(),
+        paddle.static.program_guard(main_program, startup_program),
+    ):
+        model = SimpleEmbeddingNet()
+        x = paddle.static.data(name='x', shape=[None, 32], dtype='int64')
+        out = model(x)
+        loss = paddle.mean(out)
+        if use_amp:
+            amp_lists = paddle.static.amp.AutoMixedPrecisionLists(
+                custom_white_list=["elementwise_mul"],
+                custom_black_list=["reduce_mean"],
+                dtype=amp_dtype,
             )
-            optimizer.minimize(loss)
+        else:
+            amp_lists = None
+        optimizer = _build_optimizer(
+            use_amp,
+            amp_dtype,
+            amp_level,
+            amp_lists,
+            True,
+            use_promote=use_promote,
+            use_master_grad=use_master_grad,
+        )
+        optimizer.minimize(loss)
 
     feed_vars = [x]
     fetch_vars = [loss]
@@ -294,37 +300,39 @@ def build_MLP_model(
 ):
     main_program = paddle.static.Program()
     startup_program = paddle.static.Program()
-    with paddle.utils.unique_name.guard():
-        with paddle.static.program_guard(main_program, startup_program):
-            model = SimpleMLPNet()
-            x_dtype = "float32"
-            if use_amp and amp_level == "O2":
-                if amp_dtype == "bfloat16":
-                    x_dtype = "uint16"
-                elif amp_dtype == "float16":
-                    x_dtype = "float16"
-            x = paddle.static.data(name='x', shape=[None, 16], dtype=x_dtype)
-            out = model(x)
-            loss = paddle.mean(out)
+    with (
+        paddle.utils.unique_name.guard(),
+        paddle.static.program_guard(main_program, startup_program),
+    ):
+        model = SimpleMLPNet()
+        x_dtype = "float32"
+        if use_amp and amp_level == "O2":
+            if amp_dtype == "bfloat16":
+                x_dtype = "uint16"
+            elif amp_dtype == "float16":
+                x_dtype = "float16"
+        x = paddle.static.data(name='x', shape=[None, 16], dtype=x_dtype)
+        out = model(x)
+        loss = paddle.mean(out)
 
-            if use_amp:
-                amp_lists = paddle.static.amp.AutoMixedPrecisionLists(
-                    custom_black_list=["reduce_mean"],
-                    dtype=amp_dtype,
-                )
-            else:
-                amp_lists = None
-
-            optimizer = _build_optimizer(
-                use_amp,
-                amp_dtype,
-                amp_level,
-                amp_lists,
-                use_grad_clip=use_grad_clip,
-                use_promote=use_promote,
-                use_master_grad=use_master_grad,
+        if use_amp:
+            amp_lists = paddle.static.amp.AutoMixedPrecisionLists(
+                custom_black_list=["reduce_mean"],
+                dtype=amp_dtype,
             )
-            optimizer.minimize(loss)
+        else:
+            amp_lists = None
+
+        optimizer = _build_optimizer(
+            use_amp,
+            amp_dtype,
+            amp_level,
+            amp_lists,
+            use_grad_clip=use_grad_clip,
+            use_promote=use_promote,
+            use_master_grad=use_master_grad,
+        )
+        optimizer.minimize(loss)
 
     feed_vars = [x]
     fetch_vars = [loss]
@@ -360,18 +368,20 @@ class SimpleWhileNet(nn.Layer):
 def build_while_model():
     main_program = paddle.static.Program()
     startup_program = paddle.static.Program()
-    with paddle.utils.unique_name.guard():
-        with paddle.static.program_guard(main_program, startup_program):
-            model = SimpleWhileNet()
-            x = paddle.static.data(name='x', shape=[32, 16], dtype='float32')
-            out = model(x)
-            loss = paddle.mean(out)
+    with (
+        paddle.utils.unique_name.guard(),
+        paddle.static.program_guard(main_program, startup_program),
+    ):
+        model = SimpleWhileNet()
+        x = paddle.static.data(name='x', shape=[32, 16], dtype='float32')
+        out = model(x)
+        loss = paddle.mean(out)
     return main_program, startup_program
 
 
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA and not support amp.",
+    not (core.is_compiled_with_cuda() or core.is_compiled_with_xpu()),
+    "core is not compiled with CUDA or XPU and not support amp.",
 )
 class AmpTestBase(unittest.TestCase):
     def setUp(self):

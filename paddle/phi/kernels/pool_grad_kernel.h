@@ -23,13 +23,13 @@
 namespace phi {
 
 template <typename T, typename Context>
-void Pool2dGradKernel(const Context& ctx,
+void Pool2dGradKernel(const Context& dev_ctx,
                       const DenseTensor& x,
                       const DenseTensor& out,
                       const DenseTensor& dout,
                       const IntArray& kernel_size,
-                      const std::vector<int>& strides,
-                      const std::vector<int>& paddings,
+                      const std::vector<int64_t>& strides,
+                      const std::vector<int64_t>& paddings,
                       bool ceil_mode,
                       bool exclusive,
                       const std::string& data_format,
@@ -40,13 +40,31 @@ void Pool2dGradKernel(const Context& ctx,
                       DenseTensor* dx);
 
 template <typename T, typename Context>
-void Pool2dGradGPUDNNKernel(const Context& ctx,
+void LPPool2dGradKernel(const Context& dev_ctx,
+                        const DenseTensor& x,
+                        const DenseTensor& out,
+                        const DenseTensor& dout,
+                        const IntArray& kernel_size,
+                        const std::vector<int64_t>& strides,
+                        const std::vector<int64_t>& paddings,
+                        bool ceil_mode,
+                        bool exclusive,
+                        const std::string& data_format,
+                        const std::string& pooling_type,
+                        bool global_pooling,
+                        bool adaptive,
+                        const std::string& padding_algorithm,
+                        const float norm_type,
+                        DenseTensor* dx);
+
+template <typename T, typename Context>
+void Pool2dGradGPUDNNKernel(const Context& dev_ctx,
                             const DenseTensor& x,
                             const DenseTensor& out,
                             const DenseTensor& dout,
                             const IntArray& kernel_size,
-                            const std::vector<int>& strides,
-                            const std::vector<int>& paddings,
+                            const std::vector<int64_t>& strides,
+                            const std::vector<int64_t>& paddings,
                             bool ceil_mode,
                             bool exclusive,
                             const std::string& data_format,
@@ -57,11 +75,11 @@ void Pool2dGradGPUDNNKernel(const Context& ctx,
                             DenseTensor* dx);
 
 template <typename T, typename Context>
-void Pool2dDoubleGradKernel(const Context& ctx,
+void Pool2dDoubleGradKernel(const Context& dev_ctx,
                             const DenseTensor& x,
                             const IntArray& kernel_size,
-                            const std::vector<int>& strides,
-                            const std::vector<int>& paddings,
+                            const std::vector<int64_t>& strides,
+                            const std::vector<int64_t>& paddings,
                             bool ceil_mode,
                             bool exclusive,
                             const std::string& data_format,
@@ -72,11 +90,11 @@ void Pool2dDoubleGradKernel(const Context& ctx,
                             DenseTensor* out);
 
 template <typename T, typename Context>
-void Pool2dDoubleGradGPUDNNKernel(const Context& ctx,
+void Pool2dDoubleGradGPUDNNKernel(const Context& dev_ctx,
                                   const DenseTensor& x,
                                   const IntArray& kernel_size,
-                                  const std::vector<int>& strides,
-                                  const std::vector<int>& paddings,
+                                  const std::vector<int64_t>& strides,
+                                  const std::vector<int64_t>& paddings,
                                   bool ceil_mode,
                                   bool exclusive,
                                   const std::string& data_format,
@@ -87,7 +105,7 @@ void Pool2dDoubleGradGPUDNNKernel(const Context& ctx,
                                   DenseTensor* out);
 
 template <typename T, typename Context>
-void MaxPool2dWithIndexGradKernel(const Context& ctx,
+void MaxPool2dWithIndexGradKernel(const Context& dev_ctx,
                                   const DenseTensor& x,
                                   const DenseTensor& mask,
                                   const DenseTensor& dout,
@@ -96,16 +114,17 @@ void MaxPool2dWithIndexGradKernel(const Context& ctx,
                                   const std::vector<int>& paddings,
                                   bool global_pooling,
                                   bool adaptive,
+                                  bool ceil_mode,
                                   DenseTensor* dx);
 
 template <typename T, typename Context>
-void Pool3dGradKernel(const Context& ctx,
+void Pool3dGradKernel(const Context& dev_ctx,
                       const DenseTensor& x,
                       const DenseTensor& out,
                       const DenseTensor& dout,
-                      const std::vector<int>& kernel_size,
-                      const std::vector<int>& strides,
-                      const std::vector<int>& paddings,
+                      const std::vector<int64_t>& kernel_size,
+                      const std::vector<int64_t>& strides,
+                      const std::vector<int64_t>& paddings,
                       bool ceil_mode,
                       bool exclusive,
                       const std::string& data_format,
@@ -116,13 +135,13 @@ void Pool3dGradKernel(const Context& ctx,
                       DenseTensor* dx);
 
 template <typename T, typename Context>
-void Pool3dGradGPUDNNKernel(const Context& ctx,
+void Pool3dGradGPUDNNKernel(const Context& dev_ctx,
                             const DenseTensor& x,
                             const DenseTensor& out,
                             const DenseTensor& dout,
-                            const std::vector<int>& kernel_size,
-                            const std::vector<int>& strides,
-                            const std::vector<int>& paddings,
+                            const std::vector<int64_t>& kernel_size,
+                            const std::vector<int64_t>& strides,
+                            const std::vector<int64_t>& paddings,
                             bool ceil_mode,
                             bool exclusive,
                             const std::string& data_format,
@@ -133,7 +152,7 @@ void Pool3dGradGPUDNNKernel(const Context& ctx,
                             DenseTensor* dx);
 
 template <typename T, typename Context>
-void MaxPool3dWithIndexGradKernel(const Context& ctx,
+void MaxPool3dWithIndexGradKernel(const Context& dev_ctx,
                                   const DenseTensor& x,
                                   const DenseTensor& mask,
                                   const DenseTensor& dout,
@@ -142,6 +161,29 @@ void MaxPool3dWithIndexGradKernel(const Context& ctx,
                                   const std::vector<int>& paddings,
                                   bool global_pooling,
                                   bool adaptive,
+                                  bool ceil_mode,
                                   DenseTensor* dx);
+
+template <typename T, typename Context>
+void FractionalMaxPool2dGradKernel(const Context& dev_ctx,
+                                   const DenseTensor& x,
+                                   const DenseTensor& mask,
+                                   const DenseTensor& dout,
+                                   const std::vector<int>& output_size,
+                                   const std::vector<int>& kernel_size,
+                                   float random_u,
+                                   bool return_mask,
+                                   DenseTensor* dx);
+
+template <typename T, typename Context>
+void FractionalMaxPool3dGradKernel(const Context& dev_ctx,
+                                   const DenseTensor& x,
+                                   const DenseTensor& mask,
+                                   const DenseTensor& dout,
+                                   const std::vector<int>& output_size,
+                                   const std::vector<int>& kernel_size,
+                                   float random_u,
+                                   bool return_mask,
+                                   DenseTensor* dx);
 
 }  // namespace phi

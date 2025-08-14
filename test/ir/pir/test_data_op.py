@@ -44,9 +44,27 @@ class TestPir(unittest.TestCase):
 
         main_program = paddle.static.Program()
         new_scope = paddle.static.Scope()
-        with paddle.static.scope_guard(new_scope):
-            with paddle.static.program_guard(main_program):
-                out = data()
+        with (
+            paddle.static.scope_guard(new_scope),
+            paddle.static.program_guard(main_program),
+        ):
+            out = data()
+
+
+class TestDataOpError(unittest.TestCase):
+    def test_invalid_shape(self):
+        paddle.enable_static()
+        place = paddle.CPUPlace()
+        exe = paddle.static.Executor(place)
+
+        main_program = paddle.static.Program()
+        new_scope = paddle.static.Scope()
+        with (
+            paddle.static.scope_guard(new_scope),
+            paddle.static.program_guard(main_program),
+            self.assertRaises(ValueError),
+        ):
+            out = paddle.static.data("x", shape=[-2, 1])
 
 
 if __name__ == "__main__":

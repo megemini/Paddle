@@ -19,19 +19,19 @@
 #include <vector>
 
 #include "paddle/fluid/framework/infershape_utils.h"
+#include "paddle/fluid/framework/new_executor/instruction/instruction_defs.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/variable_helper.h"
 #include "paddle/fluid/pir/dialect/operator/interface/infermeta.h"
-#include "paddle/fluid/platform/device_event_base.h"
-#include "paddle/fluid/platform/event.h"
+#include "paddle/phi/api/profiler/event.h"
 #include "paddle/phi/core/infermeta_utils.h"
+#include "paddle/phi/core/platform/device_event_base.h"
 #include "paddle/phi/core/utils/rw_lock.h"
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#include "paddle/common/flags.h"
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #include "paddle/phi/core/distributed/comm_context_manager.h"
 #include "paddle/phi/core/distributed/nccl_comm_context.h"
-#include "paddle/phi/core/flags.h"
-PHI_DECLARE_bool(dynamic_static_unified_comm);
 #endif
 
 #define SCOPE_VARS_READER_LOCK AutoRDLock auto_lock(&vars_lock_);
@@ -40,21 +40,13 @@ PHI_DECLARE_bool(dynamic_static_unified_comm);
 namespace paddle {
 namespace framework {
 
+class InstructionBase;
+class ValueExecutionInfo;
 using OpKernelComputeFunc = std::function<void(const ExecutionContext&)>;
 
 using HookFunc = std::function<void(OperatorBase*, Scope*)>;
-
-using SchedulingPriority = int64_t;
-
-constexpr const char* kCoalesceTensor = "coalesce_tensor";
-
-// stream types
-constexpr const char* kCustomStream = "CustomStream";
-constexpr const char* kDefaultStream = "DefaultStream";
-constexpr const char* kD2HStream = "D2HStream";
-constexpr const char* kH2DStream = "H2DStream";
-
-constexpr int kEmptyVarIndex = 0;
+using PirHookFunc =
+    std::function<void(InstructionBase*, ValueExecutionInfo*, Scope*)>;
 
 struct OpKernelFunc {
   OpKernelComputeFunc compute_func_;
@@ -63,7 +55,7 @@ struct OpKernelFunc {
 struct VariableMetaInfo {
   int var_ref_count_{0};
   framework::VarDesc* var_desc_{nullptr};
-  bool sikp_inplace_{false};
+  bool skip_inplace_{false};
 
   VariableMetaInfo() {}
   VariableMetaInfo(int var_ref_count, framework::VarDesc* var_desc)
@@ -82,7 +74,7 @@ class VariableScope {
 
   void SetLocalScope(Scope* local_scope);
 
-  ~VariableScope();
+  ~VariableScope() = default;
 
   // Get variable id by name, return -1 if not found
   int GetIdByName(const std::string& name) const;
@@ -127,9 +119,9 @@ class VariableScope {
 
   std::vector<Variable*>& MutableVarList() { return var_list_; }
 
-  void SetVarSikpInplace(const std::string& name, bool skip);
+  void SetVarSkipInplace(const std::string& name, bool skip);
 
-  bool GetVarSikpInplace(int id) const;
+  bool GetVarSkipInplace(int id) const;
 
  private:
   // not owned, better remove it since all vars should be
@@ -148,27 +140,11 @@ class VariableScope {
   std::vector<std::pair<std::string, int>> data_transfer_added_vars_;
 };
 
-struct EventInter {
-  explicit EventInter(size_t instr_id,
-                      std::shared_ptr<platform::DeviceEvent> event,
-                      platform::DeviceType waiter_type)
-      : instr_id_(instr_id), event_(event), waiter_type_(waiter_type) {}
-  size_t instr_id_;
-  std::shared_ptr<platform::DeviceEvent> event_;
-  platform::DeviceType waiter_type_;
-};
-
-enum class OpFuncType {
-  kCpuSync,  // CPU kernel, block host
-  kGpuSync,  // GPU or other device kernel without asynchronous operation
-  kGpuAsync  // GPU or other device kernel with asynchronous operation
-};
-
 struct OpFuncNode {
   int stream_priority_{0};  // lower value, higher priority
   // fit for phi kernel
   phi::Kernel* phi_kernel_{nullptr};  // not owned
-  platform::DeviceContext* dev_ctx_;  // not owned
+  phi::DeviceContext* dev_ctx_;       // not owned
 
   std::map<int, int> inplace_back_map;
 
@@ -201,7 +177,7 @@ class Instruction {
  public:
   Instruction(size_t id,
               OpFuncNode&& op_func_node,
-              const platform::DeviceContext& dev_ctx);
+              const phi::DeviceContext& dev_ctx);
 
   bool IsArtificial() const { return is_artificial_; }
 
@@ -289,11 +265,11 @@ class Instruction {
 
   std::shared_ptr<ExecutionContext> InnerExecutionContext() const;
 
-  const platform::DeviceContext& DeviceContext() const;
+  const phi::DeviceContext& DeviceContext() const;
 
-  const std::vector<std::pair<Variable*, Variable*>>& InplaceInfo() const;
+  const std::vector<std::pair<const Variable*, Variable*>>& InplaceInfo() const;
 
-  void AddInplace(Variable* in, Variable* out);
+  void AddInplace(const Variable* in, Variable* out);
 
   void ClearInplace();
 
@@ -309,7 +285,7 @@ class Instruction {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   bool need_record_stream_for_gc_ = false;
   gpuStream_t stream_{nullptr};
-  void UpdataRecordStreamForGcInfo();
+  void UpdateRecordStreamForGcInfo();
 #endif
 
   bool can_use_infermeta_ctx_ = false;
@@ -327,7 +303,7 @@ class Instruction {
   std::vector<EventInter> events_to_wait_;
 
   OpFuncNode op_func_node_;
-  const platform::DeviceContext& dev_ctx_;  // not owned
+  const phi::DeviceContext& dev_ctx_;  // not owned
 
   std::shared_ptr<RuntimeContext> runtime_ctx_;
   std::shared_ptr<RuntimeInferShapeContext> infershape_ctx_;
@@ -336,7 +312,7 @@ class Instruction {
 
   std::vector<size_t> gc_check_vars_;
 
-  std::vector<std::pair<Variable*, Variable*>> vec_inplace_in_to_out_;
+  std::vector<std::pair<const Variable*, Variable*>> vec_inplace_in_to_out_;
 
   bool pre_define_context_{false};
 };
@@ -346,9 +322,9 @@ static constexpr char kMemcpyH2D[] = "memcpy_h2d";
 static constexpr char kMemcpyD2H[] = "memcpy_d2h";
 static constexpr char kFetchVarName[] = "fetch";
 
-// static_ref_ is the numer of last live ops calculated to statically after
+// static_ref_ is the number of last live ops calculated to statically after
 // `build` the Instructions. dynamic_ref_  is the runtime version ref which will
-// be decreased by one dynamiclly after the execution of an op (in last ops
+// be decreased by one dynamically after the execution of an op (in last ops
 // list). var_ is the related variable
 
 // The dynamic_ref_ is initialized to static_ref_ first, and is decreased to 1
@@ -377,9 +353,9 @@ class VarRefInfo {
   Variable* var_;
 };
 
-// static_dep_ is the numer of dependencies (ops that must run before it) of
+// static_dep_ is the number of dependencies (ops that must run before it) of
 // each op which is calculated to statically. static_dep_  is the runtime
-// version dep which will be decreased by one dynamiclly after the execution of
+// version dep which will be decreased by one dynamically after the execution of
 // one dependency op.
 
 // The dynamic_dep_ is initialized to static_dep_ first, and is decreased to 1

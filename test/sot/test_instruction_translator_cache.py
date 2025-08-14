@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import inspect
 import random
-import types
 import unittest
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from test_case_base import (
@@ -25,21 +25,23 @@ from test_case_base import (
     test_instruction_translator_cache_context,
 )
 
+import paddle
 from paddle.jit.sot.opcode_translator.custom_code import CustomCode
 from paddle.jit.sot.opcode_translator.executor.executor_cache import (
     OpcodeExecutorCache,
 )
 
+if TYPE_CHECKING:
+    from types import FrameType
 
-def fake_frames() -> (
-    tuple[
-        types.FrameType,
-        types.FrameType,
-        types.FrameType,
-        types.FrameType,
-        types.FrameType,
-    ]
-):
+
+def fake_frames() -> tuple[
+    FrameType,
+    FrameType,
+    FrameType,
+    FrameType,
+    FrameType,
+]:
     def fake_inner_fn_1():
         frame = inspect.currentframe()
         assert frame is not None
@@ -83,14 +85,35 @@ def fake_frames() -> (
 ) = fake_frames()
 
 
-def mock_start_translate(frame: types.FrameType, **kwargs):
+class GuardCode:
+    def __init__(self, recompile):
+        self.func = lambda frame: recompile
+        self.mirror_guard = self.func
+        self.expr = f"lambda frame: {recompile}"
+        self.inlined_expr = f"lambda frame: {recompile}"
+        self.__globals__ = {}
+
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
+
+
+def mock_start_translate(frame: FrameType, **kwargs):
     translate_map = {
-        FRAME_1: (CustomCode(FRAME_2.f_code, False), lambda frame: True),
+        FRAME_1: (
+            CustomCode(FRAME_2.f_code, False),
+            GuardCode(True),
+            [paddle.framework.core.DummyGuardNode()],
+        ),
         FRAME_3: (
             CustomCode(FRAME_4.f_code, False),
-            lambda frame: False,
+            GuardCode(False),
+            [paddle.framework.core.DummyGuardNode(False)],
         ),  # Always re-compile
-        FRAME_5: (CustomCode(None, False), lambda frame: True),
+        FRAME_5: (
+            CustomCode(None, False),
+            lambda frame: True,
+            [paddle.framework.core.DummyGuardNode()],
+        ),
     }
     return translate_map[frame]
 

@@ -109,12 +109,12 @@ class TestOneDNNMatmulTransposeReshapeFusePass(PassAutoScanTest):
         return program_config
 
     def sample_predictor_configs(self, program_config):
-        config = self.create_inference_config(use_mkldnn=True)
+        config = self.create_inference_config(use_onednn=True)
         yield config, ['fused_matmul'], (1e-5, 1e-5)
 
     def test(self):
         self.run_and_statis(
-            quant=False, passes=['matmul_transpose_reshape_mkldnn_fuse_pass']
+            quant=False, passes=['matmul_transpose_reshape_onednn_fuse_pass']
         )
 
 

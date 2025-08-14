@@ -20,6 +20,7 @@ from get_test_cover_info import (
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import convert_float_to_uint16
 from op_test_xpu import XPUOpTest
 
 import paddle
@@ -38,15 +39,19 @@ class XPUTestFlattenOp(XPUOpTestWrapper):
             self.op_type = "flatten_contiguous_range"
             self.place = paddle.XPUPlace(0)
             self.use_xpu = True
-            self.use_mkldnn = False
+            self.use_onednn = False
 
             self.start_axis = 0
             self.stop_axis = -1
             self.dtype = self.in_type
             self.init_test_case()
-            self.inputs = {
-                "X": np.random.random(self.in_shape).astype(self.dtype)
-            }
+            if self.dtype == np.uint16:
+                data = np.random.random(self.in_shape).astype(np.float32)
+                self.inputs = {"X": convert_float_to_uint16(data)}
+            else:
+                self.inputs = {
+                    "X": np.random.random(self.in_shape).astype(self.dtype)
+                }
             self.init_attrs()
             self.outputs = {
                 "Out": self.inputs["X"].reshape(self.new_shape),

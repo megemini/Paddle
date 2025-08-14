@@ -15,20 +15,20 @@
 #include <gtest/gtest.h>
 #include <sstream>
 
-#include "paddle/pir/core/op_base.h"
+#include "paddle/pir/include/core/op_base.h"
 #include "test/cpp/pir/tools/macros_utils.h"
 
 namespace test {
 
 class ReadOnlyTrait : public pir::OpTraitBase<ReadOnlyTrait> {
  public:
-  explicit ReadOnlyTrait(pir::Operation *op)
+  explicit ReadOnlyTrait(const pir::Operation *op)
       : pir::OpTraitBase<ReadOnlyTrait>(op) {}
 };
 
 class OneRegionTrait : public pir::OpTraitBase<OneRegionTrait> {
  public:
-  explicit OneRegionTrait(pir::Operation *op)
+  explicit OneRegionTrait(const pir::Operation *op)
       : pir::OpTraitBase<OneRegionTrait>(op) {}
   static void Verify(pir::Operation *op);
 };

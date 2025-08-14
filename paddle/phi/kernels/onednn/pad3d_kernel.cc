@@ -20,10 +20,10 @@
 
 namespace phi {
 
-KernelKey Pad3dGetKernelTypeForVar(const GetKernelTypeForVarContext* ctx) {
-  const DenseTensor& tensor = ctx->GetTensor();
-  const KernelKey& expected_kernel_type = ctx->GetKernelKey();
-  const AttributeMap& attrs = ctx->GetAttrs();
+KernelKey Pad3dGetKernelTypeForVar(const GetKernelTypeForVarContext* dev_ctx) {
+  const DenseTensor& tensor = dev_ctx->GetTensor();
+  const KernelKey& expected_kernel_type = dev_ctx->GetKernelKey();
+  const AttributeMap& attrs = dev_ctx->GetAttrs();
 #ifdef PADDLE_WITH_DNNL
   if ((expected_kernel_type.layout() == phi::DataLayout::ONEDNN) &&
       (tensor.layout() != phi::DataLayout::ONEDNN)) {
@@ -36,6 +36,15 @@ KernelKey Pad3dGetKernelTypeForVar(const GetKernelTypeForVarContext* ctx) {
 #endif
   return phi::KernelKey(
       tensor.place(), tensor.layout(), expected_kernel_type.dtype());
+}
+
+bool Pad3dCheckIfOneDNNSupport(const KernelContext* dev_ctx) {
+  // only constant mode and non-blocked layouts are supported for oneDNN
+  if (dev_ctx->AttrAt<std::string>(1) == "constant" &&
+      dev_ctx->InputAt<phi::DenseTensor>(0).mem_desc().get_inner_nblks() == 0) {
+    return true;
+  }
+  return false;
 }
 
 template <typename T, typename Context>
@@ -58,4 +67,5 @@ PD_REGISTER_KERNEL(pad3d,
                    phi::dtype::bfloat16,
                    float) {
   kernel->get_kerneltype_forvar_fn_ = phi::Pad3dGetKernelTypeForVar;
+  kernel->check_if_onednn_kernel_support_ = phi::Pad3dCheckIfOneDNNSupport;
 }

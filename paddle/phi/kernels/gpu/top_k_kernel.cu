@@ -20,10 +20,10 @@
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_utils.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/gather.cu.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/phi/kernels/funcs/top_k_function_cuda.h"
-
 namespace phi {
 
 #define FIXED_BLOCK_DIM_BASE(dim, ...) \
@@ -62,6 +62,12 @@ void TopkKernel(const Context& dev_ctx,
                 bool sorted,
                 DenseTensor* out,
                 DenseTensor* indices) {
+  if (out && out->numel() == 0) {
+    dev_ctx.template Alloc<T>(out);
+    dev_ctx.template Alloc<int64_t>(indices);
+    return;
+  }
+
   const auto* input = &x;
   // get the input dims
   const auto& in_dims = input->dims();
@@ -73,21 +79,29 @@ void TopkKernel(const Context& dev_ctx,
     phi::funcs::set_constant(dev_ctx, indices, static_cast<int64_t>(0));
     return;
   }
-  // calcluate the real axis
+  // calculate the real axis
   if (axis < 0) axis += in_dims.size();
 
   int k = k_scalar.to<int>();
-  PADDLE_ENFORCE_GE(
-      x.numel(),
-      k,
-      errors::InvalidArgument(
-          "x has only %d element, can not find %d top values.", x.numel(), k));
+  // out shape [-1]
   if (k_scalar.FromTensor()) {
     phi::DDim out_dims = out->dims();
     out_dims[axis] = k;
     out->Resize(out_dims);
     indices->Resize(out_dims);
   }
+  if (x.numel() == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(out->dims())), NAN, out);
+    phi::Full<int64_t, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(indices->dims())), 0, indices);
+    return;
+  }
+  PADDLE_ENFORCE_GE(
+      x.numel(),
+      k,
+      errors::InvalidArgument(
+          "x has only %d element, can not find %d top values.", x.numel(), k));
 
   const auto& out_dims = out->dims();
 
@@ -117,7 +131,7 @@ void TopkKernel(const Context& dev_ctx,
                                   out,
                                   indices,
                                   largest)) {
-        // Successed, return.
+        // Succeed, return.
         return;
       } else {
         VLOG(4) << "TopKOP: Some errors happened when use cub sorting, use "
@@ -228,10 +242,10 @@ void TopkKernel(const Context& dev_ctx,
             "the input data shape has error in the topk cuda kernel."));
     }
   } else {
-    // if get topK not from the last axis, will tranpose the tensor and get
+    // if get topK not from the last axis, will transpose the tensor and get
     // TopK
 
-    // first step, prepare the trans args for the tranpose
+    // first step, prepare the trans args for the transpose
     std::vector<int> trans;
     for (int i = 0; i < axis; i++) {
       trans.emplace_back(i);
@@ -248,14 +262,14 @@ void TopkKernel(const Context& dev_ctx,
       trans_dims[i] = in_dims[trans[i]];
       trans_out_dims[i] = out_dims[trans[i]];
     }
-    // second step, tranpose the input
+    // second step, transpose the input
     DenseTensor trans_input;
     trans_input.Resize(trans_dims);
     dev_ctx.template Alloc<T>(&trans_input);
     int ndims = trans.size();
     funcs::TransCompute<phi::GPUContext, T>(
         ndims, dev_ctx, *input, &trans_input, trans);
-    // third step, calcluate the topk
+    // third step, calculate the topk
     // allocate the tmp cuda memory for the tmp result
     DenseTensor trans_ind;
     DenseTensor trans_out;
@@ -282,7 +296,7 @@ void TopkKernel(const Context& dev_ctx,
                                   &trans_out,
                                   &trans_ind,
                                   largest)) {
-        // last step, tranpose back the indices and output
+        // last step, transpose back the indices and output
         funcs::TransCompute<phi::GPUContext, int64_t>(
             ndims, dev_ctx, trans_ind, indices, trans);
         funcs::TransCompute<phi::GPUContext, T>(
@@ -337,7 +351,7 @@ void TopkKernel(const Context& dev_ctx,
             "the input data shape has error in the topk cuda kernel."));
     }
 
-    // last step, tranpose back the indices and output
+    // last step, transpose back the indices and output
     funcs::TransCompute<phi::GPUContext, int64_t>(
         ndims, dev_ctx, trans_ind, indices, trans);
     funcs::TransCompute<phi::GPUContext, T>(
@@ -347,12 +361,33 @@ void TopkKernel(const Context& dev_ctx,
 #undef FIXED_BLOCK_DIM_BASE
 #undef FIXED_BLOCK_DIM
 
+template <typename T, typename Context>
+void TopkV1Kernel(const Context& dev_ctx,
+                  const DenseTensor& x,
+                  const Scalar& k_scalar,
+                  DenseTensor* out,
+                  DenseTensor* indices) {
+  TopkKernel<T, Context>(dev_ctx, x, k_scalar, -1, true, true, out, indices);
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(topk,
                    GPU,
                    ALL_LAYOUT,
                    phi::TopkKernel,
+                   float,
+                   double,
+                   int,
+                   int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {
+  kernel->OutputAt(1).SetDataType(phi::DataType::INT64);
+}
+
+PD_REGISTER_KERNEL(topk_v1,
+                   GPU,
+                   ALL_LAYOUT,
+                   phi::TopkV1Kernel,
                    float,
                    double,
                    int,

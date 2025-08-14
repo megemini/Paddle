@@ -19,13 +19,15 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle import base
-from paddle.base import Program, core, program_guard
+from paddle.base import core
 
 
 class DotOp(OpTest):
     def setUp(self):
         self.op_type = "dot"
+        self.prim_op_type = "prim"
         self.python_api = paddle.dot
+        self.public_python_api = paddle.dot
         self.init_dtype()
         self.init_input_output()
 
@@ -40,39 +42,92 @@ class DotOp(OpTest):
         self.check_output(check_pir=True)
 
     def test_check_grad_normal(self):
-        if core.is_compiled_with_rocm():
-            self.check_grad(
-                ['X', 'Y'],
-                'Out',
-                user_defined_grads=[self.inputs['Y'], self.inputs['X']],
-                check_pir=True,
-            )
+        if self.dtype == np.complex64 or self.dtype == np.complex128:
+            if core.is_compiled_with_rocm():
+                self.check_grad(
+                    ['X', 'Y'],
+                    'Out',
+                    user_defined_grads=[self.inputs['Y'], self.inputs['X']],
+                    check_pir=True,
+                )
+            else:
+                self.check_grad(['X', 'Y'], 'Out', check_pir=True)
         else:
-            self.check_grad(['X', 'Y'], 'Out', check_pir=True)
+            if core.is_compiled_with_rocm():
+                self.check_grad(
+                    ['X', 'Y'],
+                    'Out',
+                    user_defined_grads=[self.inputs['Y'], self.inputs['X']],
+                    check_pir=True,
+                )
+            else:
+                self.check_grad(
+                    ['X', 'Y'], 'Out', check_pir=True, check_prim_pir=True
+                )
 
-    def test_check_grad_ingore_x(self):
-        if core.is_compiled_with_rocm():
-            self.check_grad(
-                ['Y'],
-                'Out',
-                no_grad_set=set("X"),
-                user_defined_grads=[self.inputs['X']],
-                check_pir=True,
-            )
+    def test_check_grad_ignore_x(self):
+        if self.dtype == np.complex64 or self.dtype == np.complex128:
+            if core.is_compiled_with_rocm():
+                self.check_grad(
+                    ['Y'],
+                    'Out',
+                    no_grad_set=set("X"),
+                    user_defined_grads=[self.inputs['X']],
+                    check_pir=True,
+                )
+            else:
+                self.check_grad(
+                    ['Y'], 'Out', no_grad_set=set("X"), check_pir=True
+                )
         else:
-            self.check_grad(['Y'], 'Out', no_grad_set=set("X"), check_pir=True)
+            if core.is_compiled_with_rocm():
+                self.check_grad(
+                    ['Y'],
+                    'Out',
+                    no_grad_set=set("X"),
+                    user_defined_grads=[self.inputs['X']],
+                    check_pir=True,
+                )
+            else:
+                self.check_grad(
+                    ['Y'],
+                    'Out',
+                    no_grad_set=set("X"),
+                    check_pir=True,
+                    check_prim_pir=True,
+                )
 
-    def test_check_grad_ingore_y(self):
-        if core.is_compiled_with_rocm():
-            self.check_grad(
-                ['X'],
-                'Out',
-                no_grad_set=set('Y'),
-                user_defined_grads=[self.inputs['Y']],
-                check_pir=True,
-            )
+    def test_check_grad_ignore_y(self):
+        if self.dtype == np.complex64 or self.dtype == np.complex128:
+            if core.is_compiled_with_rocm():
+                self.check_grad(
+                    ['X'],
+                    'Out',
+                    no_grad_set=set('Y'),
+                    user_defined_grads=[self.inputs['Y']],
+                    check_pir=True,
+                )
+            else:
+                self.check_grad(
+                    ['X'], 'Out', no_grad_set=set('Y'), check_pir=True
+                )
         else:
-            self.check_grad(['X'], 'Out', no_grad_set=set('Y'), check_pir=True)
+            if core.is_compiled_with_rocm():
+                self.check_grad(
+                    ['X'],
+                    'Out',
+                    no_grad_set=set('Y'),
+                    user_defined_grads=[self.inputs['Y']],
+                    check_pir=True,
+                )
+            else:
+                self.check_grad(
+                    ['X'],
+                    'Out',
+                    no_grad_set=set('Y'),
+                    check_pir=True,
+                    check_prim_pir=True,
+                )
 
     def init_input_output(self):
         self.x = np.random.uniform(0.1, 1, [121]).astype(self.dtype)
@@ -81,31 +136,6 @@ class DotOp(OpTest):
 
     def init_dtype(self):
         self.dtype = np.float64
-
-
-class DotOpEmptyInput(unittest.TestCase):
-    def test_1d_input(self):
-        data = np.array([], dtype=np.float32)
-        x = paddle.to_tensor(np.reshape(data, [0]), dtype='float32')
-        y = paddle.to_tensor(np.reshape(data, [0]), dtype='float32')
-        np_out = np.dot(data, data)
-        pd_out = paddle.dot(x, y)
-
-        self.assertEqual(np_out, pd_out)
-
-    def test_2d_input(self):
-        data = np.array([], dtype=np.float32)
-        x = paddle.to_tensor(np.reshape(data, [0, 0]), dtype='float32')
-        y = paddle.to_tensor(np.reshape(data, [0, 0]), dtype='float32')
-        pd_out = paddle.dot(x, y)
-        self.assertEqual(pd_out.shape, (0,))
-
-    def test_3d_input_error(self):
-        data = np.array([], dtype=np.float32)
-        x = paddle.to_tensor(np.reshape(data, [0, 0, 0]), dtype='float32')
-        y = paddle.to_tensor(np.reshape(data, [0, 0, 0]), dtype='float32')
-
-        self.assertRaises(Exception, paddle.dot, x, y)
 
 
 class DotOpBatch(DotOp):
@@ -121,18 +151,33 @@ class DotOpBatch(DotOp):
         self.out = np.sum(self.x * self.y, axis=1)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True, check_prim_pir=True)
 
-    def test_check_grad_ingore_x(self):
-        self.check_grad(['Y'], 'Out', no_grad_set=set("X"), check_pir=True)
+    def test_check_grad_ignore_x(self):
+        self.check_grad(
+            ['Y'],
+            'Out',
+            no_grad_set=set("X"),
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
-    def test_check_grad_ingore_y(self):
-        self.check_grad(['X'], 'Out', no_grad_set=set('Y'), check_pir=True)
+    def test_check_grad_ignore_y(self):
+        self.check_grad(
+            ['X'],
+            'Out',
+            no_grad_set=set('Y'),
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
 
 class TestDotOpError(unittest.TestCase):
+
     def test_errors(self):
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             # the input dtype of elementwise_mul must be float16 or float32 or float64 or int32 or int64
             # float16 only can be set on GPU place
             x1 = paddle.static.data(name='x1', shape=[-1, 120], dtype="uint8")
@@ -157,18 +202,14 @@ class TestDotOpError(unittest.TestCase):
 class TestDygraph(unittest.TestCase):
     def test_dygraph(self):
         with base.dygraph.guard():
-            x1 = base.dygraph.to_variable(np.array([1, 3]).astype(np.float32))
-            y1 = base.dygraph.to_variable(np.array([2, 5]).astype(np.float32))
+            x1 = paddle.to_tensor(np.array([1, 3]).astype(np.float32))
+            y1 = paddle.to_tensor(np.array([2, 5]).astype(np.float32))
             np.testing.assert_allclose(
                 paddle.dot(x1, y1).numpy(), np.array([17]), rtol=1e-05
             )
 
-            x1 = base.dygraph.to_variable(
-                np.array([[1, 3], [3, 5]]).astype(np.float32)
-            )
-            y1 = base.dygraph.to_variable(
-                np.array([[2, 5], [6, 8]]).astype(np.float32)
-            )
+            x1 = paddle.to_tensor(np.array([[1, 3], [3, 5]]).astype(np.float32))
+            y1 = paddle.to_tensor(np.array([[2, 5], [6, 8]]).astype(np.float32))
             np.testing.assert_array_equal(
                 paddle.dot(x1, y1).numpy(), np.array([17, 58])
             )
@@ -240,7 +281,7 @@ class TestDotFP16Op(OpTest):
                     place, ['X', 'Y'], 'Out', check_pir=True
                 )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             if core.is_float16_supported(place):
@@ -248,7 +289,7 @@ class TestDotFP16Op(OpTest):
                     place, ['Y'], 'Out', no_grad_set=set("X"), check_pir=True
                 )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             if core.is_float16_supported(place):
@@ -318,7 +359,7 @@ class TestDotBF16Op(OpTest):
                     check_pir=True,
                 )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             if core.is_bfloat16_supported(place):
@@ -331,7 +372,7 @@ class TestDotBF16Op(OpTest):
                     check_pir=True,
                 )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             if core.is_bfloat16_supported(place):
@@ -382,7 +423,7 @@ class DotBF16OpBatch(TestDotBF16Op):
                     check_pir=True,
                 )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             if core.is_bfloat16_supported(place):
@@ -395,7 +436,7 @@ class DotBF16OpBatch(TestDotBF16Op):
                     check_pir=True,
                 )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             if core.is_bfloat16_supported(place):
@@ -407,6 +448,41 @@ class DotBF16OpBatch(TestDotBF16Op):
                     user_defined_grads=[self.y / self.y.shape[0]],
                     check_pir=True,
                 )
+
+
+class DotOp_ZeroSize(OpTest):
+    def setUp(self):
+        self.op_type = "dot"
+        self.python_api = paddle.dot
+        self.public_python_api = paddle.dot
+        self.init_shape()
+        self.init_dtype()
+        self.init_input_output()
+
+        self.inputs = {
+            'X': OpTest.np_dtype_to_base_dtype(self.x),
+            'Y': OpTest.np_dtype_to_base_dtype(self.y),
+        }
+        self.outputs = {'Out': self.out}
+        self.attrs = {}
+
+    def test_check_output(self):
+        self.check_output(check_pir=True)
+
+    def test_check_grad_normal(self):
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
+
+    def init_input_output(self):
+        self.x = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
+        self.y = np.random.uniform(1, 3, self.shape).astype(self.dtype)
+        self.out = np.dot(self.x, self.y).astype(self.dtype)
+
+    def init_dtype(self):
+        self.dtype = np.float64
+
+    def init_shape(self):
+        # return shape []
+        self.shape = [0]
 
 
 if __name__ == '__main__':

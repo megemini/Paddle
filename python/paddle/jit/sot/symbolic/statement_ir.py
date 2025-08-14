@@ -12,19 +12,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-THIS FILE IS PRIVATE !!
-
-use interface in symbolic_context.py first.
-"""
 from __future__ import annotations
 
+import functools
 import weakref
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from weakref import WeakValueDictionary
 
-from paddle.utils import is_sequence, map_structure
+import paddle
+from paddle.jit.dy2static.utils import parameters_persistent_mode_is_enabled
+from paddle.jit.utils import OrderedSet
+from paddle.utils import flatten, map_structure
 
-from ..utils import NameGenerator, OrderedSet, Singleton, flatten_extend
+from ..utils import (
+    InnerError,
+    NameGenerator,
+    Singleton,
+    flatten_extend,
+    get_api_fullname,
+)
+
+if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
+
+_StatementContextT = TypeVar("_StatementContextT", bound="StatementContext")
+
+
+class ParametersHolder:
+    def __init__(self):
+        self._params = WeakValueDictionary[
+            str, paddle.base.framework.EagerParamBase
+        ]()
+
+    def set(self, name, param):
+        self._params[name] = param
+
+    def get(self, name):
+        if (param := self._params.get(name)) is None:
+            raise InnerError(
+                f"Parameter '{name}' not found in ParametersHolder."
+            )
+        return param
+
+    def copy(self):
+        new_holder = ParametersHolder()
+        new_holder._params = self._params.copy()
+        return new_holder
 
 
 class Reference:  # to unify weak_ref and strong_ref
@@ -68,6 +102,53 @@ class Symbol:
         return Symbol(self.name)
 
 
+class StatementContext: ...
+
+
+class StatementContextRegistry:
+
+    _ctx_map: dict[
+        type[Any],
+        Callable[[Any], AbstractContextManager[None]],
+    ] = {}
+
+    @classmethod
+    def register_context_guard(
+        cls,
+        ctx_cls: type[_StatementContextT],
+        handler: Callable[[_StatementContextT], AbstractContextManager[None]],
+    ):
+        """
+        Register a context handler for the given context.
+        """
+        if ctx_cls in cls._ctx_map:
+            raise ValueError(f"Context {ctx_cls} is already registered.")
+        cls._ctx_map[ctx_cls] = handler
+
+    @classmethod
+    def register_context(
+        cls,
+        handler: Callable[[_StatementContextT], AbstractContextManager[None]],
+    ):
+        def decorator(ctx_cls: type[_StatementContextT]):
+            cls.register_context_guard(ctx_cls, handler)
+            return ctx_cls
+
+        return decorator
+
+    @classmethod
+    def get_context_guard(
+        cls,
+        ctx_cls: type[_StatementContextT],
+    ) -> Callable[[_StatementContextT], AbstractContextManager[None]]:
+        """
+        Get the context handler for the given context.
+        """
+        if ctx_cls not in cls._ctx_map:
+            raise ValueError(f"Context {ctx_cls} is not registered.")
+        return cls._ctx_map[ctx_cls]
+
+
 class Statement:
     """
     Statement is used to represent a sentence of code for building the neural network model,
@@ -83,33 +164,33 @@ class Statement:
         name: str,
         inputs: list[Symbol],
         outputs: list[Symbol],
+        contexts: list[StatementContext],
         stacks: list[str],
     ):
-        assert type in ["call", "api", "method", "layer"]
+        assert type in ["call", "api", "method", "layer", "AST"]
         self.name = name
         self.inputs = inputs  # (list of Symbols, dict of Symbols)
         self.outputs = outputs  # list of Symbol | PythonObj
+        self.contexts = contexts  # list of StatementContext
         self.stmt_stack = (
             stacks  # a list of string to record the source code callstack.
         )
         self.type = type
 
     def __str__(self):
-        def to_string(inps):
-            if isinstance(inps, str) or not is_sequence(inps):
-                return inps.__str__()
-            inps = (x.__str__() for x in inps)
-            return ", ".join(inps)
-
         return "{} || {} = {} ({}) ".format(
             self.type + " " * (10 - len(self.type)),
-            to_string(self.outputs),
+            self.to_string(self.outputs),
             self.name,
-            to_string(self.inputs),
+            self.to_string(self.inputs),
         )
 
     def __repr__(self):
         return self.__str__()
+
+    @staticmethod
+    def to_string(inps):
+        return ", ".join(repr(x) for x in flatten(inps))
 
 
 class CallStatement(Statement):
@@ -118,9 +199,10 @@ class CallStatement(Statement):
         name: str,
         inputs: list[Symbol],
         outputs: list[Symbol],
+        contexts: list[StatementContext],
         stacks: list[str],
     ):
-        super().__init__("call", name, inputs, outputs, stacks)
+        super().__init__("call", name, inputs, outputs, contexts, stacks)
         self.sir_name = name
 
 
@@ -130,11 +212,13 @@ class ApiStatement(Statement):
         api: Callable,
         inputs: list[Symbol],
         outputs: list[Symbol],
+        contexts: list[StatementContext],
         stacks: list[str],
     ):
-        super().__init__(
-            "api", "paddle." + api.__name__, inputs, outputs, stacks
-        )
+        fullname = get_api_fullname(api)
+        if fullname is None:
+            fullname = "paddle." + api.__name__
+        super().__init__("api", fullname, inputs, outputs, contexts, stacks)
         self.api = api
 
 
@@ -144,9 +228,10 @@ class MethodStatement(Statement):
         name: str,
         inputs: list[Symbol],
         outputs: list[Symbol],
+        contexts: list[StatementContext],
         stacks: list[str],
     ):
-        super().__init__("method", name, inputs, outputs, stacks)
+        super().__init__("method", name, inputs, outputs, contexts, stacks)
         self.method = name
 
 
@@ -156,12 +241,48 @@ class LayerStatement(Statement):
         layer: Reference,  # Reference of paddle.nn.Layer
         inputs: list[Symbol],
         outputs: list[Symbol],
+        contexts: list[StatementContext],
         stacks: list[str],
     ):
+        if isinstance(layer, Reference):
+            name = layer().__class__.__name__
+        else:
+            name = layer.__class__.__name__
         super().__init__(
-            "layer", layer.__class__.__name__, inputs, outputs, stacks
+            "layer",
+            name,
+            inputs,
+            outputs,
+            contexts,
+            stacks,
         )
         self.layer = layer
+
+
+class ASTStatement(Statement):
+    def __init__(
+        self,
+        static_function,
+        inputs: list[Symbol],
+        outputs: list[Symbol],
+        contexts: list[StatementContext],
+        stacks: list[str],
+    ):
+        # this dygraph_function always has attr __code__, which is checked before
+        dygraph_func = static_function.dygraph_function
+        super().__init__(
+            "AST",
+            dygraph_func.__code__.co_name,
+            inputs,
+            outputs,
+            contexts,
+            stacks,
+        )
+        converted_func = paddle.jit.dy2static.convert_to_static(dygraph_func)
+        func_self = getattr(dygraph_func, '__self__', None)
+        if func_self is not None:
+            converted_func = functools.partial(converted_func, func_self)
+        self.converted_func = converted_func
 
 
 class StatementIR:
@@ -172,14 +293,23 @@ class StatementIR:
     In this way, we can reuse the original `to_static` function to realize the execution of the static graph.
 
     Note:
-        Don't create by yourself, just use the StatementIRCache.get()
+        Don't create by yourself, just use the StatementIRFactory.create()
     """
 
     def __init__(self, name: str):
         self.name = name
-        self.inputs = []  # list of Symbol | PythonObj
-        self.outputs = []  # list of Symbol | PythonObj
-        self.statements = []  # list of Statement
+        self.inputs: list[Symbol] = []
+        self.params: list[Symbol] = []
+        self.outputs: list[Symbol] = []
+        self.statements: list[Statement] = []
+
+        self.symbol_meta_map = {}
+        self.param_symbol = set()
+        self.non_param_symbol = set()
+
+    @property
+    def input_with_params(self):
+        return self.inputs + self.params
 
     def __len__(self):
         return len(self.statements)
@@ -187,9 +317,22 @@ class StatementIR:
     def __deepcopy__(self, memo=None):
         new_sir = StatementIR(self.name)
         new_sir.inputs = list(self.inputs)
+        new_sir.params = list(self.params)
         new_sir.outputs = list(self.outputs)
         new_sir.statements = list(self.statements)
+        new_sir.symbol_meta_map = dict(self.symbol_meta_map.items())
+        new_sir.param_symbol = set(self.param_symbol)
+        new_sir.non_param_symbol = set(self.non_param_symbol)
         return new_sir
+
+    def set_parameter_info(self, params, non_params):
+        self.param_symbol.update(params)
+        self.non_param_symbol.update(non_params)
+
+    def set_symbol_meta_map(self, meta_map):
+        # if the meta of a input symbol inplace changed, we should get the origin meta as input of SIR
+        meta_map.update(self.symbol_meta_map)
+        self.symbol_meta_map = meta_map
 
     def add_input(self, input):
         self.inputs.append(input)
@@ -212,13 +355,22 @@ class StatementIR:
                 if isinstance(out, Symbol):
                     generated_symbols.add(out)
 
-        input_symbols = sorted(used_symbols, key=lambda x: x.name)
-        return input_symbols
+        used_symbols = sorted(used_symbols, key=lambda x: x.name)
+        if not parameters_persistent_mode_is_enabled():
+            return used_symbols, []
+        input_symbols = [
+            symbol for symbol in used_symbols if symbol not in self.param_symbol
+        ]
+        param_symbols = [
+            symbol for symbol in used_symbols if symbol in self.param_symbol
+        ]
+        return input_symbols, param_symbols
 
     def __str__(self):
         strs = []
-        strs.append("StatmentIR: %s" % self.name)
+        strs.append(f"StatementIR: {self.name}")
         strs.append(f"  inputs: {map_structure(lambda x: x.name, self.inputs)}")
+        strs.append(f"  params: {map_structure(lambda x: x.name, self.params)}")
         strs.append(
             f"  outputs: {map_structure(lambda x: x.name, self.outputs)}"
         )
@@ -230,13 +382,8 @@ class StatementIR:
     def __repr__(self):
         return self.__str__()
 
-    def graph_size(self):
-        call_layers = [x for x in self.statements if x.type == "layer"]
-        return len(self.statements) + len(call_layers)
 
-
-@Singleton
-class StatementIRFactory:
+class StatementIRFactory(metaclass=Singleton):
     """
     It is used to create a StatementIR.
     """
@@ -270,83 +417,3 @@ class StatementIRFactory:
         ]
         for key in want_clear:
             del self.cache[key]
-
-
-@Singleton
-class SIRRuntimeCache:
-    """
-    It is used to cache the runtime information of the StatementIR.
-    """
-
-    def __init__(self):
-        self.cache = {}
-        #     { name : (inputs, outputs, free_vars) }
-        #       inputs  : can be used when call_SIR, if free_vars exist
-        #       outputs : used for generator new ProxyTensor output before fallback
-        #       free_vars: (name, function)
-
-    def __getitem__(self, key):
-        return self.cache[key]
-
-    def has_key(self, key: str) -> bool:
-        """
-        has_key is used to check whether the key is in the cache.
-        """
-        return key in self.cache.keys()
-
-    def set_origin_inputs(self, key: str, inputs: Any):
-        """
-        Set Cache origin Inputs of the StatementIR
-        """
-        if key in self.cache.keys():
-            val = self.cache[key]
-            self.cache[key] = (inputs, val[1], val[2])
-        else:
-            self.cache[key] = (inputs, None, None)
-
-    def set_origin_outputs(self, key: str, outputs: Any):
-        """
-        Set Cache origin outputs of the StatementIR
-        """
-        if key in self.cache.keys():
-            val = self.cache[key]
-            self.cache[key] = (val[0], outputs, val[2])
-        else:
-            self.cache[key] = (None, outputs, None)
-
-    def set_free_vars(self, key: str, free_vars: Any):
-        """
-        Set Cache free variables of the StatementIR
-        """
-        if key in self.cache.keys():
-            val = self.cache[key]
-            self.cache[key] = (val[0], val[1], free_vars)
-        else:
-            self.cache[key] = (None, None, free_vars)
-
-    def get_origin_inputs(self, key: str):
-        """
-        Get the origin inputs of the StatementIR.
-        """
-        if key in self.cache.keys():
-            return self.cache[key][0]
-        else:
-            return None
-
-    def get_origin_outputs(self, key: str):
-        """
-        Get the origin outputs of the StatementIR.
-        """
-        if key in self.cache.keys():
-            return self.cache[key][1]
-        else:
-            return None
-
-    def get_free_vars(self, key: str):
-        """
-        Get the free variables of the StatementIR.
-        """
-        if key in self.cache.keys():
-            return self.cache[key][2]
-        else:
-            return None

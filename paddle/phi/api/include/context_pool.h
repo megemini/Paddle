@@ -17,7 +17,6 @@ limitations under the License. */
 #include <mutex>
 
 #include "paddle/common/macros.h"
-#include "paddle/phi/api/include/dll_decl.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/utils/flat_hash_map.h"
 
@@ -25,6 +24,7 @@ namespace phi {
 class DeviceContext;
 class CPUContext;
 class GPUContext;
+class CustomContext;
 class Allocator;
 class CUDAStream;
 }  // namespace phi
@@ -43,6 +43,11 @@ struct DefaultDeviceContextType<AllocationType::CPU> {
 template <>
 struct DefaultDeviceContextType<AllocationType::GPU> {
   using TYPE = phi::GPUContext;
+};
+
+template <>
+struct DefaultDeviceContextType<AllocationType::CUSTOM> {
+  using TYPE = phi::CustomContext;
 };
 
 /**

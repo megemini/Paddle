@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -20,6 +21,16 @@ from op_test import OpTest, skip_check_grad_ci
 
 import paddle
 from paddle.base import core
+
+
+def is_rocm_gfx928():
+    if not paddle.is_compiled_with_rocm():
+        return False
+    f = os.popen("$ROCM_PATH/bin/rocm_agent_enumerator | tail -1")
+    if f.read()[:-1] == "gfx928":
+        return True
+    else:
+        return False
 
 
 def get_outputs(DOut, X, Y):
@@ -30,9 +41,10 @@ def get_outputs(DOut, X, Y):
     return DX, DY, DBias
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDXYBiasFP16(OpTest):
     def setUp(self):
@@ -67,9 +79,10 @@ class TestFuseGemmEpilogueGradOpDXYBiasFP16(OpTest):
         )
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDXYBiasFP32(
     TestFuseGemmEpilogueGradOpDXYBiasFP16
@@ -79,9 +92,10 @@ class TestFuseGemmEpilogueGradOpDXYBiasFP32(
         self.atol = 1e-6
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or core.is_compiled_with_rocm(),
+    "core is not compiled with CUDA or is compiled with ROCm",
 )
 class TestFuseGemmEpilogueGradOpDXYBiasFP64(
     TestFuseGemmEpilogueGradOpDXYBiasFP16
@@ -91,9 +105,10 @@ class TestFuseGemmEpilogueGradOpDXYBiasFP64(
         self.atol = 1e-6
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDYBiasFP16(OpTest):
     def setUp(self):
@@ -128,9 +143,10 @@ class TestFuseGemmEpilogueGradOpDYBiasFP16(OpTest):
         )
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDYBiasFP32(
     TestFuseGemmEpilogueGradOpDYBiasFP16
@@ -140,9 +156,10 @@ class TestFuseGemmEpilogueGradOpDYBiasFP32(
         self.atol = 1e-6
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or core.is_compiled_with_rocm(),
+    "core is not compiled with CUDA or is compiled with ROCm",
 )
 class TestFuseGemmEpilogueGradOpDYBiasFP64(
     TestFuseGemmEpilogueGradOpDYBiasFP16
@@ -152,9 +169,10 @@ class TestFuseGemmEpilogueGradOpDYBiasFP64(
         self.atol = 1e-6
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDYFP16(OpTest):
     def setUp(self):
@@ -189,9 +207,10 @@ class TestFuseGemmEpilogueGradOpDYFP16(OpTest):
         )
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDYFP32(TestFuseGemmEpilogueGradOpDYFP16):
     def init_dtype_type(self):
@@ -199,9 +218,10 @@ class TestFuseGemmEpilogueGradOpDYFP32(TestFuseGemmEpilogueGradOpDYFP16):
         self.atol = 1e-6
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or core.is_compiled_with_rocm(),
+    "core is not compiled with CUDA or is compiled with ROCm",
 )
 class TestFuseGemmEpilogueGradOpDYFP64(TestFuseGemmEpilogueGradOpDYFP16):
     def init_dtype_type(self):
@@ -209,9 +229,10 @@ class TestFuseGemmEpilogueGradOpDYFP64(TestFuseGemmEpilogueGradOpDYFP16):
         self.atol = 1e-6
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDXYFP16(OpTest):
     def setUp(self):
@@ -246,9 +267,10 @@ class TestFuseGemmEpilogueGradOpDXYFP16(OpTest):
         )
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or not is_rocm_gfx928(),
+    "core is not compiled with CUDA",
 )
 class TestFuseGemmEpilogueGradOpDXYFP32(TestFuseGemmEpilogueGradOpDXYFP16):
     def init_dtype_type(self):
@@ -256,9 +278,10 @@ class TestFuseGemmEpilogueGradOpDXYFP32(TestFuseGemmEpilogueGradOpDXYFP16):
         self.atol = 1e-6
 
 
-@skip_check_grad_ci(reason="no grap op")
+@skip_check_grad_ci(reason="no grad op")
 @unittest.skipIf(
-    not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    not core.is_compiled_with_cuda() or core.is_compiled_with_rocm(),
+    "core is not compiled with CUDA or is compiled with ROCm",
 )
 class TestFuseGemmEpilogueGradOpDXYFP64(TestFuseGemmEpilogueGradOpDXYFP16):
     def init_dtype_type(self):

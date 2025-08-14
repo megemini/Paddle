@@ -17,13 +17,14 @@
 #include <queue>
 #include <sstream>
 #include <stack>
+#include "paddle/common/flags.h"
 #include "paddle/fluid/framework/new_executor/instruction/instruction_base.h"
 #include "paddle/fluid/framework/new_executor/instruction/phi_kernel_instruction.h"
 #include "paddle/fluid/framework/new_executor/interpreter/interpreter_util.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
-#include "paddle/fluid/platform/flags.h"
+#include "paddle/phi/common/reduce_type.h"
 
-PADDLE_DEFINE_EXPORTED_bool(
+PHI_DEFINE_EXPORTED_bool(
     add_dependency_for_communication_op,
     true,
     "Whether to add dependency for communication Ops. It is just a temporary "
@@ -32,22 +33,20 @@ PADDLE_DEFINE_EXPORTED_bool(
 
 // The difference between "sequential_run" and "serial_run":
 // "sequential_run" dispatches OPs one by one according to the sequence in the
-// Program, while "serial_run" ensures that all Ops are scheduled in a singal
+// Program, while "serial_run" ensures that all Ops are scheduled in a signal
 // thread. In standalone executor, "sequential_run" is also "serial_run", while
 // "serial_run" is not necessarily "sequential_run".
-PADDLE_DEFINE_EXPORTED_bool(new_executor_sequential_run,
-                            false,
-                            "Enable sequential execution for standalone "
-                            "executor, only applied to GPU OPs.");
-PHI_DECLARE_int32(enable_adjust_op_order);
+PHI_DEFINE_EXPORTED_bool(new_executor_sequential_run,
+                         false,
+                         "Enable sequential execution for standalone "
+                         "executor, only applied to GPU OPs.");
+COMMON_DECLARE_int32(enable_adjust_op_order);
 // add debug info
-PADDLE_DEFINE_EXPORTED_bool(enable_dependency_builder_debug_info,
-                            false,
-                            "Enable dependency builder debug info");
+PHI_DEFINE_EXPORTED_bool(enable_dependency_builder_debug_info,
+                         false,
+                         "Enable dependency builder debug info");
 
-namespace paddle {
-namespace framework {
-namespace interpreter {
+namespace paddle::framework::interpreter {
 
 size_t CountDownstreamMap(
     const std::map<size_t, std::set<size_t>>& downstream_map) {
@@ -74,7 +73,13 @@ const std::string StringizeDownstreamMap(
 }
 
 DependencyBuilder::DependencyBuilder()
-    : is_build_(false), instructions_(nullptr) {
+    : is_build_(false),
+      op_num_(0),
+      ops_before_(),
+      ops_behind_(),
+      op_downstream_map_(nullptr),
+      op_happens_before_(nullptr),
+      instructions_(nullptr) {
   op_downstream_map_ = std::make_shared<std::map<size_t, std::set<size_t>>>();
   op_happens_before_ = std::make_shared<std::vector<std::vector<bool>>>();
 }
@@ -138,12 +143,16 @@ void DependencyBuilder::ShareDependencyFrom(const DependencyBuilder& src) {
   is_build_ = true;
 }
 
+const std::string& DependencyBuilder::GetInstructionName(size_t op_idx) const {
+  return (*instructions_)[op_idx].OpBase()->Type();
+}
+
 const std::map<size_t, std::set<size_t>>& DependencyBuilder::OpDownstreamMap()
     const {
   PADDLE_ENFORCE_EQ(
       is_build_,
       true,
-      phi::errors::Unavailable(
+      common::errors::Unavailable(
           "DependencyBuilder is not yet built, call Build() firstly."));
   return *op_downstream_map_;
 }
@@ -206,13 +215,13 @@ void DependencyBuilder::AddDependencyForCoalesceTensorOp() {
       }
 
       // find first op read 'outputs' between (first_read_fused_out_op, end)
-      // add depned:  first_read_fused_out_op -> first op that reads 'outputs'
+      // add depend:  first_read_fused_out_op -> first op that reads 'outputs'
 
       // special case for consecutive communication ops, for example,
       // FusedOutput = c_sync_calc_stream(FusedOutput)
       // FusedOutput= c_allreduce_sum(FusedOutput)
       // FusedOutput = c_sync_comm_stream(FusedOutput)
-      // we should take the last one to add depned instead of
+      // we should take the last one to add depend instead of
       // 'first_read_fused_out_op'
       size_t target = first_read_fused_out_op;
       for (size_t j = first_read_fused_out_op + 1; j < op_num_; ++j) {
@@ -255,11 +264,13 @@ void DependencyBuilder::AddDependencyForCommunicationOp() {
   // c_allreduce_sum(b)
   // c_allreduce_sum(c)
   // c_sync_comm_stream(a)
-  const std::string kSyncComm = "c_sync_comm_stream";
+  const std::string kCSyncComm = "c_sync_comm_stream";
+  const std::string kSyncComm = "sync_comm_stream";
   dependence_op_idx = ULLONG_MAX;
   for (size_t op_idx = 0; op_idx < op_num_; ++op_idx) {
     if (instructions_->at(op_idx).OpBaseValid() &&
-        instructions_->at(op_idx).OpBase()->Type() == kSyncComm) {
+        (instructions_->at(op_idx).OpBase()->Type() == kCSyncComm ||
+         instructions_->at(op_idx).OpBase()->Type() == kSyncComm)) {
       dependence_op_idx = op_idx;
     } else {
       if (dependence_op_idx != ULLONG_MAX) {
@@ -335,6 +346,14 @@ void DependencyBuilder::AddDependencyForSequentialRun() {
   size_t dependence_op_idx = ULLONG_MAX;
   for (size_t op_idx = 0; op_idx < op_num_; ++op_idx) {
     if (dependence_op_idx != ULLONG_MAX) {
+      if (this->GetInstructionName(op_idx) == "pd_op.full_int_array") {
+        VLOG(8) << "Skip adding dependency for sequential run: "
+                << dependence_op_idx << "->" << op_idx << " "
+                << this->GetInstructionName(dependence_op_idx) << "->"
+                << this->GetInstructionName(op_idx);
+        continue;
+      }
+
       AddDownstreamOp(dependence_op_idx, op_idx);
     }
     dependence_op_idx = op_idx;
@@ -346,7 +365,7 @@ void DependencyBuilder::AddDownstreamOp(size_t prior_op_idx,
   PADDLE_ENFORCE_EQ(
       OpHappensBefore(posterior_op_idx, prior_op_idx),
       false,
-      phi::errors::Unavailable(
+      common::errors::Unavailable(
           "Can not add dependency %d->%d because %d is run before %d",
           prior_op_idx,
           posterior_op_idx,
@@ -355,8 +374,8 @@ void DependencyBuilder::AddDownstreamOp(size_t prior_op_idx,
   std::set<size_t>& downstream_ops = (*op_downstream_map_)[prior_op_idx];
   // NOTE(Ruibiao): Here the downstream map shrinking is best-effort, therefore
   // ShrinkDownstreamMap after BuildDownstreamMap is still helpful. For example,
-  // a->c will not be shrinked in the following case: AddDownstreamOp(a, b) ->
-  // AddDownstreamOp(a, c) -> AddDownstreamOp(b, c), it should be shrinked by
+  // a->c will not be shrunk in the following case: AddDownstreamOp(a, b) ->
+  // AddDownstreamOp(a, c) -> AddDownstreamOp(b, c), it should be shrunk by
   // ShrinkDownstreamMap.
   for (size_t op_idx : downstream_ops) {
     if (OpHappensBefore(op_idx, posterior_op_idx)) {
@@ -513,7 +532,7 @@ void DependencyBuilder::ShrinkDownstreamMap() {
       continue;
     }
 
-    std::set<size_t> minumum_nexts;
+    std::set<size_t> minimum_nexts;
     for (size_t item : op_downstream_map_->at(i)) {
       bool not_after_any = true;
       // find the op that is not executed after any
@@ -527,12 +546,12 @@ void DependencyBuilder::ShrinkDownstreamMap() {
       }
       if (not_after_any) {
         VLOG(8) << "downstream op of " << i << ": " << item;
-        minumum_nexts.insert(item);
+        minimum_nexts.insert(item);
       }
     }
     // NOTE(Ruibiao): op_happens_before will not be changed when shrink
-    // dowstream map
-    (*op_downstream_map_)[i] = minumum_nexts;
+    // downstream map
+    (*op_downstream_map_)[i] = minimum_nexts;
   }
   VLOG(8) << "Finish shrink downstream map";
   VLOG(8) << "downstream count: " << CountDownstreamMap(*op_downstream_map_);
@@ -559,10 +578,49 @@ void DependencyBuilder::UpdateVarMinRwOp(
 /// ======================== ///
 ///        For new ir        ///
 /// ======================== ///
-PirDependencyBuilder::PirDependencyBuilder() {
+PirDependencyBuilder::PirDependencyBuilder() : instructions_() {
   is_build_ = false;
   op_downstream_map_ = std::make_shared<std::map<size_t, std::set<size_t>>>();
   op_happens_before_ = std::make_shared<std::vector<std::vector<bool>>>();
+}
+
+const std::string& PirDependencyBuilder::GetInstructionName(
+    size_t op_idx) const {
+  return (instructions_)[op_idx]->Name();
+}
+
+void PirDependencyBuilder::AddDependencyForCommunicationOp() {
+  size_t dependence_op_idx = ULLONG_MAX;
+  for (size_t op_idx = 0; op_idx < op_num_; ++op_idx) {
+    if (instructions_.at(op_idx)->Operation() &&
+        IsCommunicationOp(instructions_.at(op_idx)->Operation())) {
+      if (dependence_op_idx != ULLONG_MAX) {
+        AddDownstreamOp(dependence_op_idx, op_idx);
+      }
+      dependence_op_idx = op_idx;
+    }
+  }
+
+  // TODO(zhiqiu): there still some cases not handled
+  // add dependency for c_sync_comm_stream
+
+  // in program, we can add only one c_sync_comm_stream to sync all
+  // communication ops.
+  // c_allreduce_sum(a)
+  // c_allreduce_sum(b)
+  // c_allreduce_sum(c)
+  // c_sync_comm_stream(a)
+  const std::string kSyncComm = dialect::SyncCommStreamOp::name();
+  dependence_op_idx = ULLONG_MAX;
+  for (size_t op_idx = 0; op_idx < op_num_; ++op_idx) {
+    if (instructions_.at(op_idx)->Name() == kSyncComm) {
+      dependence_op_idx = op_idx;
+    } else {
+      if (dependence_op_idx != ULLONG_MAX) {
+        AddDownstreamOp(dependence_op_idx, op_idx);
+      }
+    }
+  }
 }
 
 void PirDependencyBuilder::AddDependencyForRandomOp() {
@@ -614,6 +672,11 @@ const std::map<size_t, std::set<size_t>>& PirDependencyBuilder::Build(
 
   if (FLAGS_new_executor_sequential_run) {
     AddDependencyForSequentialRun();
+  }
+
+  if (FLAGS_add_dependency_for_communication_op) {
+    AddDependencyForCommunicationOp();
+    VLOG(6) << "Finish AddDependencyForSequentialRun";
   }
 
   // TODO(zhangbo): Add dependency for special op ？
@@ -720,10 +783,10 @@ void DependencyBuilderSimplify::GetAllbehind() {
     }
   };
   for (size_t i = start_index_; i < op_num_; i++) {
-    auto& behinds = ops_behind_[i];
-    auto& befores = ops_before_[i];
-    for (auto before_op : befores) {
-      for (auto behind_op : behinds) {
+    auto& behind_ops = ops_behind_[i];
+    auto& before_ops = ops_before_[i];
+    for (auto before_op : before_ops) {
+      for (auto behind_op : behind_ops) {
         update_op_happen_before(before_op, behind_op);
       }
     }
@@ -737,7 +800,7 @@ const std::map<size_t, std::set<size_t>>& DependencyBuilderSimplify::Build(
   PADDLE_ENFORCE_EQ(
       is_build_,
       false,
-      phi::errors::AlreadyExists("The op dependency has been built"));
+      common::errors::AlreadyExists("The op dependency has been built"));
   start_index_ = start_index;
   is_sharding_mode_ = is_sharding_mode;
   _ops_ptr = &ops;
@@ -945,7 +1008,7 @@ void DependencyBuilderSimplify::ShrinkDownstreamMap() {
       continue;
     }
 
-    std::set<size_t> minumum_nexts;
+    std::set<size_t> minimum_nexts;
     for (size_t item : op_downstream_map_.at(i)) {
       bool not_after_any = true;
       // find the op that is not executed  any
@@ -959,12 +1022,12 @@ void DependencyBuilderSimplify::ShrinkDownstreamMap() {
       }
       if (not_after_any) {
         VLOG(8) << "downstream op of " << i << ": " << item;
-        minumum_nexts.insert(item);
+        minimum_nexts.insert(item);
       }
     }
     // NOTE(Ruibiao): op_happens_before will not be changed when shrink
-    // dowstream map
-    op_downstream_map_.at(i) = minumum_nexts;
+    // downstream map
+    op_downstream_map_.at(i) = minimum_nexts;
   }
   VLOG(8) << "Finish shrink downstream map";
   VLOG(8) << "downstream count: " << CountDownstreamMap(op_downstream_map_);
@@ -1031,13 +1094,13 @@ void DependencyBuilderSimplify::AddDependencyForCoalesceTensorOp() {
       }
 
       // find first op read 'outputs' between (first_read_fused_out_op, end)
-      // add depned:  first_read_fused_out_op -> first op that reads 'outputs'
+      // add depend:  first_read_fused_out_op -> first op that reads 'outputs'
 
       // special case for consecutive communication ops, for example,
       // FusedOutput = c_sync_calc_stream(FusedOutput)
       // FusedOutput= c_allreduce_sum(FusedOutput)
       // FusedOutput = c_sync_comm_stream(FusedOutput)
-      // we should take the last one to add depned instead of
+      // we should take the last one to add depend instead of
       // 'first_read_fused_out_op'
       size_t target = first_read_fused_out_op;
       for (size_t j = first_read_fused_out_op + 1; j < op_num_; ++j) {
@@ -1074,7 +1137,8 @@ void DependencyBuilderSimplify::AddDependencyForCommunicationOp() {
    }
   }
  */
-  const std::string kSyncComm = "c_sync_comm_stream";
+  const std::string kCSyncComm = "c_sync_comm_stream";
+  const std::string kSyncComm = "sync_comm_stream";
   std::vector<size_t> com_op_vector;
   std::vector<size_t> sync_com_op_vector;
   for (auto op_idx : ops_list) {
@@ -1085,7 +1149,8 @@ void DependencyBuilderSimplify::AddDependencyForCommunicationOp() {
       }
     }
 
-    if (_ops_ptr->at(op_idx)->Type() == kSyncComm) {
+    if (_ops_ptr->at(op_idx)->Type() == kCSyncComm ||
+        _ops_ptr->at(op_idx)->Type() == kSyncComm) {
       for (auto com_op_id : com_op_vector) {
         if (com_op_id < op_idx) {
           AddDownstreamOp(com_op_id, op_idx);
@@ -1162,7 +1227,8 @@ void DependencyBuilderSimplify::AddDependencyForReadOp() {
 // for speed up com and calc parallel
 void DependencyBuilderSimplify::AddDependencyForBroadcastOp() {
   const std::string broadcast = "c_broadcast";
-  const std::string kSyncComm = "c_sync_comm_stream";
+  const std::string kCSyncComm = "c_sync_comm_stream";
+  const std::string kSyncComm = "sync_comm_stream";
   std::vector<size_t> op_between_broadcast_and_sync;
   std::vector<size_t> op_broadcast;
   size_t index = 0;
@@ -1170,7 +1236,8 @@ void DependencyBuilderSimplify::AddDependencyForBroadcastOp() {
     if (_ops_ptr->at(op_idx)->Type() == broadcast) {
       op_broadcast.push_back(op_idx);
       op_between_broadcast_and_sync.clear();
-    } else if (_ops_ptr->at(op_idx)->Type() == kSyncComm) {
+    } else if (_ops_ptr->at(op_idx)->Type() == kCSyncComm ||
+               _ops_ptr->at(op_idx)->Type() == kSyncComm) {
       op_broadcast.clear();
       for (auto op : op_between_broadcast_and_sync) {
         AddDownstreamOp(op, op_idx);
@@ -1199,7 +1266,8 @@ void DependencyBuilderSimplify::SetSameStream() {
   // for sharing
   for (size_t i = start_index_; i < op_num_; i++) {
     std::string op_name = _ops_ptr->at(i)->Type();
-    if (op_name == "c_reduce_sum") {
+    if (op_name == "reduce" && _ops_ptr->at(i)->Attr<int>("reduce_type") ==
+                                   static_cast<int>(phi::ReduceType::kRedSum)) {
       _ops_ptr->at(i)->SetAttr(use_calc_stream, true);
       for (auto it : _ops_ptr->at(i)->Inputs()) {
         for (auto var : it.second) {
@@ -1214,7 +1282,7 @@ void DependencyBuilderSimplify::SetSameStream() {
   if (last_pos > 0) {
     for (size_t i = last_pos + 1; i < op_num_; i++) {
       std::string op_name = _ops_ptr->at(i)->Type();
-      if (op_name == "c_sync_comm_stream") {
+      if (op_name == "c_sync_comm_stream" || op_name == "sync_comm_stream") {
         for (auto it : _ops_ptr->at(i)->Inputs()) {
           for (auto var : it.second) {
             if (inputs.count(var) == 0) {
@@ -1236,48 +1304,48 @@ void DependencyBuilderSimplify::SetSameStream() {
   }
 }
 
-// get_new_exector_order  by dfs
-std::vector<size_t> DependencyBuilderSimplify::get_new_exexutor_order() {
+// get_new_executor_order  by dfs
+std::vector<size_t> DependencyBuilderSimplify::get_new_executor_order() {
   PADDLE_ENFORCE_EQ(
       is_build_,
       true,
-      phi::errors::AlreadyExists("The op dependency has not been built"));
+      common::errors::AlreadyExists("The op dependency has not been built"));
   std::vector<size_t> new_order;
   std::vector<bool> is_visit(op_num_, false);
   std::vector<size_t> adam_vector;
   std::priority_queue<std::pair<size_t, size_t>> adam_pq;
   const std::string push_op = "push";
-  std::vector<bool> usefull_op(op_num_, false);
+  std::vector<bool> useful_op(op_num_, false);
   for (size_t i = start_index_; i < op_num_; i++) {
     int op_role = _ops_ptr->at(i)->Attr<int>("op_role");
     std::string op_name = _ops_ptr->at(i)->Type();
     if (op_role == static_cast<int>(OpRole::kOptimize) ||
         op_name.find(push_op) != std::string::npos) {
       adam_vector.push_back(i);
-      usefull_op[i] = true;
+      useful_op[i] = true;
       adam_pq.push(std::make_pair(-op_before_num[i], i));
     }
   }
   for (size_t i = start_index_; i < op_num_; i++) {
     for (auto j : adam_vector)
       if (op_happens_before_[i][j]) {
-        usefull_op[i] = true;
+        useful_op[i] = true;
         break;
       }
   }
-  std::set<size_t> not_usefull_op;
+  std::set<size_t> not_useful_op;
   for (size_t i = start_index_; i < op_num_; i++) {
-    if (usefull_op[i] == false) {
-      not_usefull_op.insert(i);
+    if (useful_op[i] == false) {
+      not_useful_op.insert(i);
       if (FLAGS_enable_dependency_builder_debug_info) {
-        VLOG(0) << "not usefull op " << _ops_ptr->at(i)->Type() << "_" << i;
+        VLOG(0) << "not useful op " << _ops_ptr->at(i)->Type() << "_" << i;
       }
     }
   }
   for (auto del_op : del_c_sync_comm_list) {
-    if (not_usefull_op.count(del_op) == 0) {
+    if (not_useful_op.count(del_op) == 0) {
       if (FLAGS_enable_dependency_builder_debug_info) {
-        VLOG(0) << " error " << del_op << " not in usefull_op";
+        VLOG(0) << " error " << del_op << " not in useful_op";
       }
     }
   }
@@ -1288,17 +1356,17 @@ std::vector<size_t> DependencyBuilderSimplify::get_new_exexutor_order() {
     is_visit[op_idx] = true;
   }
 
-  std::vector<size_t> dependecy_count(op_num_, 0);
+  std::vector<size_t> dependency_count(op_num_, 0);
   for (auto it : op_downstream_map_) {
     for (auto op_idx : it.second) {
-      dependecy_count[op_idx]++;
+      dependency_count[op_idx]++;
     }
   }
   std::stack<size_t> s;
   std::priority_queue<std::pair<size_t, size_t>> pq;
 
   for (size_t op_idx = op_num_ - 1; op_idx >= start_index_; op_idx--) {
-    if (dependecy_count[op_idx] == 0) {
+    if (dependency_count[op_idx] == 0) {
       pq.push(std::make_pair(op_behind_num[op_idx], op_idx));
     }
   }
@@ -1311,14 +1379,14 @@ std::vector<size_t> DependencyBuilderSimplify::get_new_exexutor_order() {
     auto current = s.top();
     s.pop();
     if (is_visit[current] == false) {
-      if (!not_usefull_op.count(current)) {
+      if (!not_useful_op.count(current)) {
         new_order.push_back(current);
       }
       is_visit[current] = true;
       for (auto it = op_downstream_map_[current].rbegin();
            it != op_downstream_map_[current].rend();
            it++) {
-        if (--dependecy_count[*it] == 0 && !not_usefull_op.count(current)) {
+        if (--dependency_count[*it] == 0 && !not_useful_op.count(current)) {
           pq.push(std::make_pair(op_behind_num[*it], *it));
           // s.push(*it);
         }
@@ -1333,8 +1401,8 @@ std::vector<size_t> DependencyBuilderSimplify::get_new_exexutor_order() {
 
   PADDLE_ENFORCE_EQ(
       new_order.size(),
-      op_num_ - not_usefull_op.size(),
-      phi::errors::AlreadyExists("new_order size not equal op num"));
+      op_num_ - not_useful_op.size(),
+      common::errors::AlreadyExists("new_order size not equal op num"));
   if (FLAGS_enable_dependency_builder_debug_info) {
     std::stringstream ss;
     ss << " new order [ ";
@@ -1373,7 +1441,7 @@ void DependencyBuilderSimplify::AddDownstreamOp(size_t prior_op_idx,
   PADDLE_ENFORCE_EQ(
       OpHappensBefore(posterior_op_idx, prior_op_idx),
       false,
-      phi::errors::Unavailable(
+      common::errors::Unavailable(
           "Can not add dependency %d->%d because %d is run before %d",
           prior_op_idx,
           posterior_op_idx,
@@ -1383,8 +1451,8 @@ void DependencyBuilderSimplify::AddDownstreamOp(size_t prior_op_idx,
   std::set<size_t>& downstream_ops = op_downstream_map_[prior_op_idx];
   // NOTE(Ruibiao): Here the downstream map shrinking is best-effort, therefore
   // ShrinkDownstreamMap after BuildDownstreamMap is still helpful. For example,
-  // a->c will not be shrinked in the following case: AddDownstreamOp(a, b) ->
-  // AddDownstreamOp(a, c) -> AddDownstreamOp(b, c), it should be shrinked by
+  // a->c will not be shrunk in the following case: AddDownstreamOp(a, b) ->
+  // AddDownstreamOp(a, c) -> AddDownstreamOp(b, c), it should be shrunk by
   // ShrinkDownstreamMap.
   for (size_t op_idx : downstream_ops) {
     if (OpHappensBefore(op_idx, posterior_op_idx)) {
@@ -1421,6 +1489,4 @@ void DependencyBuilderSimplify::AddDownstreamOp(size_t prior_op_idx,
   }
 }
 
-}  // namespace interpreter
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::interpreter

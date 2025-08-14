@@ -25,14 +25,14 @@ limitations under the License. */
 #include "brpc/channel.h"
 #include "brpc/controller.h"
 #include "brpc/server.h"
+#include "paddle/common/macros.h"  // for DISABLE_COPY_AND_ASSIGN
 #include "paddle/fluid/distributed/ps/service/brpc_ps_client.h"
 #include "paddle/fluid/distributed/ps/service/brpc_utils.h"
 #include "paddle/fluid/distributed/ps/service/sendrecv.pb.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable_helper.h"
-#include "paddle/fluid/platform/macros.h"  // for DISABLE_COPY_AND_ASSIGN
-#include "paddle/fluid/string/split.h"
+#include "paddle/utils/string/split.h"
 
 namespace paddle {
 namespace framework {
@@ -93,17 +93,9 @@ class HeterClient {
     options.timeout_ms = FLAGS_pserver_timeout_ms;
     std::vector<std::shared_ptr<brpc::Channel>>* client_channels = nullptr;
     if (peer_role == PEER_ROLE_IS_SWITCH) {
-#ifdef PADDLE_WITH_ARM_BRPC
       if (need_encrypt) {
         options.mutable_ssl_options();
       }
-      options.connection_type = "";
-      VLOG(4) << "ssl enabled in arm";
-#else
-      if (need_encrypt) {
-        options.mutable_ssl_options();
-      }
-#endif
       client_channels = &peer_switch_channels_;
     } else if (peer_role == PEER_ROLE_IS_WORKER) {
       client_channels = &peer_worker_channels_;
@@ -132,7 +124,7 @@ class HeterClient {
 
   void CreateClient2XpuConnection();
 
-  void SendAndRecvAsync(const platform::DeviceContext& ctx,
+  void SendAndRecvAsync(const phi::DeviceContext& ctx,
                         const framework::Scope& scope,
                         const std::string& message_name,
                         const std::vector<std::string>& send_var_name,
@@ -145,7 +137,7 @@ class HeterClient {
            void* data_ptr,
            int64_t data_size);
 
-  int Send(const platform::DeviceContext& ctx,
+  int Send(const phi::DeviceContext& ctx,
            const framework::Scope& scope,
            const std::string& message_name,
            const std::vector<std::string>& send_var_names);
@@ -155,7 +147,7 @@ class HeterClient {
            void* data_ptr,
            int64_t data_size);
 
-  int Recv(const platform::DeviceContext& ctx,
+  int Recv(const phi::DeviceContext& ctx,
            framework::Scope& recv_scope,  // NOLINT
            const std::string& message_name,
            const std::vector<std::string>& recv_var_names);
@@ -253,5 +245,5 @@ class HeterClient {
   int trainer_id_;
 };
 
-}  // end namespace distributed
-}  // end namespace paddle
+}  // namespace distributed
+}  // namespace paddle

@@ -14,11 +14,9 @@
 
 #include "paddle/phi/common/memory_utils.h"
 
-namespace phi {
+namespace phi::memory_utils {
 
-namespace memory_utils {
-
-Allocator::AllocationPtr Alloc(const phi::GPUPlace& place,
+Allocator::AllocationPtr Alloc(const phi::Place& place,
                                size_t size,
                                const phi::Stream& stream) {
   return MemoryUtils::Instance().Alloc(place, size, stream);
@@ -82,12 +80,14 @@ void EmplaceDeviceContexts(
         place_to_device_context,
     const std::vector<phi::Place>& places,
     bool disable_setting_default_stream_for_allocator,
-    int stream_priority) {
+    int stream_priority,
+    bool set_to_default_stream) {
   MemoryUtils::Instance().EmplaceDeviceContexts(
       place_to_device_context,
       places,
       disable_setting_default_stream_for_allocator,
-      stream_priority);
+      stream_priority,
+      set_to_default_stream);
 }
 
 #if (defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)) && \
@@ -116,8 +116,27 @@ std::shared_ptr<std::remove_pointer<phi::gpuEvent_t>::type> GetCudaEvent(
     int device_id) {
   return MemoryUtils::Instance().GetCudaEvent(device_id);
 }
+#elif (defined(PADDLE_WITH_XPU) && defined(PADDLE_WITH_XPU_BKCL))
+const phi::Allocator* GetAllocator(int device_id, XPUStream stream) {
+  return MemoryUtils::Instance().GetAllocator(device_id, stream);
+}
+
+const phi::Allocator* GetHostAllocator() {
+  return MemoryUtils::Instance().GetHostAllocator();
+}
+
+const phi::Allocator* GetZeroAllocator(int device_id) {
+  return MemoryUtils::Instance().GetZeroAllocator(device_id);
+}
+
+const phi::Allocator* GetHostZeroAllocator() {
+  return MemoryUtils::Instance().GetHostZeroAllocator();
+}
+
+std::shared_ptr<std::remove_pointer<XPUEvent>::type> GetXpuEvent(
+    int device_id) {
+  return MemoryUtils::Instance().GetXpuEvent(device_id);
+}
 #endif
 
-}  // namespace memory_utils
-
-}  // namespace phi
+}  // namespace phi::memory_utils

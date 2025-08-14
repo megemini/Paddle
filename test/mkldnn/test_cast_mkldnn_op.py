@@ -24,7 +24,7 @@ from paddle.base import core
 @unittest.skipIf(
     not core.supports_bfloat16(), "place does not support BF16 evaluation"
 )
-class TestCastBF16ToFP32MKLDNNOp(OpTest):
+class TestCastBF16ToFP32ONEDNNOp(OpTest):
     def init_data(self):
         self.out = np.random.random(size=self.shape).astype("float32")
         self.x = convert_float_to_uint16(self.out)
@@ -42,12 +42,12 @@ class TestCastBF16ToFP32MKLDNNOp(OpTest):
         self.attrs = {
             'in_dtype': prepare_dtype(self.x),
             'out_dtype': prepare_dtype(self.out),
-            'use_mkldnn': True,
+            'use_onednn': True,
         }
         self.op_type = 'cast'
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False)
+        self.check_output(check_dygraph=False, check_pir_onednn=True)
 
     def test_check_grad(self):
         self.check_grad_with_place(
@@ -57,31 +57,32 @@ class TestCastBF16ToFP32MKLDNNOp(OpTest):
             check_dygraph=False,
             user_defined_grads=[self.inputs['X']],
             user_defined_grad_outputs=[self.outputs['Out']],
+            check_pir_onednn=True,
         )
 
     def init_shape(self):
         self.shape = [10, 10]
 
 
-class TestCastFP32ToBF16MKLDNNOp(TestCastBF16ToFP32MKLDNNOp):
+class TestCastFP32ToBF16ONEDNNOp(TestCastBF16ToFP32ONEDNNOp):
     def init_data(self):
         self.x = np.random.random(size=[2, 6]).astype("float32")
         self.out = convert_float_to_uint16(self.x)
 
 
-class TestCastBF16ToBF16MKLDNNOp(TestCastBF16ToFP32MKLDNNOp):
+class TestCastBF16ToBF16ONEDNNOp(TestCastBF16ToFP32ONEDNNOp):
     def init_data(self):
         self.x = np.random.random(size=[6, 13]).astype("uint16")
         self.out = self.x
 
 
-class TestCastFP32ToFP32MKLDNNOp(TestCastBF16ToFP32MKLDNNOp):
+class TestCastFP32ToFP32ONEDNNOp(TestCastBF16ToFP32ONEDNNOp):
     def init_data(self):
         self.x = np.random.random(size=[7, 15]).astype("float32")
         self.out = self.x
 
 
-class TestCastBF16ToFP32MKLDNNOp_ZeroDim(TestCastBF16ToFP32MKLDNNOp):
+class TestCastBF16ToFP32ONEDNNOp_ZeroDim(TestCastBF16ToFP32ONEDNNOp):
     def init_shape(self):
         self.shape = []
 

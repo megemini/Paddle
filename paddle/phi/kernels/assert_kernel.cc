@@ -22,7 +22,7 @@
 namespace phi {
 
 template <typename T, typename Context>
-void AssertKernel(const Context& ctx,
+void AssertKernel(const Context& dev_ctx,
                   const DenseTensor& cond,
                   const std::vector<const DenseTensor*>& data,
                   int64_t summarize) {
@@ -31,7 +31,7 @@ void AssertKernel(const Context& ctx,
     return;
   }
 
-  paddle::funcs::TensorFormatter formatter;
+  phi::funcs::TensorFormatter formatter;
   formatter.SetSummarize(summarize);
 
   for (size_t i = 0; i < data.size(); ++i) {
@@ -39,7 +39,7 @@ void AssertKernel(const Context& ctx,
     formatter.Print(*(data[i]), name);
   }
 
-  PADDLE_THROW(phi::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "The condition of  must be true, but received false"));
 }
 

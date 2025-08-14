@@ -19,7 +19,6 @@ from test_dist_base import TestParallelDyGraphRunnerBase, runtime_main
 
 import paddle
 from paddle import base
-from paddle.base.dygraph.base import to_variable
 from paddle.nn import Linear
 
 batch_size = 64
@@ -277,7 +276,7 @@ class SeResNeXt(paddle.nn.Layer):
             shortcut = False
             for i in range(depth[block]):
                 bottleneck_block = self.add_sublayer(
-                    'bb_%d_%d' % (block, i),
+                    f'bb_{block}_{i}',
                     BottleneckBlock(
                         num_channels=num_channels,
                         num_filters=num_filters[block],
@@ -342,8 +341,8 @@ class TestSeResNeXt(TestParallelDyGraphRunnerBase):
         )
         dy_x_data = dy_x_data / 255.0
         y_data = np.array([x[1] for x in data]).astype('int64').reshape(bs, 1)
-        img = to_variable(dy_x_data)
-        label = to_variable(y_data)
+        img = paddle.to_tensor(dy_x_data)
+        label = paddle.to_tensor(y_data)
         label.stop_gradient = True
 
         out = model(img)

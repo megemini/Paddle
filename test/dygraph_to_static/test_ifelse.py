@@ -16,18 +16,18 @@ import unittest
 
 import numpy as np
 from dygraph_to_static_utils import (
+    BackendMode,
     Dy2StTestBase,
     IrMode,
     ToStaticMode,
     disable_test_case,
     enable_to_static_guard,
     test_ast_only,
-    test_legacy_only,
+    test_pir_only,
 )
 from ifelse_simple_func import (
     NetWithControlFlowIf,
     add_fn,
-    base,
     dyfunc_empty_nonlocal,
     dyfunc_ifelse_ret_int1,
     dyfunc_ifelse_ret_int2,
@@ -56,11 +56,6 @@ from paddle.jit.dy2static.utils import Dygraph2StaticException
 
 np.random.seed(1)
 
-if base.is_compiled_with_cuda():
-    place = base.CUDAPlace(0)
-else:
-    place = base.CPUPlace()
-
 
 class TestDy2staticException(Dy2StTestBase):
     def setUp(self):
@@ -71,9 +66,18 @@ class TestDy2staticException(Dy2StTestBase):
     @test_ast_only
     def test_error(self):
         if self.dyfunc:
-            with self.assertRaisesRegex(Dygraph2StaticException, self.error):
-                with enable_to_static_guard(True):
-                    self.assertTrue(paddle.jit.to_static(self.dyfunc)(self.x))
+            with (
+                self.assertRaisesRegex(Dygraph2StaticException, self.error),
+                enable_to_static_guard(True),
+            ):
+                self.assertTrue(paddle.jit.to_static(self.dyfunc)(self.x))
+
+
+class TestDy2StIfElseRetInt2(TestDy2staticException):
+    def setUp(self):
+        self.x = np.random.random([5]).astype('float32')
+        self.error = "Your if/else have different number of return value."
+        self.dyfunc = dyfunc_ifelse_ret_int2
 
 
 class TestDygraphIfElse(Dy2StTestBase):
@@ -85,16 +89,15 @@ class TestDygraphIfElse(Dy2StTestBase):
         return self._run_dygraph(to_static=True)
 
     def _run_dygraph(self, to_static=False):
-        with base.dygraph.guard(place):
-            x_v = base.dygraph.to_variable(self.x)
-            if to_static:
-                ret = paddle.jit.to_static(self.dyfunc)(x_v)
-            else:
-                ret = self.dyfunc(x_v)
-            return ret.numpy()
+        x_v = paddle.to_tensor(self.x)
+        if to_static:
+            ret = paddle.jit.to_static(self.dyfunc)(x_v)
+        else:
+            ret = self.dyfunc(x_v)
+        return ret.numpy()
 
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 class TestDygraphIfElse2(TestDygraphIfElse):
@@ -103,10 +106,13 @@ class TestDygraphIfElse2(TestDygraphIfElse):
         self.dyfunc = dyfunc_with_if_else2
 
     # TODO(dev): fix AST mode
-    @disable_test_case((ToStaticMode.AST, IrMode.PT))
-    @disable_test_case((ToStaticMode.AST, IrMode.LEGACY_IR))
+    @disable_test_case(
+        (ToStaticMode.AST, IrMode.PT, BackendMode.PHI | BackendMode.CINN)
+    )
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(
+            self._run_dygraph(), self._run_static(), atol=1e-7, rtol=1e-7
+        )
 
 
 class TestDygraphIfElse3(Dy2StTestBase):
@@ -118,18 +124,15 @@ class TestDygraphIfElse3(Dy2StTestBase):
         return self._run_dygraph(to_static=True)
 
     def _run_dygraph(self, to_static=False):
-        with base.dygraph.guard(place):
-            x_v = base.dygraph.to_variable(self.x)
-            if to_static:
-                ret = paddle.jit.to_static(self.dyfunc)(x_v)
-            else:
-                ret = self.dyfunc(x_v)
-            return ret.numpy()
+        x_v = paddle.to_tensor(self.x)
+        if to_static:
+            ret = paddle.jit.to_static(self.dyfunc)(x_v)
+        else:
+            ret = self.dyfunc(x_v)
+        return ret.numpy()
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different rank
-    @test_legacy_only
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 class TestDygraphIfElse4(TestDygraphIfElse):
@@ -143,6 +146,9 @@ class TestDygraphIfElseWithListGenerator(TestDygraphIfElse):
         self.x = np.random.random([10, 16]).astype('float32')
         self.dyfunc = dyfunc_with_if_else_with_list_generator
 
+    def test_ast_to_func(self):
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
+
 
 class TestDygraphNestedIfElse(Dy2StTestBase):
     def setUp(self):
@@ -153,24 +159,24 @@ class TestDygraphNestedIfElse(Dy2StTestBase):
         return self._run_dygraph(to_static=True)
 
     def _run_dygraph(self, to_static=False):
-        with base.dygraph.guard(place):
-            x_v = paddle.to_tensor(self.x)
-            if to_static:
-                ret = paddle.jit.to_static(self.dyfunc)(x_v)
-            else:
-                ret = self.dyfunc(x_v)
-            return ret.numpy()
+        x_v = paddle.to_tensor(self.x)
+        if to_static:
+            ret = paddle.jit.to_static(self.dyfunc)(x_v)
+        else:
+            ret = self.dyfunc(x_v)
+        return ret.numpy()
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different rank
-    @test_legacy_only
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 class TestDygraphNestedIfElse2(TestDygraphIfElse):
     def setUp(self):
         self.x = np.random.random([10, 16]).astype('float32')
         self.dyfunc = nested_if_else_2
+
+    def test_ast_to_func(self):
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 class TestDygraphNestedIfElse3(Dy2StTestBase):
@@ -182,18 +188,15 @@ class TestDygraphNestedIfElse3(Dy2StTestBase):
         return self._run_dygraph(to_static=True)
 
     def _run_dygraph(self, to_static=False):
-        with base.dygraph.guard(place):
-            x_v = paddle.to_tensor(self.x)
-            if to_static:
-                ret = paddle.jit.to_static(self.dyfunc)(x_v)
-            else:
-                ret = self.dyfunc(x_v)
-            return ret.numpy()
+        x_v = paddle.to_tensor(self.x)
+        if to_static:
+            ret = paddle.jit.to_static(self.dyfunc)(x_v)
+        else:
+            ret = self.dyfunc(x_v)
+        return ret.numpy()
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different rank
-    @test_legacy_only
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 def dyfunc_ifExp_with_while(x):
@@ -297,24 +300,21 @@ class TestDygraphIfTensor(Dy2StTestBase):
         return self._run_dygraph(to_static=True)
 
     def _run_dygraph(self, to_static=False):
-        with base.dygraph.guard(place):
-            x_v = paddle.to_tensor(self.x)
-            if to_static:
-                ret = paddle.jit.to_static(self.dyfunc)(x_v)
-            else:
-                ret = self.dyfunc(x_v)
-            return ret.numpy()
+        x_v = paddle.to_tensor(self.x)
+        if to_static:
+            ret = paddle.jit.to_static(self.dyfunc)(x_v)
+        else:
+            ret = self.dyfunc(x_v)
+        return ret.numpy()
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different dtype
-    @test_legacy_only
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 class TestDygraphIfElseNet(Dy2StTestBase):
     """
     TestCase for the transformation from control flow `if/else`
-    dependent on tensor in Dygraph into Static `base.layers.cond`.
+    dependent on tensor in Dygraph into Static `paddle.static.nn.cond`.
     """
 
     def setUp(self):
@@ -329,16 +329,15 @@ class TestDygraphIfElseNet(Dy2StTestBase):
 
     def _run(self, to_static=False):
         with enable_to_static_guard(to_static):
-            with base.dygraph.guard(place):
-                net = paddle.jit.to_static(self.Net())
-                x_v = paddle.to_tensor(self.x)
-                ret = net(x_v)
-                return ret.numpy()
+            net = paddle.jit.to_static(self.Net())
+            x_v = paddle.to_tensor(self.x)
+            ret = net(x_v)
+            return ret.numpy()
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different rank
-    @test_legacy_only
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(
+            self._run_dygraph(), self._run_static(), rtol=1e-6, atol=1e-8
+        )
 
 
 # Test to call function ahead caller.
@@ -390,7 +389,9 @@ class TestNetWithExternalFunc(TestDygraphIfElseNet):
         self.Net = NetWithExternalFunc
 
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(
+            self._run_dygraph(), self._run_static(), rtol=1e-7, atol=1e-8
+        )
 
 
 class DiffModeNet1(paddle.nn.Layer):
@@ -439,25 +440,23 @@ class TestDiffModeNet(Dy2StTestBase):
 
     def _run(self, mode, to_static):
         with enable_to_static_guard(to_static):
-            net = paddle.jit.to_static(self.Net(mode))
+            if to_static:
+                net = paddle.jit.to_static(self.Net(mode))
+            else:
+                net = self.Net(mode)
             ret = net(self.x, self.y)
-
             return ret.numpy()
 
     def test_train_mode(self):
-        self.assertTrue(
-            (
-                self._run(mode='train', to_static=True)
-                == self._run(mode='train', to_static=False)
-            ).all()
+        np.testing.assert_allclose(
+            self._run(mode='train', to_static=True),
+            self._run(mode='train', to_static=False),
         )
 
     def test_infer_mode(self):
-        self.assertTrue(
-            (
-                self._run(mode='infer', to_static=True)
-                == self._run(mode='infer', to_static=False)
-            ).all()
+        np.testing.assert_allclose(
+            self._run(mode='infer', to_static=True),
+            self._run(mode='infer', to_static=False),
         )
 
 
@@ -501,8 +500,6 @@ class TestDy2StIfElseRetInt1(Dy2StTestBase):
             out = static_func(self.x)
         return out
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different rank
-    @test_legacy_only
     @test_ast_only
     def test_ast_to_func(self):
         self.setUp()
@@ -510,21 +507,12 @@ class TestDy2StIfElseRetInt1(Dy2StTestBase):
         self.assertIsInstance(self.out[1], int)
 
 
-class TestDy2StIfElseRetInt2(TestDy2staticException):
-    def setUp(self):
-        self.x = np.random.random([5]).astype('float32')
-        self.error = "Your if/else have different number of return value."
-        self.dyfunc = dyfunc_ifelse_ret_int2
-
-
 class TestDy2StIfElseRetInt3(TestDy2StIfElseRetInt1):
     def setUp(self):
-        self.x = np.random.random([5]).astype('float32')
+        self.x = np.random.random([5]).astype('int64')
         self.dyfunc = paddle.jit.to_static(dyfunc_ifelse_ret_int3)
         self.out = self.get_dy2stat_out()
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different rank
-    @test_legacy_only
     @test_ast_only
     def test_ast_to_func(self):
         self.setUp()
@@ -538,10 +526,12 @@ class TestDy2StIfElseRetInt4(TestDy2StIfElseRetInt1):
 
     @test_ast_only
     def test_ast_to_func(self):
-        with enable_to_static_guard(True):
-            with self.assertRaises(Dygraph2StaticException):
-                static_func = paddle.jit.to_static(self.dyfunc)
-                out = static_func(self.x)
+        with (
+            enable_to_static_guard(True),
+            self.assertRaises(Dygraph2StaticException),
+        ):
+            static_func = paddle.jit.to_static(self.dyfunc)
+            out = static_func(self.x)
 
 
 class IfElseNet(paddle.nn.Layer):
@@ -555,6 +545,7 @@ class IfElseNet(paddle.nn.Layer):
         a = paddle.matmul(a, self.param)
         a = paddle.reshape(a, (2, 4))
         cond = paddle.to_tensor([10])
+        b = b.broadcast_to(self.param.shape)
         if paddle.equal(cond, 10):
             a_argmax = a.argmax(axis=-1)
             b = b + self.param
@@ -564,8 +555,7 @@ class IfElseNet(paddle.nn.Layer):
 
 
 class TestDy2StIfElseBackward(Dy2StTestBase):
-    # TODO(zhangbo): open pir test (IfOp grad execution not yet supported)
-    @disable_test_case((ToStaticMode.AST, IrMode.PT))
+    @test_pir_only
     def test_run_backward(self):
         a = paddle.randn((4, 3), dtype='float32')
         a.stop_gradient = False
@@ -581,6 +571,79 @@ class TestDy2StIfElseBackward(Dy2StTestBase):
         np.testing.assert_allclose(
             (b + net.param).numpy(), out.numpy(), rtol=1e-05
         )
+
+
+def ifelse_temp_local_var(x):
+    if x:
+        y = x + 1
+    else:
+        tmp = x + 2
+        y = tmp * 2
+    return y
+
+
+def ifelse_use_undefined_var(x):
+    if x:
+        y = x + 1
+    else:
+        tmp = x + 2
+        y = tmp * 2
+    return tmp + 1
+
+
+class TestIfElseMaybeUnbound(Dy2StTestBase):
+    def test_maybe_unbound(self):
+        truethy = paddle.to_tensor(1)
+        falsy = paddle.to_tensor(0)
+
+        dygraph_out = ifelse_temp_local_var(truethy)
+        static_fn = paddle.jit.to_static(ifelse_temp_local_var)
+        static_out = static_fn(truethy)
+        np.testing.assert_allclose(dygraph_out.numpy(), static_out.numpy())
+
+        dygraph_out = ifelse_temp_local_var(falsy)
+        static_fn = paddle.jit.to_static(ifelse_temp_local_var)
+        static_out = static_fn(falsy)
+        np.testing.assert_allclose(dygraph_out.numpy(), static_out.numpy())
+
+    @test_ast_only
+    @test_pir_only
+    def test_use_undefined_var(self):
+        truethy = paddle.to_tensor(1)
+        falsy = paddle.to_tensor(0)
+
+        static_fn = paddle.jit.to_static(ifelse_use_undefined_var)
+        with self.assertRaises(TypeError):
+            static_fn(truethy)
+
+        static_fn = paddle.jit.to_static(ifelse_use_undefined_var)
+        with self.assertRaises(TypeError):
+            static_fn(falsy)
+
+
+def dynamic_shape_with_constant_promotion(x):
+    x_shape0 = x.shape[0]
+    if x_shape0 < 10:
+        x_shape0 = x.shape[-1]
+    return x_shape0
+
+
+class TestDynamicShapeWithConstantPromotion(Dy2StTestBase):
+    @test_ast_only
+    @test_pir_only
+    def test_dynamic_shape_with_constant_promotion(self):
+        x = paddle.randn([5, 3])
+        static_fn = paddle.jit.to_static(
+            dynamic_shape_with_constant_promotion,
+            input_spec=[
+                paddle.static.InputSpec(
+                    shape=[None, 3],
+                    dtype='float32',
+                )
+            ],
+        )
+        out = static_fn(x)
+        self.assertEqual(out, 3)
 
 
 if __name__ == '__main__':

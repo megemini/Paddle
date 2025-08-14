@@ -25,14 +25,14 @@
 #include "extern_pocketfft/pocketfft_hdronly.h"
 #endif
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 #if defined(PADDLE_WITH_ONEMKL)
 
-namespace detail {
+}  // namespace phi::funcs
+namespace phi::funcs::detail {
 // Execute a general fft operation (can be c2c, onesided r2c or onesided c2r)
 template <typename Ti, typename To>
-void exec_fft(const phi::CPUContext& ctx,
+void exec_fft(const phi::CPUContext& dev_ctx,
               const DenseTensor& x,
               DenseTensor* out,
               const std::vector<int64_t>& axes,
@@ -59,7 +59,7 @@ void exec_fft(const phi::CPUContext& ctx,
 
   // transpose input according to the permutation
   DenseTensor transposed_input =
-      Transpose<Ti, phi::CPUContext>(ctx, x, dim_permute);
+      Transpose<Ti, phi::CPUContext>(dev_ctx, x, dim_permute);
   const phi::DDim& transposed_input_shape = transposed_input.dims();
 
   // batch size
@@ -90,7 +90,7 @@ void exec_fft(const phi::CPUContext& ctx,
   phi::DDim collapsed_output_shape = common::make_ddim(collapsed_output_shape_);
   DenseTensor collapsed_output;
   collapsed_output.Resize(collapsed_output_shape);
-  ctx.Alloc<To>(&collapsed_output);
+  dev_ctx.Alloc<To>(&collapsed_output);
 
   // make a DFTI_DESCRIPTOR
   std::vector<int64_t> signal_sizes(1 + signal_ndim);
@@ -112,13 +112,14 @@ void exec_fft(const phi::CPUContext& ctx,
   // execute the transform
   const FFTTransformType fft_type = GetFFTTransformType(x.dtype(), out->type());
   if (fft_type == FFTTransformType::C2R && forward) {
-    ConjKernel<Ti, phi::CPUContext>(ctx, collapsed_input, &collapsed_input);
+    ConjKernel<Ti, phi::CPUContext>(dev_ctx, collapsed_input, &collapsed_input);
     MKL_DFTI_CHECK(phi::dynload::DftiComputeBackward(
         desc.get(), collapsed_input.data(), collapsed_output.data()));
   } else if (fft_type == FFTTransformType::R2C && !forward) {
     MKL_DFTI_CHECK(phi::dynload::DftiComputeForward(
         desc.get(), collapsed_input.data(), collapsed_output.data()));
-    ConjKernel<To, phi::CPUContext>(ctx, collapsed_output, &collapsed_output);
+    ConjKernel<To, phi::CPUContext>(
+        dev_ctx, collapsed_output, &collapsed_output);
   } else {
     if (forward) {
       MKL_DFTI_CHECK(phi::dynload::DftiComputeForward(
@@ -139,60 +140,62 @@ void exec_fft(const phi::CPUContext& ctx,
     reverse_dim_permute[dim_permute[i]] = i;
   }
   TransposeKernel<To, phi::CPUContext>(
-      ctx, transposed_output, reverse_dim_permute, out);
+      dev_ctx, transposed_output, reverse_dim_permute, out);
 }
-}  // namespace detail
+}  // namespace phi::funcs::detail
+namespace phi::funcs {
 
 template <typename Ti, typename To>
 struct FFTC2CFunctor<phi::CPUContext, Ti, To> {
-  void operator()(const phi::CPUContext& ctx,
+  void operator()(const phi::CPUContext& dev_ctx,
                   const DenseTensor& x,
                   DenseTensor* out,
                   const std::vector<int64_t>& axes,
                   FFTNormMode normalization,
                   bool forward) {
-    detail::exec_fft<Ti, To>(ctx, x, out, axes, normalization, forward);
+    detail::exec_fft<Ti, To>(dev_ctx, x, out, axes, normalization, forward);
   }
 };
 
 template <typename Ti, typename To>
 struct FFTR2CFunctor<phi::CPUContext, Ti, To> {
-  void operator()(const phi::CPUContext& ctx,
+  void operator()(const phi::CPUContext& dev_ctx,
                   const DenseTensor& x,
                   DenseTensor* out,
                   const std::vector<int64_t>& axes,
                   FFTNormMode normalization,
                   bool forward) {
-    detail::exec_fft<Ti, To>(ctx, x, out, axes, normalization, forward);
+    detail::exec_fft<Ti, To>(dev_ctx, x, out, axes, normalization, forward);
   }
 };
 
 template <typename Ti, typename To>
 struct FFTC2RFunctor<phi::CPUContext, Ti, To> {
-  void operator()(const phi::CPUContext& ctx,
+  void operator()(const phi::CPUContext& dev_ctx,
                   const DenseTensor& x,
                   DenseTensor* out,
                   const std::vector<int64_t>& axes,
                   FFTNormMode normalization,
                   bool forward) {
     if (axes.size() > 1) {
-      DenseTensor c2c_result = EmptyLike<Ti, phi::CPUContext>(ctx, x);
+      DenseTensor c2c_result = EmptyLike<Ti, phi::CPUContext>(dev_ctx, x);
 
       const std::vector<int64_t> c2c_dims(axes.begin(), axes.end() - 1);
       FFTC2CFunctor<phi::CPUContext, Ti, Ti> c2c_functor;
-      c2c_functor(ctx, x, &c2c_result, c2c_dims, normalization, forward);
+      c2c_functor(dev_ctx, x, &c2c_result, c2c_dims, normalization, forward);
 
       const std::vector<int64_t> new_axes{axes.back()};
       detail::exec_fft<Ti, To>(
-          ctx, c2c_result, out, new_axes, normalization, forward);
+          dev_ctx, c2c_result, out, new_axes, normalization, forward);
     } else {
-      detail::exec_fft<Ti, To>(ctx, x, out, axes, normalization, forward);
+      detail::exec_fft<Ti, To>(dev_ctx, x, out, axes, normalization, forward);
     }
   }
 };
 
 #elif defined(PADDLE_WITH_POCKETFFT)
-namespace detail {
+}  // namespace phi::funcs
+namespace phi::funcs::detail {
 template <typename T>
 static T compute_factor(size_t size, FFTNormMode normalization) {
   constexpr auto one = static_cast<T>(1);
@@ -204,13 +207,15 @@ static T compute_factor(size_t size, FFTNormMode normalization) {
     case FFTNormMode::by_sqrt_n:
       return one / std::sqrt(static_cast<T>(size));
   }
-  PADDLE_THROW(phi::errors::InvalidArgument("Unsupported normalization type"));
+  PADDLE_THROW(
+      common::errors::InvalidArgument("Unsupported normalization type"));
 }
-}  // namespace detail
+}  // namespace phi::funcs::detail
+namespace phi::funcs {
 
 template <typename Ti, typename To>
 struct FFTC2CFunctor<phi::CPUContext, Ti, To> {
-  void operator()(const phi::CPUContext& ctx UNUSED,
+  void operator()(const phi::CPUContext& dev_ctx UNUSED,
                   const DenseTensor& x,
                   DenseTensor* out,
                   const std::vector<int64_t>& axes,
@@ -234,7 +239,7 @@ struct FFTC2CFunctor<phi::CPUContext, Ti, To> {
     // pocketfft requires std::vector<size_t>
     std::vector<size_t> axes_(axes.size());
     std::copy(axes.begin(), axes.end(), axes_.begin());
-    // compuet factor
+    // compute factor
     size_t signal_numel = 1;
     for (const auto axis : axes) {
       signal_numel *= in_sizes[axis];
@@ -253,7 +258,7 @@ struct FFTC2CFunctor<phi::CPUContext, Ti, To> {
 
 template <typename Ti, typename To>
 struct FFTR2CFunctor<phi::CPUContext, Ti, To> {
-  void operator()(const phi::CPUContext& ctx UNUSED,
+  void operator()(const phi::CPUContext& dev_ctx UNUSED,
                   const DenseTensor& x,
                   DenseTensor* out,
                   const std::vector<int64_t>& axes,
@@ -291,7 +296,7 @@ struct FFTR2CFunctor<phi::CPUContext, Ti, To> {
     // pocketfft requires std::vector<size_t>
     std::vector<size_t> axes_(axes.size());
     std::copy(axes.begin(), axes.end(), axes_.begin());
-    // compuet normalization factor
+    // compute normalization factor
     size_t signal_numel = 1;
     for (const auto axis : axes) {
       signal_numel *= in_sizes[axis];
@@ -310,7 +315,7 @@ struct FFTR2CFunctor<phi::CPUContext, Ti, To> {
 
 template <typename Ti, typename To>
 struct FFTC2RFunctor<phi::CPUContext, Ti, To> {
-  void operator()(const phi::CPUContext& ctx UNUSED,
+  void operator()(const phi::CPUContext& dev_ctx UNUSED,
                   const DenseTensor& x,
                   DenseTensor* out,
                   const std::vector<int64_t>& axes,
@@ -348,7 +353,7 @@ struct FFTC2RFunctor<phi::CPUContext, Ti, To> {
     // pocketfft requires std::vector<size_t>
     std::vector<size_t> axes_(axes.size());
     std::copy(axes.begin(), axes.end(), axes_.begin());
-    // compuet normalization factor
+    // compute normalization factor
     size_t signal_numel = 1;
     for (const auto axis : axes) {
       signal_numel *= out_sizes[axis];
@@ -374,5 +379,4 @@ template struct FFTC2RFunctor<phi::CPUContext, complex64_t, float>;
 template struct FFTC2RFunctor<phi::CPUContext, complex128_t, double>;
 template struct FFTR2CFunctor<phi::CPUContext, float, complex64_t>;
 template struct FFTR2CFunctor<phi::CPUContext, double, complex128_t>;
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

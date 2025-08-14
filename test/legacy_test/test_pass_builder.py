@@ -55,12 +55,12 @@ class TestPassBuilder(unittest.TestCase):
             )
 
             for i in range(5):
-                _ = exe.run(train_cp, fetch_list=[loss.name], feed=feed_dict)
+                _ = exe.run(train_cp, fetch_list=[loss], feed=feed_dict)
                 (test_loss,) = exe.run(
-                    test_cp, fetch_list=[loss.name], feed=feed_dict
+                    test_cp, fetch_list=[loss], feed=feed_dict
                 )
                 (train_loss,) = exe.run(
-                    train_cp, fetch_list=[loss.name], feed=feed_dict
+                    train_cp, fetch_list=[loss], feed=feed_dict
                 )
 
                 avg_test_loss_val = np.array(test_loss).mean()
@@ -107,7 +107,10 @@ class TestPassBuilder(unittest.TestCase):
 
         pass_builder.remove_pass(len(pass_builder.all_passes()) - 1)
         self.assertEqual(origin_len + 1, len(pass_builder.all_passes()))
-        with tempfile.TemporaryDirectory(prefix="dot_path_") as tmpdir:
+        with (
+            paddle.pir_utils.OldIrGuard(),
+            tempfile.TemporaryDirectory(prefix="dot_path_") as tmpdir,
+        ):
             graph_viz_path = os.path.join(tmpdir, 'test_viz_pass.dot')
             viz_pass.set("graph_viz_path", graph_viz_path)
 

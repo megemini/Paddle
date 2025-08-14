@@ -16,17 +16,17 @@ import unittest
 
 import numpy as np
 from numpy.random import random as rand
+from op_test import get_places
 
+import paddle
 import paddle.base.dygraph as dg
-from paddle import base, tensor
+from paddle import tensor
 
 
 class TestComplexTraceLayer(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            self._places.append(base.CUDAPlace(0))
+        self._places = get_places()
 
     def test_basic_api(self):
         for dtype in self._dtypes:
@@ -35,7 +35,7 @@ class TestComplexTraceLayer(unittest.TestCase):
             ).astype(dtype)
             for place in self._places:
                 with dg.guard(place):
-                    var_x = dg.to_variable(input)
+                    var_x = paddle.to_tensor(input)
                     result = tensor.trace(
                         var_x, offset=1, axis1=0, axis2=2
                     ).numpy()

@@ -14,12 +14,12 @@
 
 #pragma once
 
-#include <absl/container/flat_hash_map.h>
-#include <absl/strings/string_view.h>
-#include <absl/types/variant.h>
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <string_view>
+#include <variant>
+#include "paddle/utils/flat_hash_map.h"
 
 namespace pybind11 {
 namespace detail {
@@ -28,14 +28,13 @@ template <typename Key,
           typename Hash,
           typename Equal,
           typename Alloc>
-struct type_caster<absl::flat_hash_map<Key, Value, Hash, Equal, Alloc>>
-    : map_caster<absl::flat_hash_map<Key, Value, Hash, Equal, Alloc>,
+struct type_caster<paddle::flat_hash_map<Key, Value, Hash, Equal, Alloc>>
+    : map_caster<paddle::flat_hash_map<Key, Value, Hash, Equal, Alloc>,
                  Key,
                  Value> {};
 
 template <>
-struct type_caster<absl::string_view> : string_caster<absl::string_view, true> {
-};
+struct type_caster<std::string_view> : string_caster<std::string_view, true> {};
 }  // namespace detail
 }  // namespace pybind11
 
@@ -49,8 +48,11 @@ void BindBackends(pybind11::module *m);
 void BindPoly(pybind11::module *m);
 void BindOptim(pybind11::module *m);
 void BindPE(pybind11::module *m);
-void BindFrontend(pybind11::module *m);
 void BindFramework(pybind11::module *m);
 void BindUtils(pybind11::module *m);
 void BindSchedule(pybind11::module *m);
+
+__attribute__((visibility("default"))) extern void BindCINN(
+    pybind11::module *m);
+
 }  // namespace cinn::pybind

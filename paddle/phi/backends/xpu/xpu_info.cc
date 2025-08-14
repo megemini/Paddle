@@ -10,8 +10,14 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 #include "paddle/phi/backends/xpu/xpu_info.h"
 
+#ifdef PADDLE_WITH_XPU
+#include <cuda.h>
+#include <cuda_runtime.h>
+#endif
+
 #include <algorithm>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 
 #include "glog/logging.h"
@@ -21,9 +27,11 @@ limitations under the License. */
 #include "paddle/phi/backends/xpu/xpu_header.h"
 #include "paddle/phi/common/place.h"
 
+#include "paddle/phi/api/lib/kernel_dispatch.h"
+
 // TODO(wilber): The phi computing library requires a component to manage
 // flags.
-#include "paddle/phi/core/flags.h"
+#include "paddle/common/flags.h"
 
 PHI_DEFINE_EXPORTED_string(
     selected_xpus,
@@ -32,8 +40,8 @@ PHI_DEFINE_EXPORTED_string(
     "This option is useful when doing multi process training and "
     "each process have only one device (XPU). If you want to use "
     "all visible devices, set this to empty string. NOTE: the "
-    "reason of doing this is that we want to use P2P communication"
-    "between XPU devices, use XPU_VISIBLE_DEVICES can only use"
+    "reason of doing this is that we want to use P2P communication "
+    "between XPU devices, use XPU_VISIBLE_DEVICES can only use "
     "share-memory only.");
 
 namespace phi {
@@ -41,6 +49,8 @@ class XPUContext;
 
 namespace backends {
 namespace xpu {
+
+static std::once_flag xpuml_init_flag;
 
 /**************************** Version Management **************************/
 
@@ -56,11 +66,11 @@ int GetDriverVersion() {
 
 //! Get the version of XPU Runtime
 int GetRuntimeVersion() {
-  uint32_t rumtime_version_major = 0;
-  uint32_t rumtime_version_minor = 0;
+  uint32_t runtime_version_major = 0;
+  uint32_t runtime_version_minor = 0;
   PADDLE_ENFORCE_XPU_SUCCESS(
-      xpu_get_runtime_version(&rumtime_version_major, &rumtime_version_minor));
-  int runtime_version = rumtime_version_major * 10 + rumtime_version_minor;
+      xpu_get_runtime_version(&runtime_version_major, &runtime_version_minor));
+  int runtime_version = runtime_version_major * 10 + runtime_version_minor;
   return runtime_version;
 }
 
@@ -74,6 +84,17 @@ static int GetDeviceCountImpl() {
                     xpu_visible_devices_str.end(),
                     [](char ch) { return ch == ' '; })) {
       VLOG(2) << "XPU_VISIBLE_DEVICES is set to be empty. No XPU detected.";
+      return 0;
+    }
+  }
+
+  const auto* cuda_visible_devices = std::getenv("CUDA_VISIBLE_DEVICES");
+  if (cuda_visible_devices != nullptr) {
+    std::string cuda_visible_devices_str(cuda_visible_devices);
+    if (std::all_of(cuda_visible_devices_str.begin(),
+                    cuda_visible_devices_str.end(),
+                    [](char ch) { return ch == ' '; })) {
+      VLOG(2) << "CUDA_VISIBLE_DEVICES is set to be empty. No XPU detected.";
       return 0;
     }
   }
@@ -102,8 +123,11 @@ void SetXPUDeviceId(int id) {
   PADDLE_ENFORCE_LT(
       id,
       GetXPUDeviceCount(),
-      phi::errors::InvalidArgument("id must less than XPU count"));
+      common::errors::InvalidArgument("id must less than XPU count"));
   PADDLE_ENFORCE_XPU_SUCCESS(xpu_set_device(id));
+#ifdef PADDLE_WITH_XPU
+  PADDLE_ENFORCE_XPU_SUCCESS(cudaSetDevice(id));
+#endif
 }
 
 static inline std::vector<std::string> Split(std::string const& original,
@@ -137,6 +161,19 @@ std::vector<int> GetXPUSelectedDevices() {
   return devices;
 }
 
+#ifdef PADDLE_WITH_XPU
+std::pair<int, int> GetXpuStreamPriorityRange() {
+  int least_priority, greatest_priority;
+  PADDLE_ENFORCE_XPU_SUCCESS(
+      cudaDeviceGetStreamPriorityRange(&least_priority, &greatest_priority));
+  return std::make_pair(least_priority, greatest_priority);
+}
+
+void XpuStreamSync(cudaStream_t stream) {
+  PADDLE_ENFORCE_XPU_SUCCESS(cudaStreamSynchronize(stream));
+}
+#endif
+
 /**************************** Memory Management **************************/
 
 void MemcpySyncH2D(void* dst,
@@ -159,6 +196,7 @@ void MemcpySyncD2H(void* dst,
   dev_ctx.Wait();
   PADDLE_ENFORCE_XPU_SUCCESS(
       xpu_memcpy(dst, src, count, XPUMemcpyKind::XPU_DEVICE_TO_HOST));
+  dev_ctx.Wait();
 }
 
 // if src.device == dst.device and you need sync , after call this function,
@@ -185,23 +223,77 @@ void MemcpySyncD2D(void* dst,
 
 /**************************** Others **************************/
 
-XPUVersion get_xpu_version(int dev_id) {
-  uint64_t v = 0;
+int GetXPUDeviceUtilizationRate(int dev_id) {
+  std::call_once(xpuml_init_flag, xpumlInit);
   if (dev_id == -1) {
     dev_id = GetXPUCurrentDeviceId();
   }
-  PADDLE_ENFORCE_XPU_SUCCESS(xpu_device_get_attr(&v, XPUATTR_MODEL, dev_id));
+  xpumlDevice_t dev_handle;
+  PADDLE_ENFORCE_XPUML_SUCCESS(
+      xpumlDeviceGetHandleByIndex(dev_id, &dev_handle));
+  xpumlUtilization_t dev_util;
+  PADDLE_ENFORCE_XPUML_SUCCESS(
+      xpumlDeviceGetUtilizationRates(dev_handle, &dev_util));
+  return dev_util.xpu;
+}
 
-  if (v == K100 || v == K200) {
-    VLOG(1) << "KUNLUN device " << dev_id << " is XPU1\n";
-    return XPU1;
-  } else if (v < KL3_BEGIN) {
-    VLOG(1) << "KUNLUN device " << dev_id << " is XPU2\n";
-    return XPU2;
-  } else {
-    VLOG(1) << "KUNLUN device " << dev_id << " is XPU3\n";
-    return XPU3;
+int64_t GetXPUDeviceTotalMemory(int dev_id) {
+  std::call_once(xpuml_init_flag, xpumlInit);
+  if (dev_id == -1) {
+    dev_id = GetXPUCurrentDeviceId();
   }
+
+  xpumlDevice_t dev_handle;
+  PADDLE_ENFORCE_XPUML_SUCCESS(
+      xpumlDeviceGetHandleByIndex(dev_id, &dev_handle));
+  xpumlMemory_t dev_mem_info;
+  PADDLE_ENFORCE_XPUML_SUCCESS(
+      xpumlDeviceGetMemoryInfo(dev_handle, &dev_mem_info));
+  return dev_mem_info.totalGlobalMemory;  // with Byte
+}
+
+int64_t GetXPUDeviceUsedMemory(int dev_id) {
+  std::call_once(xpuml_init_flag, xpumlInit);
+  if (dev_id == -1) {
+    dev_id = GetXPUCurrentDeviceId();
+  }
+
+  xpumlDevice_t dev_handle;
+  PADDLE_ENFORCE_XPUML_SUCCESS(
+      xpumlDeviceGetHandleByIndex(dev_id, &dev_handle));
+  xpumlMemory_t dev_mem_info;
+  PADDLE_ENFORCE_XPUML_SUCCESS(
+      xpumlDeviceGetMemoryInfo(dev_handle, &dev_mem_info));
+  return dev_mem_info.usedGlobalMemory;  // with Byte
+}
+
+XPUVersion get_xpu_version(int dev_id) {
+  if (dev_id == -1) {
+    dev_id = GetXPUCurrentDeviceId();
+  }
+  thread_local std::unordered_map<int, XPUVersion> xpu_version_map;
+  if (xpu_version_map.count(dev_id) == 0) {
+    uint64_t v = 0;
+    PADDLE_ENFORCE_XPU_SUCCESS(xpu_device_get_attr(&v, XPUATTR_MODEL, dev_id));
+    if (v == K100 || v == K200) {
+      VLOG(1) << "KUNLUN device " << dev_id << " is XPU1\n";
+      xpu_version_map[dev_id] = XPU1;
+    } else if (v < KL3_BEGIN) {
+      VLOG(1) << "KUNLUN device " << dev_id << " is XPU2\n";
+      xpu_version_map[dev_id] = XPU2;
+    } else {
+      VLOG(1) << "KUNLUN device " << dev_id << " is XPU3\n";
+      xpu_version_map[dev_id] = XPU3;
+    }
+  }
+  return xpu_version_map[dev_id];
+}
+
+void set_xpu_debug_level(int level) {
+  auto* dev_ctx =
+      paddle::experimental::GetDeviceContextByBackend(phi::Backend::XPU);
+  auto* xpu_ctx = static_cast<const phi::XPUContext*>(dev_ctx);
+  PADDLE_ENFORCE_XPU_SUCCESS(xpu_ctx->x_context()->set_debug_level(level));
 }
 
 int get_xpu_max_ptr_size(int dev_id) {
@@ -218,7 +310,7 @@ int get_xpu_max_ptr_size(int dev_id) {
       max_ptr_size = 12;
       break;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Only support get max ptr size of XPU1, XPU2 or XPU3."));
       break;
   }

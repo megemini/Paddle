@@ -16,7 +16,7 @@ import unittest
 
 import numpy as np
 from op import Operator
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_places
 
 import paddle
 from paddle.base import core
@@ -71,10 +71,7 @@ class case2Fp16(TestShapeOp):
 
 class TestShapeWithSelectedRows(unittest.TestCase):
     def get_places(self):
-        places = [core.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(core.CUDAPlace(0))
-        return places
+        return get_places()
 
     def check_with_place(self, place):
         scope = core.Scope()

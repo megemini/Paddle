@@ -35,6 +35,7 @@ from .common import (  # noqa: F401
     Dropout2D,
     Dropout3D,
     Embedding,
+    FeatureAlphaDropout,
     Flatten,
     Fold,
     Identity,
@@ -60,6 +61,7 @@ from .conv import (  # noqa: F401
 from .distance import PairwiseDistance  # noqa: F401
 from .layers import Layer  # noqa: F401
 from .loss import (  # noqa: F401
+    AdaptiveLogSoftmaxWithLoss,
     BCELoss,
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -70,6 +72,7 @@ from .loss import (  # noqa: F401
     L1Loss,
     MarginRankingLoss,
     MSELoss,
+    MultiLabelMarginLoss,
     MultiLabelSoftMarginLoss,
     MultiMarginLoss,
     NLLLoss,
@@ -100,6 +103,10 @@ from .pooling import (  # noqa: F401
     AvgPool1D,
     AvgPool2D,
     AvgPool3D,
+    FractionalMaxPool2D,
+    FractionalMaxPool3D,
+    LPPool1D,
+    LPPool2D,
     MaxPool1D,
     MaxPool2D,
     MaxPool3D,

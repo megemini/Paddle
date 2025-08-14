@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -45,7 +45,7 @@ function get_docs_pr_num_from_paddle_pr_info(){
 }
 
 # Attention:
-# 1. /FluidDoc will be used as the workspace of PaddlePaddle/docs. 
+# 1. /FluidDoc will be used as the workspace of PaddlePaddle/docs.
 # 2. And /docs is used as the output of doc-build process.
 # 3. If conflicted with yours, please modify the definition of FLUIDDOCDIR and
 #    OUTPUTDIR in the subsequent codes.
@@ -137,15 +137,15 @@ nbsphinx
         BCECMD_CONFIG=/opt/linux-bcecmd-0.3.0/boscmdconfig
 
         is_shell_attribute_set x
-        xdebug_setted=$?
-        if [ $xdebug_setted ] ; then
+        xdebug_set=$?
+        if [ $xdebug_set ] ; then
             set +x
         fi
         if [ -n "${BOS_CREDENTIAL_AK}" ] && [ -n "${BOS_CREDENTIAL_SK}" ] ; then
             echo "Ak = ${BOS_CREDENTIAL_AK}" >> ${BCECMD_CONFIG}/credentials
             echo "Sk = ${BOS_CREDENTIAL_SK}" >> ${BCECMD_CONFIG}/credentials
         fi
-        if [ $xdebug_setted ] ; then
+        if [ $xdebug_set ] ; then
             set -x
         fi
 

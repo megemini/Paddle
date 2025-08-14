@@ -81,8 +81,12 @@ inline DataLayout StringToDataLayout(const std::string& str) {
     return DataLayout::kNCHW;
   } else if (s == "ANYLAYOUT") {
     return DataLayout::kAnyLayout;
+  } else if (s == "UNDEFINED(ANYLAYOUT)") {
+    return DataLayout::kAnyLayout;
   } else if (s == "MKLDNNLAYOUT") {
     return DataLayout::kMKLDNN;
+  } else if (s == "ONEDNNLAYOUT") {
+    return DataLayout::ONEDNN;
   } else if (s == "SPARSE_COO") {
     return DataLayout::SPARSE_COO;
   } else if (s == "SPARSE_CSR") {

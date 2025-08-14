@@ -56,10 +56,10 @@ class TestStack2DOneDNNOp(OpTest):
 
         self.inputs = {'X': input_list}
         self.outputs = {'Y': np.stack(self.op_inputs, axis=self.axis)}
-        self.attrs = {'axis': self.axis, 'use_mkldnn': True}
+        self.attrs = {'axis': self.axis, 'use_onednn': True}
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     # JUST FOR CI TO PASS, GRAD IS NOT IMPLEMENTED YET
     def test_check_grad(self):

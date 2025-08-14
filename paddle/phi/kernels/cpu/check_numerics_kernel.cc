@@ -21,7 +21,7 @@ limitations under the License. */
 namespace phi {
 
 template <typename T, typename Context>
-void CheckNumericsKernel(const Context& ctx,
+void CheckNumericsKernel(const Context& dev_ctx,
                          const DenseTensor& tensor,
                          const std::string& op_type,
                          const std::string& var_name,
@@ -32,11 +32,21 @@ void CheckNumericsKernel(const Context& ctx,
                          DenseTensor* values) {
   // stats stores the checking result of num_nan, num_inf and num_zero.
   stats->Resize({static_cast<int64_t>(3)});
-  int64_t* stats_ptr = ctx.template Alloc<int64_t>(stats);
+  int64_t* stats_ptr = dev_ctx.template Alloc<int64_t>(stats);
 
   // values stores the max_value, min_value and mean_value.
   values->Resize({static_cast<int64_t>(3)});
-  float* values_ptr = ctx.template Alloc<float>(values);
+  float* values_ptr = dev_ctx.template Alloc<float>(values);
+
+  if (tensor.numel() == 0) {
+    stats_ptr[0] = 0;
+    stats_ptr[1] = 0;
+    stats_ptr[2] = 0;
+    values_ptr[0] = static_cast<float>(0);
+    values_ptr[1] = static_cast<float>(0);
+    values_ptr[2] = static_cast<float>(0);
+    return;
+  }
 
   std::string cpu_hint_str =
       phi::funcs::GetCpuHintString<T>(op_type, var_name, tensor.place());
@@ -61,4 +71,6 @@ PD_REGISTER_KERNEL(check_numerics,
                    phi::dtype::float16,
                    phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
-                   phi::dtype::complex<double>) {}
+                   phi::dtype::complex<double>,
+                   phi::dtype::float8_e4m3fn,
+                   phi::dtype::float8_e5m2) {}

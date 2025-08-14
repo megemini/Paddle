@@ -1,6 +1,11 @@
 # compatible utils used for fluid op system
 add_subdirectory(compat)
 add_subdirectory(distributed)
+add_subdirectory(memory)
+add_subdirectory(platform)
+add_subdirectory(framework)
+add_subdirectory(vocab)
+add_subdirectory(operators)
 
 if(WITH_GPU)
   proto_library(external_error_proto SRCS external_error.proto)
@@ -31,6 +36,7 @@ collect_srcs(
   selected_rows_impl.cc
   selected_rows.cc
   device_context.cc
+  cuda_stream.cc
   custom_kernel.cc
   mixed_vector.cc
   generator.cc

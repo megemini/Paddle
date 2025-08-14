@@ -20,9 +20,25 @@ limitations under the License. */
 #include <curand_kernel.h>
 #endif
 
+#ifdef PADDLE_WITH_HIP
+#include <hip/hip_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hiprand.h>
+#include <hiprand_kernel.h>
+#endif
+
 #include "paddle/phi/backends/gpu/gpu_launch_config.h"
 #include "paddle/phi/kernels/funcs/aligned_vector.h"
+#include "paddle/phi/kernels/funcs/functors.h"
 #include "paddle/phi/kernels/funcs/layer_norm_impl.cu.h"
+
+#ifdef PADDLE_WITH_HIP
+#define GPU(str) hip##str
+#define GPURAND(str) hiprand##str
+#else
+#define GPU(str) cuda##str
+#define GPURAND(str) curand##str
+#endif
 
 namespace phi {
 namespace fusion {
@@ -36,11 +52,11 @@ namespace fusion {
  * 2D grids: gridDim.y = rows
  */
 inline phi::backends::gpu::GpuLaunchConfig Get1DBlocksAnd2DGrids(
-    const phi::GPUContext &ctx,
-    const uint32_t rows,
-    const uint32_t cols,
+    const phi::GPUContext &dev_ctx,
+    const uint64_t rows,
+    const uint64_t cols,
     const int vec_size) {
-  const uint32_t tmp_cols = cols / vec_size;
+  const uint64_t tmp_cols = cols / static_cast<uint64_t>(vec_size);
   // NOTE(wangxi): We set max_block_size to 512, for `FusedResidualDropoutBias`
   // needs too many register resources. If data_type is float16, CUDA
   // error(701) will occur when block_size is 1024. Which error is
@@ -48,41 +64,53 @@ inline phi::backends::gpu::GpuLaunchConfig Get1DBlocksAnd2DGrids(
   // occur because it did not have appropriate resources.
   // Of course, this kernel can be optimized later to reduce the use
   // of registers.
-  int threads = std::max(static_cast<uint32_t>(32),
-                         std::min(tmp_cols,
-                                  static_cast<uint32_t>(std::min(
-                                      ctx.GetMaxThreadsPerBlock(), 512))));
-  const auto blocks_x =
-      std::max(static_cast<uint32_t>(1), (tmp_cols + threads - 1) / threads);
-  const auto blocks_y = std::max(static_cast<uint32_t>(1), rows);
+  const uint64_t threads =
+      std::max(static_cast<uint64_t>(32),
+               std::min(tmp_cols,
+                        static_cast<uint64_t>(
+                            std::min(dev_ctx.GetMaxThreadsPerBlock(), 512))));
+  const uint64_t blocks_x = std::min(
+      static_cast<uint64_t>(65536),
+      std::max(static_cast<uint64_t>(1), (tmp_cols + threads - 1) / threads));
+  uint64_t blocks_y = std::max(static_cast<uint64_t>(1), rows);
+  int blocks_z = 1;
+  if (blocks_y >= 65536) {
+    blocks_z = 1024;
+    blocks_y = (blocks_y + blocks_z - 1) / blocks_z;
+    blocks_y = blocks_y >= 65536 ? 65535 : blocks_y;
+  }
   phi::backends::gpu::GpuLaunchConfig config;
-  config.block_per_grid.x = blocks_x;
-  config.block_per_grid.y = blocks_y;
+  config.block_per_grid.x = static_cast<uint32_t>(blocks_x);
+  config.block_per_grid.y = static_cast<uint32_t>(blocks_y);
+  config.block_per_grid.z = static_cast<uint32_t>(blocks_z);
   config.thread_per_block.x = threads;
   return config;
 }
 
 template <int VecSize>
-__forceinline__ __device__ void RandVec(curandStatePhilox4_32_10_t *state,
+__forceinline__ __device__ void RandVec(GPURAND(StatePhilox4_32_10_t) * state,
                                         float *data);
 
 template <>
-__forceinline__ __device__ void RandVec<1>(curandStatePhilox4_32_10_t *state,
+__forceinline__ __device__ void RandVec<1>(GPURAND(StatePhilox4_32_10_t) *
+                                               state,
                                            float *data) {
-  data[0] = curand_uniform(state);
+  data[0] = GPURAND(_uniform)(state);
 }
 
 template <>
-__forceinline__ __device__ void RandVec<2>(curandStatePhilox4_32_10_t *state,
+__forceinline__ __device__ void RandVec<2>(GPURAND(StatePhilox4_32_10_t) *
+                                               state,
                                            float *data) {
-  data[0] = curand_uniform(state);
-  data[1] = curand_uniform(state);
+  data[0] = GPURAND(_uniform)(state);
+  data[1] = GPURAND(_uniform)(state);
 }
 
 template <>
-__forceinline__ __device__ void RandVec<4>(curandStatePhilox4_32_10_t *state,
+__forceinline__ __device__ void RandVec<4>(GPURAND(StatePhilox4_32_10_t) *
+                                               state,
                                            float *data) {
-  float4 rand4 = curand_uniform4(state);
+  float4 rand4 = GPURAND(_uniform4)(state);
   data[0] = rand4.x;
   data[1] = rand4.y;
   data[2] = rand4.w;
@@ -90,16 +118,17 @@ __forceinline__ __device__ void RandVec<4>(curandStatePhilox4_32_10_t *state,
 }
 
 template <>
-__forceinline__ __device__ void RandVec<8>(curandStatePhilox4_32_10_t *state,
+__forceinline__ __device__ void RandVec<8>(GPURAND(StatePhilox4_32_10_t) *
+                                               state,
                                            float *data) {
   RandVec<4>(state, data);
   RandVec<4>(state, data + 4);
 }
 
 template <typename T>
-inline void SetZero(const phi::GPUContext &ctx, T *ptr, const size_t size) {
+inline void SetZero(const phi::GPUContext &dev_ctx, T *ptr, const size_t size) {
   PADDLE_ENFORCE_GPU_SUCCESS(
-      cudaMemsetAsync(ptr, 0, size * sizeof(T), ctx.stream()));
+      GPU(MemsetAsync)(ptr, 0, size * sizeof(T), dev_ctx.stream()));
 }
 
 /**

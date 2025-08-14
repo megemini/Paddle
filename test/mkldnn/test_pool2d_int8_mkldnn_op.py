@@ -12,18 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
 from op_test import OpTest
+
+sys.path.append("../deprecated/legacy_test")
 from test_pool2d_op import TestPool2D_Op, max_pool2D_forward_naive
 
 from paddle.base import core
 
 
-class TestPool2DMKLDNNInt8_Op(TestPool2D_Op):
+class TestPool2DONEDNNInt8_Op(TestPool2D_Op):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
+        self.check_pir_onednn = True
 
     def init_data_type(self):
         self.dtype = np.int8
@@ -52,16 +56,19 @@ class TestPool2DMKLDNNInt8_Op(TestPool2D_Op):
         self.outputs = {'Out': output}
 
     def test_check_output(self):
-        # TODO(wangzhongpu): support mkldnn op in dygraph mode
+        # TODO(wangzhongpu): support onednn op in dygraph mode
         self.check_output_with_place(
-            core.CPUPlace(), atol=1e-5, check_dygraph=False
+            core.CPUPlace(),
+            atol=1e-5,
+            check_dygraph=False,
+            check_pir_onednn=True,
         )
 
     def test_check_grad(self):
         pass
 
 
-class TestCase1Avg(TestPool2DMKLDNNInt8_Op):
+class TestCase1Avg(TestPool2DONEDNNInt8_Op):
     def init_test_case(self):
         self.shape = [2, 3, 7, 7]
         self.ksize = [3, 3]
@@ -75,7 +82,7 @@ class TestCase1Avg(TestPool2DMKLDNNInt8_Op):
         self.exclusive = True
 
 
-class TestCase2Avg(TestPool2DMKLDNNInt8_Op):
+class TestCase2Avg(TestPool2DONEDNNInt8_Op):
     def init_test_case(self):
         self.shape = [2, 3, 7, 7]
         self.ksize = [3, 3]
@@ -89,7 +96,7 @@ class TestCase2Avg(TestPool2DMKLDNNInt8_Op):
         self.exclusive = False
 
 
-class TestCase0Max(TestPool2DMKLDNNInt8_Op):
+class TestCase0Max(TestPool2DONEDNNInt8_Op):
     def init_pool_type(self):
         self.pool_type = "max"
         self.pool2D_forward_naive = max_pool2D_forward_naive
@@ -124,7 +131,7 @@ def create_test_s8_u8_class(parent):
     globals()[cls_name_u8] = TestU8Case
 
 
-create_test_s8_u8_class(TestPool2DMKLDNNInt8_Op)
+create_test_s8_u8_class(TestPool2DONEDNNInt8_Op)
 create_test_s8_u8_class(TestCase1Avg)
 create_test_s8_u8_class(TestCase2Avg)
 create_test_s8_u8_class(TestCase0Max)

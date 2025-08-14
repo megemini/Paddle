@@ -20,60 +20,121 @@ import paddle
 
 
 class ApiOnesTest(unittest.TestCase):
-    def test_paddle_ones(self):
+    def test_static_ones(self):
+        paddle.enable_static()
+        with paddle.static.program_guard(paddle.static.Program()):
+            ones = paddle.ones(10, dtype=paddle.float32)
+            place = paddle.CPUPlace()
+            exe = paddle.static.Executor(place)
+            (result,) = exe.run(fetch_list=[ones])
+            expect = np.ones([10], dtype="float32")
+        np.testing.assert_equal(result, expect)
+
+        with paddle.static.program_guard(paddle.static.Program()):
+            ones = paddle.ones(10, 2, 3, dtype=paddle.float32)
+            place = paddle.CPUPlace()
+            exe = paddle.static.Executor(place)
+            (result,) = exe.run(fetch_list=[ones])
+            expect = np.ones([10, 2, 3], dtype="float32")
+        np.testing.assert_equal(result, expect)
+
+        with paddle.static.program_guard(paddle.static.Program()):
+            ones = paddle.ones([10, 2, 3], dtype=paddle.float32)
+            place = paddle.CPUPlace()
+            exe = paddle.static.Executor(place)
+            (result,) = exe.run(fetch_list=[ones])
+            expect = np.ones([10, 2, 3], dtype="float32")
+        np.testing.assert_equal(result, expect)
+
+        with paddle.static.program_guard(paddle.static.Program()):
+            ones = paddle.ones(size=[10, 2, 3], dtype=paddle.float32)
+            place = paddle.CPUPlace()
+            exe = paddle.static.Executor(place)
+            (result,) = exe.run(fetch_list=[ones])
+            expect = np.ones([10, 2, 3], dtype="float32")
+        np.testing.assert_equal(result, expect)
+
+        with paddle.static.program_guard(paddle.static.Program()):
+            ones = paddle.ones([10, 2, 3], paddle.float32)
+            place = paddle.CPUPlace()
+            exe = paddle.static.Executor(place)
+            (result,) = exe.run(fetch_list=[ones])
+            expect = np.ones([10, 2, 3], dtype="float32")
+        np.testing.assert_equal(result, expect)
+
+        with paddle.static.program_guard(paddle.static.Program()):
+            ones = paddle.ones([10, 2, 3], paddle.float32)
+            place = paddle.CPUPlace()
+            exe = paddle.static.Executor(place)
+            (result,) = exe.run(fetch_list=[ones])
+            expect = np.ones([10, 2, 3], dtype="float32")
+        np.testing.assert_equal(result, expect)
+
+        with paddle.static.program_guard(paddle.static.Program()):
+            ones = paddle.ones(shape=[10, 2, 3], dtype=paddle.float32)
+            place = paddle.CPUPlace()
+            exe = paddle.static.Executor(place)
+            (result,) = exe.run(fetch_list=[ones])
+            expect = np.ones([10, 2, 3], dtype="float32")
+        np.testing.assert_equal(result, expect)
+
         with paddle.static.program_guard(paddle.static.Program()):
             ones = paddle.ones(shape=[10])
             place = paddle.CPUPlace()
             exe = paddle.static.Executor(place)
             (result,) = exe.run(fetch_list=[ones])
-            expected_result = np.ones(10, dtype="float32")
-        self.assertEqual((result == expected_result).all(), True)
+            expect = np.ones(10, dtype="float32")
+        np.testing.assert_equal(result, expect)
 
         with paddle.static.program_guard(paddle.static.Program()):
             ones = paddle.ones(shape=[10], dtype="float64")
             place = paddle.CPUPlace()
             exe = paddle.static.Executor(place)
             (result,) = exe.run(fetch_list=[ones])
-            expected_result = np.ones(10, dtype="float64")
-        self.assertEqual((result == expected_result).all(), True)
+            expect = np.ones(10, dtype="float64")
+        np.testing.assert_equal(result, expect)
 
         with paddle.static.program_guard(paddle.static.Program()):
             ones = paddle.ones(shape=[10], dtype="int64")
             place = paddle.CPUPlace()
             exe = paddle.static.Executor(place)
             (result,) = exe.run(fetch_list=[ones])
-            expected_result = np.ones(10, dtype="int64")
-        self.assertEqual((result == expected_result).all(), True)
+            expect = np.ones(10, dtype="int64")
+        np.testing.assert_equal(result, expect)
 
-    def test_base_ones(self):
         with paddle.static.program_guard(paddle.static.Program()):
-            ones = paddle.ones(shape=[10], dtype="int64")
+            ones = paddle.ones(shape=10, dtype="int64")
             place = paddle.CPUPlace()
             exe = paddle.static.Executor(place)
             (result,) = exe.run(fetch_list=[ones])
-            expected_result = np.ones(10, dtype="int64")
-        self.assertEqual((result == expected_result).all(), True)
+            expect = np.ones(10, dtype="int64")
+        np.testing.assert_equal(result, expect)
+        paddle.disable_static()
 
+    def test_dygraph_ones(self):
+        paddle.disable_static()
+        result = paddle.ones(10, dtype=paddle.float32)
+        expect = np.ones([10], dtype="float32")
+        np.testing.assert_equal(result, expect)
 
-class ApiOnesZerosError(unittest.TestCase):
-    def test_errors(self):
-        def test_error1():
-            with paddle.static.program_guard(paddle.static.Program()):
-                ones = paddle.ones(shape=10, dtype="int64")
+        result = paddle.ones(10, 2, 3, dtype=paddle.float32)
+        expect = np.ones([10, 2, 3], dtype="float32")
+        np.testing.assert_equal(result, expect)
 
-        self.assertRaises(TypeError, test_error1)
+        result = paddle.ones([10, 2, 3], dtype=paddle.float32)
+        np.testing.assert_equal(result, expect)
 
-        def test_error2():
-            with paddle.static.program_guard(paddle.static.Program()):
-                ones = paddle.ones(shape=10)
+        result = paddle.ones(size=[10, 2, 3], dtype=paddle.float32)
+        np.testing.assert_equal(result, expect)
 
-        self.assertRaises(TypeError, test_error2)
+        result = paddle.ones([10, 2, 3], paddle.float32)
+        np.testing.assert_equal(result, expect)
 
-        def test_error3():
-            with paddle.static.program_guard(paddle.static.Program()):
-                ones = paddle.ones(shape=10, dtype="int64")
+        result = paddle.ones([10, 2, 3], "float32")
+        np.testing.assert_equal(result, expect)
 
-        self.assertRaises(TypeError, test_error3)
+        result = paddle.ones(shape=[10, 2, 3], dtype=paddle.float32)
+        np.testing.assert_equal(result, expect)
 
 
 if __name__ == "__main__":

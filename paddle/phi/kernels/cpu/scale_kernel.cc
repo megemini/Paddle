@@ -20,7 +20,6 @@ limitations under the License. */
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/eigen/common.h"
 
-// See Note [ Why still include the fluid headers? ]
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/kernels/funcs/eigen/eigen_function.h"
 namespace phi {
@@ -29,7 +28,7 @@ template <typename T, typename Context>
 void ScaleKernel(const Context& dev_ctx,
                  const DenseTensor& x,
                  const Scalar& scale,
-                 float bias,
+                 const Scalar& bias,
                  bool bias_after_scale,
                  DenseTensor* out) {
   // calc
@@ -44,12 +43,7 @@ void ScaleKernel(const Context& dev_ctx,
     return;
   }
   phi::funcs::EigenScale<std::decay_t<decltype(dev)>, T>::Eval(
-      dev,
-      eigen_out,
-      eigen_x,
-      scale.to<T>(),
-      static_cast<T>(bias),
-      bias_after_scale);
+      dev, eigen_out, eigen_x, scale.to<T>(), bias.to<T>(), bias_after_scale);
 }
 
 }  // namespace phi

@@ -35,6 +35,10 @@ void TakeAlongAxisGradKernel(const Context& dev_ctx,
   x_grad->Resize(x.dims());
   dev_ctx.template Alloc<T>(x_grad);
 
+  if (x_grad->numel() == 0) {
+    return;
+  }
+
   // Set to zero tensor.
   phi::funcs::SetConstant<Context, T> functor;
   functor(dev_ctx, x_grad, static_cast<T>(0));
@@ -52,10 +56,10 @@ void TakeAlongAxisGradKernel(const Context& dev_ctx,
     phi::funcs::gpu_scatter_add_kernel<T, int64_t>(
         *x_grad, axis, index, out_grad, true, dev_ctx);
   } else {
-    PADDLE_THROW(
-        phi::errors::InvalidArgument("The data type of input index is expected "
-                                     "to be int32 or int64, but recieved %s.",
-                                     phi::DataTypeToString(index_type)));
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "The data type of input index is expected "
+        "to be int32 or int64, but received %s.",
+        phi::DataTypeToString(index_type)));
   }
 }
 

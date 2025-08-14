@@ -12,16 +12,13 @@ charset = utf-8
 trim_trailing_whitespace = true
 insert_final_newline = true
 
-[*.{c,cc,cxx,cpp,cu,cuh,h,hpp,hxx,kps}]
+[*.{c,cc,cxx,cpp,cu,cuh,h,hpp,hxx,kps,yml,yaml}]
 indent_size = 2
 
-[*.{py,java,r}]
+[*.{py,pyi,java,r,toml}]
 indent_size = 4
 
 [Dockerfile.*]
-indent_size = 4
-
-[.flake8]
 indent_size = 4
 
 [*.go]

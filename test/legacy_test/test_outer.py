@@ -15,9 +15,9 @@
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestMultiplyApi(unittest.TestCase):
@@ -34,11 +34,7 @@ class TestMultiplyApi(unittest.TestCase):
             )
             res = paddle.outer(x, y)
 
-            place = (
-                paddle.CUDAPlace(0)
-                if paddle.is_compiled_with_cuda()
-                else paddle.CPUPlace()
-            )
+            place = get_device_place()
             exe = paddle.static.Executor(place)
             outs = exe.run(
                 paddle.static.default_main_program(),
@@ -55,7 +51,6 @@ class TestMultiplyApi(unittest.TestCase):
         res = paddle.outer(x, y)
         return res.numpy()
 
-    @test_with_pir_api
     def test_multiply_static(self):
         np.random.seed(7)
 
@@ -86,6 +81,18 @@ class TestMultiplyApi(unittest.TestCase):
         # test static computation graph: 1-d int64 array
         x_data = np.random.rand(50).astype(np.int64)
         y_data = np.random.rand(50).astype(np.int64)
+        res = self._run_static_graph_case(x_data, y_data)
+        np.testing.assert_allclose(res, np.outer(x_data, y_data), rtol=1e-05)
+
+        # test static computation graph: 3-d int32 big array
+        x_data = np.random.randint(-80000, 80000, [5, 10, 10]).astype(np.int32)
+        y_data = np.random.randint(-80000, 80000, [2, 10]).astype(np.int32)
+        res = self._run_static_graph_case(x_data, y_data)
+        np.testing.assert_allclose(res, np.outer(x_data, y_data), rtol=1e-05)
+
+        # test static computation graph: 3-d int64 big array
+        x_data = np.random.randint(-80000, 80000, [5, 10, 10]).astype(np.int64)
+        y_data = np.random.randint(-80000, 80000, [2, 10]).astype(np.int64)
         res = self._run_static_graph_case(x_data, y_data)
         np.testing.assert_allclose(res, np.outer(x_data, y_data), rtol=1e-05)
 
@@ -140,8 +147,21 @@ class TestMultiplyApi(unittest.TestCase):
         res = self._run_dynamic_graph_case(x_data, y_data)
         np.testing.assert_allclose(res, np.outer(x_data, y_data), rtol=1e-05)
 
+        # test dynamic computation graph: 3-d int32 big array
+        x_data = np.random.randint(-80000, 80000, [5, 10, 10]).astype(np.int32)
+        y_data = np.random.randint(-80000, 80000, [2, 10]).astype(np.int32)
+        res = self._run_dynamic_graph_case(x_data, y_data)
+        np.testing.assert_allclose(res, np.outer(x_data, y_data), rtol=1e-05)
+
+        # test dynamic computation graph: 3-d int64 big array
+        x_data = np.random.randint(-80000, 80000, [5, 10, 10]).astype(np.int64)
+        y_data = np.random.randint(-80000, 80000, [2, 10]).astype(np.int64)
+        res = self._run_dynamic_graph_case(x_data, y_data)
+        np.testing.assert_allclose(res, np.outer(x_data, y_data), rtol=1e-05)
+
 
 class TestMultiplyError(unittest.TestCase):
+
     def test_errors_static(self):
         # test static computation graph: dtype can not be int8
         paddle.enable_static()
@@ -159,18 +179,80 @@ class TestMultiplyError(unittest.TestCase):
         x_data = np.random.randn(200).astype(np.float64)
         y_data = np.random.randn(200).astype(np.float64)
         y = paddle.to_tensor(y_data)
-        self.assertRaises(TypeError, paddle.outer, x_data, y)
+        self.assertRaises(Exception, paddle.outer, x_data, y)
 
         # test dynamic computation graph: dtype must be Tensor type
         x_data = np.random.randn(200).astype(np.float32)
         y_data = np.random.randn(200).astype(np.float32)
         x = paddle.to_tensor(x_data)
-        self.assertRaises(TypeError, paddle.outer, x, y_data)
+        self.assertRaises(Exception, paddle.outer, x, y_data)
 
         # test dynamic computation graph: dtype must be Tensor type
         x_data = np.random.randn(200).astype(np.float32)
         y_data = np.random.randn(200).astype(np.float32)
-        self.assertRaises(TypeError, paddle.outer, x_data, y_data)
+        self.assertRaises(Exception, paddle.outer, x_data, y_data)
+
+
+class TestMultiplyApi_ZeroSize(unittest.TestCase):
+    def test_multiply_dynamic(self):
+        x_data = np.random.rand(5, 10, 0).astype(np.float64)
+        y_data = np.random.rand(0, 10).astype(np.float64)
+        paddle.disable_static()
+        x = paddle.to_tensor(x_data)
+        y = paddle.to_tensor(y_data)
+        x.stop_gradient = False
+        y.stop_gradient = False
+        res = paddle.outer(x, y)
+        np.testing.assert_allclose(
+            res.numpy(), np.outer(x_data, y_data), rtol=1e-05
+        )
+        loss = paddle.sum(res)
+        loss.backward()
+        np.testing.assert_allclose(x.grad.shape, x.shape)
+
+
+class TestOuterAlias(unittest.TestCase):
+    def setUp(self):
+        paddle.disable_static()
+
+    def test_outer_alias(self):
+        """
+        Test the alias of outer function.
+        ``outer(input=x, vec2=y)`` is equivalent to ``outer(x=x, y=y)``
+        """
+        shape_cases = [
+            [2],
+            [2, 4],
+            [2, 4, 8],
+        ]
+        dtype_cases = [
+            "float32",
+            "float64",
+            "int32",
+            "int64",
+        ]
+
+        for shape in shape_cases:
+            for dtype in dtype_cases:
+                x = paddle.rand(shape).astype(dtype)
+                y = paddle.rand(shape).astype(dtype)
+
+                # Test all alias combinations
+                combinations = [
+                    {"x": x, "y": y},
+                    {"input": x, "y": y},
+                    {"x": x, "vec2": y},
+                    {"input": x, "vec2": y},
+                ]
+
+                # Get baseline result
+                expected = np.outer(x.numpy(), y.numpy())
+
+                for params in combinations:
+                    out = paddle.outer(**params)
+                    np.testing.assert_allclose(
+                        out.numpy(), expected, rtol=1e-05
+                    )
 
 
 if __name__ == '__main__':

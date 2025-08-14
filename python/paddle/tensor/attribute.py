@@ -12,23 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO: define functions to get tensor attributes
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 import paddle
 from paddle import _C_ops
+from paddle.utils.decorator_utils import ParamAliasDecorator
 
 from ..base.data_feeder import check_type, check_variable_and_dtype
-from ..base.framework import in_dynamic_or_pir_mode, in_pir_mode
+from ..base.framework import in_dynamic_or_pir_mode, use_pir_api
 from ..common_ops_import import Variable
 from ..framework import LayerHelper, core
 from .creation import _complex_to_real_dtype, assign
 
+if TYPE_CHECKING:
+    from paddle import Tensor
+
 __all__ = []
 
 
-def rank(input):
+def rank(input: Tensor) -> Tensor:
     """
 
     Returns the number of dimensions for a tensor, which is a 0-D int32 Tensor.
@@ -56,7 +62,7 @@ def rank(input):
     return out
 
 
-def shape(input):
+def shape(input: Tensor) -> Tensor:
     """
     Get the shape of the input.
 
@@ -78,11 +84,11 @@ def shape(input):
                 input.shape = [3, 2]
 
     Args:
-        input (Variable): The input can be N-D Tensor or SelectedRows with data type bool, bfloat16, float16, float32, float64, int32, int64.
+        input (Tensor): The input can be N-D Tensor or SelectedRows with data type bool, bfloat16, float16, float32, float64, int32, int64.
                           If input variable is type of SelectedRows, returns the shape of it's inner tensor.
 
     Returns:
-        Variable (Tensor): The shape of the input variable.
+        Tensor: The shape of the input variable.
 
     Examples:
         .. code-block:: python
@@ -99,12 +105,12 @@ def shape(input):
 
             >>> img = np.ones((3, 100, 100)).astype(np.float32)
 
-            >>> res = exe.run(paddle.static.default_main_program(), feed={'x':img}, fetch_list=[output])
+            >>> res = exe.run(paddle.static.default_main_program(), feed={'x': img}, fetch_list=[output])
             >>> print(res)
-            [array([  3, 100, 100], dtype=int32)]
+            [array([  3, 100, 100], dtype=int64)]
     """
     if in_dynamic_or_pir_mode():
-        out = _C_ops.shape(input)
+        out = _C_ops.shape64(input)  # type: ignore
         out.stop_gradient = True
         return out
     else:
@@ -122,6 +128,8 @@ def shape(input):
                 'complex64',
                 'complex128',
                 'uint16',
+                'float8_e4m3fn',
+                'float8_e5m2',
             ],
             'shape',
         )
@@ -137,11 +145,18 @@ def shape(input):
         return out
 
 
-def is_complex(x):
+@ParamAliasDecorator({"x": ["input"]})
+def is_complex(x: Tensor) -> bool:
     """Return whether x is a tensor of complex data type(complex64 or complex128).
+
+
+    .. note::
+    Alias Support: The parameter name ``input`` can be used as an alias for ``x``.
+    For example, ``input=tensor_x`` is equivalent to ``x=tensor_x``.
 
     Args:
         x (Tensor): The input tensor.
+        input: An alias for ``x`` , with identical behavior.
 
     Returns:
         bool: True if the data type of the input is complex data type, otherwise false.
@@ -177,7 +192,7 @@ def is_complex(x):
     return is_complex_dtype
 
 
-def is_floating_point(x):
+def is_floating_point(x: Tensor) -> bool:
     """
     Returns whether the dtype of `x` is one of paddle.float64, paddle.float32, paddle.float16, and paddle.bfloat16.
 
@@ -199,7 +214,9 @@ def is_floating_point(x):
             >>> print(paddle.is_floating_point(y))
             False
     """
-    if not isinstance(x, (paddle.Tensor, paddle.static.Variable)):
+    if not isinstance(
+        x, (paddle.Tensor, paddle.static.Variable, paddle.pir.Value)
+    ):
         raise TypeError(f"Expected Tensor, but received type of x: {type(x)}")
     dtype = x.dtype
     is_fp_dtype = (
@@ -207,12 +224,16 @@ def is_floating_point(x):
         or dtype == core.VarDesc.VarType.FP64
         or dtype == core.VarDesc.VarType.FP16
         or dtype == core.VarDesc.VarType.BF16
+        or dtype == core.DataType.FLOAT32
+        or dtype == core.DataType.FLOAT64
+        or dtype == core.DataType.FLOAT16
+        or dtype == core.DataType.BFLOAT16
     )
     return is_fp_dtype
 
 
-def is_integer(x):
-    """Return whether x is a tensor of integeral data type.
+def is_integer(x: Tensor) -> bool:
+    """Return whether x is a tensor of integral data type.
 
     Args:
         x (Tensor): The input tensor.
@@ -238,13 +259,13 @@ def is_integer(x):
             True
     """
     if not isinstance(
-        x, (paddle.Tensor, paddle.static.Variable, paddle.pir.OpResult)
+        x, (paddle.Tensor, paddle.static.Variable, paddle.pir.Value)
     ):
         raise TypeError(f"Expected Tensor, but received type of x: {type(x)}")
     dtype = x.dtype
 
     is_int_dtype = False
-    if not in_pir_mode():
+    if not use_pir_api():
         is_int_dtype = (
             dtype == core.VarDesc.VarType.UINT8
             or dtype == core.VarDesc.VarType.INT8
@@ -254,7 +275,7 @@ def is_integer(x):
         )
     else:
         is_int_dtype = (
-            dtype == core.DataType.INT8
+            dtype == core.DataType.UINT8
             or dtype == core.DataType.INT8
             or dtype == core.DataType.INT16
             or dtype == core.DataType.INT32
@@ -264,13 +285,13 @@ def is_integer(x):
     return is_int_dtype
 
 
-def real(x, name=None):
+def real(x: Tensor, name: str | None = None) -> Tensor:
     """
     Returns a new Tensor containing real values of the input Tensor.
 
     Args:
         x (Tensor): the input Tensor, its data type could be complex64 or complex128.
-        name (str, optional): The default value is None. Normally there is no need for
+        name (str|None, optional): The default value is None. Normally there is no need for
             user to set this property. For more information, please refer to :ref:`api_guide_Name` .
 
     Returns:
@@ -312,13 +333,13 @@ def real(x, name=None):
         return out
 
 
-def imag(x, name=None):
+def imag(x: Tensor, name: str | None = None) -> Tensor:
     """
     Returns a new tensor containing imaginary values of input tensor.
 
     Args:
         x (Tensor): the input tensor, its data type could be complex64 or complex128.
-        name (str, optional): The default value is None. Normally there is no need for
+        name (str|None, optional): The default value is None. Normally there is no need for
             user to set this property. For more information, please refer to :ref:`api_guide_Name` .
 
     Returns:

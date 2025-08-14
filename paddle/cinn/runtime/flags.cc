@@ -22,16 +22,8 @@
 #include <unordered_set>
 
 #include "paddle/cinn/common/target.h"
-#include "paddle/utils/flags.h"
-
-#ifdef CINN_WITH_CUDNN
-PD_DEFINE_bool(
-    cinn_cudnn_deterministic,
-    false,
-    "Whether allow using an autotuning algorithm for convolution "
-    "operator. The autotuning algorithm may be non-deterministic. If "
-    "true, the algorithm is deterministic.");
-#endif
+#include "paddle/common/enforce.h"
+#include "paddle/common/flags.h"
 
 using ::paddle::flags::BoolFromEnv;
 using ::paddle::flags::DoubleFromEnv;
@@ -48,10 +40,48 @@ PD_DEFINE_string(cinn_nvcc_cmd_path,
                                "/usr/local/cuda/bin"),
                  "Setting nvcc default path!");
 
+PD_DEFINE_string(cinn_kernel_execution_label,
+                 StringFromEnv("FLAGS_cinn_kernel_execution_label",
+                               "CINN KERNEL EXECUTE"),
+                 "Label used to measure kernel execution time");
+
+PD_DEFINE_string(cinn_tile_config_filename_label,
+                 StringFromEnv("FLAGS_cinn_tile_config_filename_label", ""),
+                 "Label used to name file of tile config database");
+
+PD_DEFINE_string(
+    tile_config_policy,
+    StringFromEnv("FLAGS_tile_config_policy", "default"),
+    "Which config does the compiler use, optimal, custom or default");
+
 PD_DEFINE_int32(cinn_parallel_compile_thread,
                 Int32FromEnv("FLAGS_cinn_parallel_compile_thread",
                              (std::thread::hardware_concurrency() >> 1)),
                 "How much thread the parallel compile used.");
+
+PD_DEFINE_bool(cinn_measure_kernel_time,
+               BoolFromEnv("FLAGS_cinn_measure_kernel_time", false),
+               "Whether to enable schedule config search mode.");
+
+PD_DEFINE_bool(cinn_enable_grid_reduce,
+               BoolFromEnv("FLAGS_cinn_enable_grid_reduce", true),
+               "Whether to enable the grid reduce method.");
+
+PD_DEFINE_bool(cinn_enable_tile_broadcast,
+               BoolFromEnv("FLAGS_cinn_enable_tile_broadcast", true),
+               "Whether to enable the tile broadcast tactic.");
+
+PD_DEFINE_bool(cinn_enable_tile_transpose,
+               BoolFromEnv("FLAGS_cinn_enable_tile_transpose", true),
+               "Whether to enable the tile transpose tactic.");
+
+PD_DEFINE_bool(cinn_enable_rearrange_load,
+               BoolFromEnv("FLAGS_cinn_enable_rearrange_load", true),
+               "Whether to enable rearranging load instructions.");
+
+PD_DEFINE_bool(cinn_enable_vectorize,
+               BoolFromEnv("FLAGS_cinn_enable_vectorize", false),
+               "Whether to enable the grid reduce method.");
 
 PD_DEFINE_bool(cinn_use_op_fusion,
                BoolFromEnv("FLAGS_cinn_use_op_fusion", true),
@@ -61,13 +91,10 @@ PD_DEFINE_bool(general_fusion_merge_pass,
                BoolFromEnv("FLAGS_general_fusion_merge_pass", true),
                "Whether to use general fusion_merge pass.");
 
-PD_DEFINE_bool(cinn_new_group_scheduler,
-               BoolFromEnv("FLAGS_cinn_new_group_scheduler", false),
-               "Whether to use new group scheduler.");
-
-PD_DEFINE_bool(cinn_bucket_compile,
-               BoolFromEnv("FLAGS_cinn_bucket_compile", false),
-               "Whether to enable bucket compile for dynamic shape.");
+PD_DEFINE_bool(
+    cinn_bc_branch_optimize,
+    BoolFromEnv("FLAGS_cinn_bc_branch_optimize", true),
+    "Whether to open the broadcast branch optimization in frontend.");
 
 PD_DEFINE_bool(cinn_use_common_subexpression_elimination,
                BoolFromEnv("FLAGS_cinn_use_common_subexpression_elimination",
@@ -97,7 +124,7 @@ PD_DEFINE_bool(cinn_enable_map_expr_dynamic_shape,
 
 PD_DEFINE_bool(cinn_enable_map_expr_index_detail,
                BoolFromEnv("FLAGS_cinn_enable_map_expr_index_detail", false),
-               "It controls whether to display datail tensor index");
+               "It controls whether to display detail tensor index");
 
 PD_DEFINE_bool(
     cinn_use_custom_call,
@@ -116,7 +143,7 @@ PD_DEFINE_string(cinn_check_fusion_accuracy_pass,
 
 PD_DEFINE_bool(cinn_use_cuda_vectorize,
                BoolFromEnv("FLAGS_cinn_use_cuda_vectorize", false),
-               "Whether use cuda vectroize on schedule config");
+               "Whether use cuda vectorize on schedule config");
 
 PD_DEFINE_bool(use_reduce_split_pass,
                BoolFromEnv("FLAGS_use_reduce_split_pass", false),
@@ -128,7 +155,7 @@ PD_DEFINE_bool(cinn_use_dense_merge_pass,
 
 PD_DEFINE_bool(
     nvrtc_compile_to_cubin,
-    BoolFromEnv("FLAGS_nvrtc_compile_to_cubin", false),
+    BoolFromEnv("FLAGS_nvrtc_compile_to_cubin", true),
     "Whether nvrtc compile cuda source into cubin instead of ptx (only "
     "works after cuda-11.1).");
 
@@ -141,8 +168,13 @@ PD_DEFINE_bool(
     BoolFromEnv("FLAGS_cinn_nvrtc_cubin_with_fmad", true),
     "Whether nvrtc enables fmad when compile to cubin. This flag only works "
     "when FLAGS_nvrtc_compile_to_cubin=true. Fmad is the cuda speed up "
-    "technique which contract fp mulitplication and addition/subtraction into "
+    "technique which contract fp multiplication and addition/subtraction into "
     "multiply-add operation. It may result in different fp precision.");
+
+PD_DEFINE_bool(
+    cinn_compile_with_hiprtc,
+    BoolFromEnv("FLAGS_cinn_compile_with_hiprtc", false),
+    "Compile hip source code with hiprtc if true, otherwise use hipcc.");
 
 // FLAGS for performance analysis and accuracy debug
 PD_DEFINE_bool(cinn_sync_run,
@@ -194,30 +226,34 @@ PD_DEFINE_string(
     StringFromEnv("FLAGS_cinn_dump_group_instruction", ""),
     "Specify the path for dump instruction by group, which is used for debug.");
 
+// Todo(CZ): support kernel name check for multiple kernel code gen.
+PD_DEFINE_string(cinn_debug_custom_code_path,
+                 StringFromEnv("FLAGS_cinn_debug_custom_code_path", ""),
+                 "Specify custom code path for cinn.");
+
 PD_DEFINE_string(cinn_pass_visualize_dir,
                  StringFromEnv("FLAGS_cinn_pass_visualize_dir", ""),
                  "Specify the directory path of pass visualize file of graph, "
                  "which is used for debug.");
 
+PD_DEFINE_bool(cinn_runtime_display_debug_info,
+               false,
+               "Whether to display debug information in runtime");
+
 PD_DEFINE_bool(enable_auto_tuner,
                BoolFromEnv("FLAGS_enable_auto_tuner", false),
                "Whether enable auto tuner.");
-
-PD_DEFINE_bool(auto_schedule_use_cost_model,
-               BoolFromEnv("FLAGS_auto_schedule_use_cost_model", true),
-               "Whether to use cost model in auto schedule, this is an "
-               "on-developing flag and it will be removed when "
-               "cost model is stable.");
 
 PD_DEFINE_bool(
     enhance_vertical_fusion_with_recompute,
     BoolFromEnv("FLAGS_enhance_vertical_fusion_with_recompute", true),
     "Whether to enhance check logic on vertical fusion with recompute");
 
-PD_DEFINE_bool(verbose_function_register,
-               BoolFromEnv("FLAGS_verbose_function_register", false),
-               "Whether to verbose function regist log. This will only work if "
-               "CINN build with flag -DWITH_DEBUG=ON.");
+PD_DEFINE_bool(
+    verbose_function_register,
+    BoolFromEnv("FLAGS_verbose_function_register", false),
+    "Whether to verbose function register log. This will only work if "
+    "CINN build with flag -DWITH_DEBUG=ON.");
 
 PD_DEFINE_int32(
     cinn_profiler_state,
@@ -239,6 +275,29 @@ PD_DEFINE_bool(cinn_use_cutlass,
                BoolFromEnv("FLAGS_cinn_use_cutlass", false),
                "Whether to use cutlass kernels");
 
+PD_DEFINE_string(cinn_convert_static_dim_to_dynamic_dim,
+                 StringFromEnv("FLAGS_cinn_convert_static_dim_to_dynamic_dim",
+                               ""),
+                 "A test flag whether to convert static dim to dynamic, e.g.: "
+                 "FLAGS_cinn_convert_static_dim_to_dynamic_dim=128:s0,299:s1");
+
+PD_DEFINE_string(cinn_convert_dynamic_dim_to_static_dim,
+                 StringFromEnv("FLAGS_cinn_convert_dynamic_dim_to_static_dim",
+                               ""),
+                 "A test flag whether to convert dynamic to static dim, e.g.: "
+                 "FLAGS_cinn_convert_dynamic_dim_to_static_dim=s0:128,s1:299");
+PD_DEFINE_bool(cinn_check_tensor_buffer_map,
+               BoolFromEnv("FLAGS_cinn_check_tensor_buffer_map", false),
+               "Whether to check tensor buffer mapping in cinn ir.");
+
+PD_DEFINE_bool(cinn_longlong2int,
+               BoolFromEnv("FLAGS_cinn_longlong2int", true),
+               "Whether to cast long long to int for integer.");
+
+PD_DEFINE_bool(cinn_check_jit_instruction_shape,
+               BoolFromEnv("FLAGS_cinn_check_jit_instruction_shape", false),
+               "Whether to check shape in jit instruction.");
+
 namespace cinn {
 namespace runtime {
 
@@ -256,23 +315,6 @@ bool CheckStringFlagFalse(const std::string& flag) {
   static const std::unordered_set<std::string> kFalse = {
       "0", "f", "false", "n", "no", "F", "False", "FALSE", "N", "No", "NO"};
   return flag.empty() || kFalse.count(flag);
-}
-
-void SetCinnCudnnDeterministic(bool state) {
-#ifdef CINN_WITH_CUDNN
-  FLAGS_cinn_cudnn_deterministic = state;
-#else
-  LOG(WARNING) << "CINN is compiled without cuDNN, this api is invalid!";
-#endif
-}
-
-bool GetCinnCudnnDeterministic() {
-#ifdef CINN_WITH_CUDNN
-  return FLAGS_cinn_cudnn_deterministic;
-#else
-  LOG(FATAL) << "CINN is compiled without cuDNN, this api is invalid!";
-  return false;
-#endif
 }
 
 uint64_t RandomSeed::seed_ = 0ULL;
@@ -296,6 +338,8 @@ bool CanUseNvccCompiler() {
          (!FLAGS_cinn_compile_with_nvrtc);
 }
 
+bool UseHipccCompiler() { return !FLAGS_cinn_compile_with_hiprtc; }
+
 bool IsCompiledWithCUDA() {
 #if !defined(CINN_WITH_CUDA)
   return false;
@@ -312,16 +356,58 @@ bool IsCompiledWithCUDNN() {
 #endif
 }
 
+void CheckCompileOptionImpl(cinn::common::UnknownArch) {
+  PADDLE_THROW(::common::errors::Fatal("unknown architecture"));
+}
+
+void CheckCompileOptionImpl(cinn::common::X86Arch) {
+  // Do nothing.
+}
+
+void CheckCompileOptionImpl(cinn::common::ARMArch) {
+  // Do nothing.
+}
+
+void CheckCompileOptionImpl(cinn::common::NVGPUArch) {
+#if defined(CINN_WITH_CUDNN)
+  // Do nothing;
+#else
+  PADDLE_THROW(::common::errors::Fatal(
+      "Current CINN version does not support NVGPU, please try to "
+      "recompile with -DWITH_CUDA."));
+#endif
+}
+
+void CheckCompileOptionImpl(cinn::common::HygonDCUArchHIP) {
+#ifdef CINN_WITH_HIP
+  // Do nothing;
+#else
+  PADDLE_THROW(::common::errors::Fatal(
+      "Current CINN version does not support HygonDCU, please try to "
+      "recompile with -DWITH_ROCM."));
+#endif
+}
+
+void CheckCompileOptionImpl(cinn::common::HygonDCUArchSYCL) {
+#ifdef CINN_WITH_SYCL
+  // Do nothing;
+#else
+  PADDLE_THROW(::common::errors::Fatal(
+      "Current CINN version does not support HygonDCU, please try to "
+      "recompile with -DWITH_ROCM."));
+#endif
+}
+
+void CheckCompileOption(cinn::common::Arch arch) {
+  return std::visit([](const auto& impl) { CheckCompileOptionImpl(impl); },
+                    arch.variant());
+}
+
 cinn::common::Target CurrentTarget::target_ = cinn::common::DefaultTarget();
 
 void CurrentTarget::SetCurrentTarget(const cinn::common::Target& target) {
-  if (!IsCompiledWithCUDA() &&
-      target.arch == cinn::common::Target::Arch::NVGPU) {
-    LOG(FATAL) << "Current CINN version does not support NVGPU, please try to "
-                  "recompile with -DWITH_CUDA.";
-  } else {
-    target_ = target;
-  }
+  CheckCompileOption(target.arch);
+  target_ = target;
 }
 
 cinn::common::Target& CurrentTarget::GetCurrentTarget() { return target_; }

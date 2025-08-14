@@ -18,7 +18,7 @@ import numpy as np
 from op_test import OpTest
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
+from paddle.base import core
 
 
 def compute_graph_send_uv(inputs, attributes):
@@ -148,6 +148,30 @@ class TestCase7(TestGraphSendUVOp):
         self.message_op = 'MUL'
 
 
+class TestCase8_ZeroSize(TestGraphSendUVOp):
+    def set_config(self):
+        self.x = np.random.random((100, 0)).astype("float64")
+        self.y = np.random.random((100, 0)).astype("float64")
+        index = np.random.randint(0, 100, (15, 2)).astype(np.int64)
+        self.src_index = index[:, 0]
+        self.dst_index = index[:, 1]
+        self.message_op = 'ADD'
+
+    def test_check_output(self):
+        self.check_output_with_place(core.CPUPlace(), check_pir=True)
+        if paddle.is_compiled_with_cuda():
+            self.check_output_with_place(core.CUDAPlace(0), check_pir=True)
+
+    def test_check_grad(self):
+        self.check_grad_with_place(
+            core.CPUPlace(), ['x', 'y'], 'out', check_pir=True
+        )
+        if paddle.is_compiled_with_cuda():
+            self.check_grad_with_place(
+                core.CUDAPlace(0), ['x', 'y'], 'out', check_pir=True
+            )
+
+
 class API_GeometricSendUVTest(unittest.TestCase):
     def test_compute_all_dygraph(self):
         paddle.disable_static()
@@ -190,12 +214,9 @@ class API_GeometricSendUVTest(unittest.TestCase):
                 paddle_res,
                 rtol=1e-05,
                 atol=1e-06,
-                err_msg='two value is                {}\n{}, check diff!'.format(
-                    np_res, paddle_res
-                ),
+                err_msg=f'two value is                {np_res}\n{paddle_res}, check diff!',
             )
 
-    @test_with_pir_api
     def test_compute_all_static(self):
         paddle.enable_static()
         with paddle.static.program_guard(paddle.static.Program()):
@@ -260,9 +281,7 @@ class API_GeometricSendUVTest(unittest.TestCase):
                     paddle_res,
                     rtol=1e-05,
                     atol=1e-06,
-                    err_msg='two value is                    {}\n{}, check diff!'.format(
-                        np_res, paddle_res
-                    ),
+                    err_msg=f'two value is                    {np_res}\n{paddle_res}, check diff!',
                 )
 
 

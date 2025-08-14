@@ -16,17 +16,23 @@
 #include "paddle/fluid/eager/api/manual/eager_manual/dygraph_forward_api.h"
 #include "paddle/fluid/eager/api/manual/eager_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
+
+COMMON_DECLARE_bool(check_cuda_error);
 
 paddle::Tensor reshard_ad_function(
     const paddle::Tensor& input,
-    const phi::distributed::TensorDistAttr dist_attr) {
+    const phi::distributed::TensorDistAttr dist_attr,
+    paddle::optional<paddle::Tensor*> input_out) {
 #ifdef PADDLE_WITH_DISTRIBUTE
   VLOG(3) << "Running AD API: "
           << "reshard dygraph";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("reshard_ad_function begin");
+  }
   // Dygraph Record Event
-  paddle::platform::RecordEvent dygraph_entrance_record_event(
-      "reshard dygraph", paddle::platform::TracerEventType::Communication, 1);
+  phi::RecordEvent dygraph_entrance_record_event(
+      "reshard dygraph", phi::TracerEventType::Communication, 1);
 
   // Get Input AutoGradMeta
   egr::AutogradMeta* input_autograd_meta =
@@ -40,17 +46,15 @@ paddle::Tensor reshard_ad_function(
 
   // Set grad_node before API Call
   if (require_any_grad) {
-    paddle::platform::RecordEvent node_creation_record_event(
-        "reshard node_creation",
-        paddle::platform::TracerEventType::Communication,
-        1);
+    phi::RecordEvent node_creation_record_event(
+        "reshard node_creation", phi::TracerEventType::Communication, 1);
 
     // Node Construction
     grad_node =
         std::shared_ptr<ReshardGradNode>(new ReshardGradNode(1, 1));  // NOLINT
 
     // Set TensorWrappers for Forward Inputs if needed
-    grad_node->SetTensorWrapperNoNeedBufferInput(input);
+    grad_node->SetTensorWrapperNoNeedBuffer_Input(input);
   }
 
   // Forward API Call
@@ -77,12 +81,14 @@ paddle::Tensor reshard_ad_function(
     }
     grad_node->SetGradInMeta(out, 0);
   }
-
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("reshard_ad_function finish");
+  }
   return out;
 #else
-  PADDLE_THROW(phi::errors::Unavailable(
+  PADDLE_THROW(common::errors::Unavailable(
       "Reshard is not supported in this version of Paddle. Try to recompile it "
-      "with WITH_DISTRIBTUE=ON and reinstall this package."));
+      "with WITH_DISTRIBUTE=ON and reinstall this package."));
   return paddle::Tensor();
 #endif
 }

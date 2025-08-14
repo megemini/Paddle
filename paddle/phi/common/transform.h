@@ -17,9 +17,9 @@ limitations under the License. */
 #include <algorithm>
 #include <type_traits>
 
+#include "paddle/common/hostdevice.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/hostdevice.h"
 
 #if defined(__NVCC__) || defined(__HIPCC__)
 #include <thrust/execution_policy.h>
@@ -29,7 +29,7 @@ limitations under the License. */
 
 namespace phi {
 
-// Transform applys a unary or a binary functor on each element in a
+// Transform applies a unary or a binary functor on each element in a
 // range defined by a pair of iterators.
 //
 // - The specialization for CPU calls std::transform.
@@ -143,10 +143,17 @@ struct Transform<phi::GPUContext> {
                   OutputIter result,
                   UnaryOperation op) {
     auto place = context.GetPlace();
+#ifndef PADDLE_WITH_CUSTOM_DEVICE
     PADDLE_ENFORCE_EQ(place.GetType() == phi::AllocationType::GPU,
                       true,
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "The CUDA Transform must be used in GPU place."));
+#else
+    PADDLE_ENFORCE_EQ(place.GetType() == phi::AllocationType::CUSTOM,
+                      true,
+                      common::errors::PreconditionNotMet(
+                          "The CUDA Transform must be used in CUSTOM place."));
+#endif
 #ifdef __HIPCC__
     thrust::transform(thrust::hip::par.on(context.stream()),
                       CastToCUDATransformIterator(first),
@@ -173,10 +180,17 @@ struct Transform<phi::GPUContext> {
                   OutputIter result,
                   BinaryOperation op) {
     auto place = context.GetPlace();
+#ifndef PADDLE_WITH_CUSTOM_DEVICE
     PADDLE_ENFORCE_EQ(place.GetType() == phi::AllocationType::GPU,
                       true,
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "The CUDA Transform must be used in GPU place."));
+#else
+    PADDLE_ENFORCE_EQ(place.GetType() == phi::AllocationType::CUSTOM,
+                      true,
+                      common::errors::PreconditionNotMet(
+                          "The CUDA Transform must be used in CUSTOM place."));
+#endif
 #ifdef __HIPCC__
     thrust::transform(thrust::hip::par.on(context.stream()),
                       CastToCUDATransformIterator(first1),

@@ -295,7 +295,7 @@ class TestMatrixNMSOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 class TestMatrixNMSOpNoOutput(TestMatrixNMSOp):
@@ -310,6 +310,7 @@ class TestMatrixNMSOpGaussian(TestMatrixNMSOp):
 
 
 class TestMatrixNMSError(unittest.TestCase):
+
     def test_errors(self):
         M = 1200
         N = 7

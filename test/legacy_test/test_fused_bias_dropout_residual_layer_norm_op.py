@@ -19,11 +19,10 @@ from op_test import OpTest
 
 import paddle
 import paddle.incubate.nn.functional as incubate_f
-from paddle.base.framework import default_main_program
 from paddle.nn.layer.common import Dropout
 from paddle.nn.layer.norm import LayerNorm
 
-default_main_program().random_seed = 42
+paddle.seed(42)
 
 
 class TestFusedBiasDropoutResidualLayerNormOp(OpTest):
@@ -177,6 +176,21 @@ class TestFusedBiasDropoutResidualLayerNormOpFp16(
         super().config()
         self.x_type = np.float16
         self.atol = 1e-1
+
+
+class TestFusedBiasDropoutResidualLayerNormOp_ZeroSize(
+    TestFusedBiasDropoutResidualLayerNormOp
+):
+    def config(self):
+        self.x_type = np.float32
+        self.atol = 1e-4
+        self.training = True
+        self.batch_size = 0
+        self.query_length = 128
+        self.embed_dim = 1024
+        self.dropout_prob = 0.0
+        self.weight_attr = None
+        self.bias_attr = None
 
 
 if __name__ == "__main__":

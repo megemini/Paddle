@@ -17,6 +17,8 @@ import unittest
 
 import numpy as np
 from op_test import OpTest
+
+sys.path.append("../deprecated/legacy_test")
 from test_softmax_op import stable_softmax
 
 import paddle
@@ -109,7 +111,7 @@ class CTCForward:
         required_times = labels_a_sequence.shape[0]
         old_label = -1
         for i in range(labels_a_sequence.shape[0]):
-            # two contingous labels with the same value
+            # two contiguous labels with the same value
             if labels_a_sequence[i, 0] == old_label:
                 required_times = required_times + 1
             old_label = labels_a_sequence[i, 0]
@@ -526,6 +528,7 @@ class TestWarpCTCOpFp64(OpTest):
 
 
 class TestWarpCTCOpError(unittest.TestCase):
+
     def test_errors(self):
         paddle.enable_static()
         main_program = paddle.static.Program()
@@ -610,8 +613,24 @@ class TestWarpCTCOpError(unittest.TestCase):
                 reduction='none',
             )
 
+        def test_dygraph_zero_size():
+            logits = np.random.uniform(0.1, 1.0, [0, 15]).astype("float32")
+            # labels should not be blank
+            labels = np.random.randint(0, 15 - 1, [15, 1], dtype="int32")
+            softmax = paddle.to_tensor(logits)
+            labels = paddle.to_tensor(labels)
+
+            paddle.nn.functional.ctc_loss(
+                log_probs=softmax,
+                labels=labels,
+                input_lengths=None,
+                label_lengths=None,
+                reduction='none',
+            )
+
         paddle.disable_static()
         self.assertRaises(ValueError, test_dygraph_with_lod)
+        self.assertRaises(ValueError, test_dygraph_zero_size)
         paddle.enable_static()
 
 

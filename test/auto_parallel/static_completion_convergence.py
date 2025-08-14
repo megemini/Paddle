@@ -77,7 +77,7 @@ class MLP(nn.Layer):
         out = self.linear_0(x)
         out = dist.reshard(
             out, self._mesh, [Shard(1)]
-        )  # triggle infinite propagation
+        )  # trigger infinite propagation
         out = self.linear_1(out)
 
         return out
@@ -116,8 +116,9 @@ class TestStaticReshard(unittest.TestCase):
 
         # static training
         data_loader = self.create_data_loader()
-        dist_model, dist_loader = dist.to_static(
-            dy2static_layer, data_loader, loss_fn, dy2static_opt
+        dist_loader = dist.shard_dataloader(data_loader, [mesh0])
+        dist_model = dist.to_static(
+            dy2static_layer, dist_loader, loss_fn, dy2static_opt
         )
 
         program = dist_model._engine._dist_contexts["train"].dist_main_programs[
@@ -128,16 +129,16 @@ class TestStaticReshard(unittest.TestCase):
         assert check_ops == [
             'matmul_v2',
             'elementwise_add',
-            'c_allgather',
+            'all_gather',
             'split',
             'concat',
             'split',
             'assign',
-            'c_allgather',
+            'all_gather',
             'matmul_v2',
             'elementwise_add',
             'elementwise_sub',
-            'c_allgather',
+            'all_gather',
             'split',
             'concat',
             'assign',
@@ -155,7 +156,7 @@ class TestStaticReshard(unittest.TestCase):
             'c_allreduce_sum',
             'scale',
             'assign',
-            'c_allgather',
+            'all_gather',
             'split',
             'concat',
             'split',

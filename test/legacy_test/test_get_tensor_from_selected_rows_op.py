@@ -16,6 +16,7 @@ import unittest
 
 import numpy as np
 from op import Operator
+from op_test import get_places
 
 import paddle
 from paddle.base import Program, core, program_guard
@@ -38,15 +39,14 @@ class TestGetTensorFromSelectedRowsError(unittest.TestCase):
             def test_SELECTED_ROWS():
                 clip.get_tensor_from_selected_rows(x=x_var)
 
-            self.assertRaises(TypeError, test_SELECTED_ROWS)
+            self.assertRaises(
+                (TypeError, NotImplementedError), test_SELECTED_ROWS
+            )
 
 
 class TestGetTensorFromSelectedRows(unittest.TestCase):
     def get_places(self):
-        places = [core.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(core.CUDAPlace(0))
-        return places
+        return get_places()
 
     def check_with_place(self, place):
         scope = core.Scope()

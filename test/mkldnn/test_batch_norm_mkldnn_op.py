@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
-from mkldnn_op_test import check_if_mkldnn_batchnorm_primitives_exist_in_bwd
-from op_test import _set_use_system_allocator
-from test_batch_norm_op import (
-    TestBatchNormOpInference,
+from onednn_op_test import check_if_onednn_batchnorm_primitives_exist_in_bwd
+from op_test import _set_use_system_allocator, pir_executor_guard
+
+sys.path.append("../deprecated/legacy_test")
+from test_batch_norm_op import TestBatchNormOpInference
+from test_batch_norm_op_deprecated import (
     TestBatchNormOpTraining,
     _reference_grad,
     _reference_training,
@@ -29,9 +32,9 @@ from paddle.base import core
 _set_use_system_allocator(True)
 
 
-class TestMKLDNNBatchNormOpTraining(TestBatchNormOpTraining):
+class TestONEDNNBatchNormOpTraining(TestBatchNormOpTraining):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
         self.data_formats = ["NCHW"]
 
     def ref_forward_backward(
@@ -72,16 +75,21 @@ class TestMKLDNNBatchNormOpTraining(TestBatchNormOpTraining):
             bias_grad,
         )
 
+    def test_forward_backward(self):
+        super().test_forward_backward()
+        with pir_executor_guard():
+            super().test_forward_backward()
 
-class TestMKLDNNBatchNormOpTraining_NHWC(TestMKLDNNBatchNormOpTraining):
+
+class TestONEDNNBatchNormOpTraining_NHWC(TestONEDNNBatchNormOpTraining):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
         self.data_formats = ["NHWC"]
 
 
-class TestMKLDNNBatchNormOpExistedPrimitives(TestMKLDNNBatchNormOpTraining):
+class TestONEDNNBatchNormOpExistedPrimitives(TestONEDNNBatchNormOpTraining):
     def init_test_case(self):
-        TestMKLDNNBatchNormOpTraining.init_test_case(self)
+        TestONEDNNBatchNormOpTraining.init_test_case(self)
         self.fetch_list = ['y', 'x@GRAD']
 
     def test_forward_backward(self):
@@ -123,14 +131,14 @@ class TestMKLDNNBatchNormOpExistedPrimitives(TestMKLDNNBatchNormOpTraining):
         var_dict['x@GRAD'] = x_grad
         var_dict['scale@GRAD'] = scale_grad
         var_dict['bias@GRAD'] = bias_grad
-        check_if_mkldnn_batchnorm_primitives_exist_in_bwd(
+        check_if_onednn_batchnorm_primitives_exist_in_bwd(
             self, var_dict, place, shape, data_layout
         )
 
 
-class TestMKLDNNBatchNormOpInference(TestBatchNormOpInference):
+class TestONEDNNBatchNormOpInference(TestBatchNormOpInference):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
 
     def test_check_output(self):
         place = core.CPUPlace()
@@ -139,9 +147,14 @@ class TestMKLDNNBatchNormOpInference(TestBatchNormOpInference):
         self.check_with_place_without_scale_and_bias(
             place, data_format, self.dtype, [2, 3, 4, 5]
         )
+        with pir_executor_guard():
+            self.check_with_place(place, data_format, self.dtype, [2, 3, 4, 5])
+            self.check_with_place_without_scale_and_bias(
+                place, data_format, self.dtype, [2, 3, 4, 5]
+            )
 
 
-class TestMKLDNNBatchNormOpInference_NHWC(TestMKLDNNBatchNormOpInference):
+class TestONEDNNBatchNormOpInference_NHWC(TestONEDNNBatchNormOpInference):
     def test_check_output(self):
         place = core.CPUPlace()
         data_format = "NHWC"
@@ -151,15 +164,17 @@ class TestMKLDNNBatchNormOpInference_NHWC(TestMKLDNNBatchNormOpInference):
         )
 
 
-class TestMKLDNNBatchNormOpWithReluInference(TestBatchNormOpInference):
+class TestONEDNNBatchNormOpWithReluInference(TestBatchNormOpInference):
     def init_kernel_type(self):
-        self.use_mkldnn = True
+        self.use_onednn = True
         self.fuse_with_relu = True
 
     def test_check_output(self):
         place = core.CPUPlace()
         data_format = "NCHW"
         self.check_with_place(place, data_format, self.dtype, [2, 3, 4, 5])
+        with pir_executor_guard():
+            self.check_with_place(place, data_format, self.dtype, [2, 3, 4, 5])
 
 
 if __name__ == '__main__':

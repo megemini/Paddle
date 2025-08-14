@@ -19,11 +19,13 @@ import unittest
 from io import BytesIO
 
 import numpy as np
+from op_test import get_device_place
 from test_imperative_base import new_program_scope
 
 import paddle
 from paddle import base
 from paddle.base import framework
+from paddle.framework.io_utils import get_value, is_pir_fetch_var, set_value
 
 IMAGE_SIZE = 784
 
@@ -42,6 +44,8 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
             scope = base.global_scope()
         for var in prog.list_vars():
             if isinstance(var, framework.Parameter) or var.persistable:
+                if is_pir_fetch_var(var):
+                    continue
                 ten = scope.find_var(var.name).get_tensor()
                 if ten is not None:
                     ten.set(np.zeros_like(np.array(ten)), place)
@@ -55,7 +59,7 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
         vars = filter(predicate, program.list_vars())
         for var in vars:
             paddle.save(
-                var.get_value(),
+                get_value(var),
                 os.path.join(dirname, var.name),
                 use_binary_format=True,
             )
@@ -68,7 +72,7 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
         for var in var_list:
             var_load = paddle.load(os.path.join(dirname, var.name))
             # set var_load to scope
-            var.set_value(var_load)
+            set_value(var, var_load)
 
     def test_replace_save_load_vars(self):
         paddle.enable_static()
@@ -80,21 +84,19 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
             z = paddle.static.nn.fc(x, 10, bias_attr=False)
             z = paddle.static.nn.fc(z, 128, bias_attr=False)
             loss = paddle.mean(z)
-            place = (
-                base.CPUPlace()
-                if not paddle.base.core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             exe = paddle.static.Executor(place)
             exe.run(paddle.static.default_startup_program())
             prog = paddle.static.default_main_program()
             base_map = {}
             for var in prog.list_vars():
                 if isinstance(var, framework.Parameter) or var.persistable:
+                    if is_pir_fetch_var(var):
+                        continue
                     t = np.array(
                         base.global_scope().find_var(var.name).get_tensor()
                     )
-                    # make sure all the paramerter or optimizer var have been update
+                    # make sure all the parameter or optimizer var have been update
                     self.assertTrue(np.sum(np.abs(t)) != 0)
                     base_map[var.name] = t
             # test for replace_save_vars/io.load_vars
@@ -112,7 +114,7 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
             )
 
             for var in prog.list_vars():
-                if var.persistable:
+                if var.persistable and not is_pir_fetch_var(var):
                     new_t = np.array(
                         base.global_scope().find_var(var.name).get_tensor()
                     )
@@ -129,7 +131,7 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
             self.set_zero(prog, place)
             self.replace_load_vars(prog, path_vars2)
             for var in prog.list_vars():
-                if var.persistable:
+                if var.persistable and not is_pir_fetch_var(var):
                     new_t = np.array(
                         base.global_scope().find_var(var.name).get_tensor()
                     )
@@ -137,7 +139,7 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
 
                     np.testing.assert_array_equal(new_t, base_t)
 
-    def test_save_load_lod_tensor(self):
+    def test_save_load_dense_tensor(self):
         paddle.enable_static()
         OUTPUT_NUM = 32
         with new_program_scope():
@@ -149,36 +151,32 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
                 OUTPUT_NUM,
                 name='fc_vars',
             )
-            prog = base.default_main_program()
-            place = (
-                base.CPUPlace()
-                if not paddle.base.core.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            prog = paddle.static.default_main_program()
+            place = get_device_place()
             exe = base.Executor(place)
             prog = paddle.static.default_main_program()
             exe.run(base.default_startup_program())
 
             dirname = os.path.join(
-                self.temp_dir.name, 'test_save_load_lod_tensor1/tensor_'
+                self.temp_dir.name, 'test_save_load_dense_tensor1/tensor_'
             )
             for var in prog.list_vars():
                 if var.persistable and list(var.shape) == [
                     IMAGE_SIZE,
                     OUTPUT_NUM,
                 ]:
-                    tensor = var.get_value()
+                    tensor = get_value(var)
                     paddle.save(
                         tensor, dirname + 'fc_vars.w_0', use_binary_format=True
                     )
                     break
 
-            origin = np.array(var.get_value())
-            var.set_value(np.zeros_like(origin))
-            is_zeros = np.array(var.get_value())
+            origin = np.array(get_value(var))
+            set_value(var, np.zeros_like(origin))
+            is_zeros = np.array(get_value(var))
 
             loaded_tensor = paddle.load(dirname + 'fc_vars.w_0')
-            self.assertTrue(isinstance(loaded_tensor, base.core.LoDTensor))
+            self.assertTrue(isinstance(loaded_tensor, base.core.DenseTensor))
             self.assertTrue(
                 list(loaded_tensor.shape()) == [IMAGE_SIZE, OUTPUT_NUM]
             )
@@ -199,11 +197,11 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
                 paddle.load(path)
 
         with self.assertRaises(ValueError):
-            temp_lod = base.core.LoDTensor()
+            temp_lod = base.core.DenseTensor()
             paddle.save(temp_lod, path, use_binary_format=True)
 
         with self.assertRaises(RuntimeError):
-            base.core.save_lod_tensor(
+            base.core.save_dense_tensor(
                 temp_lod,
                 os.path.join(
                     self.temp_dir.name,
@@ -212,7 +210,7 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
             )
 
         with self.assertRaises(RuntimeError):
-            base.core.load_lod_tensor(
+            base.core.load_dense_tensor(
                 temp_lod,
                 os.path.join(
                     self.temp_dir.name,
@@ -230,17 +228,13 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
         np.testing.assert_array_equal(np.array(tensor), to_array_mem)
 
         with self.assertRaises(NotImplementedError):
-            paddle.framework.io._save_lod_tensor(tensor, 1)
+            paddle.framework.io._save_dense_tensor(tensor, 1)
         with self.assertRaises(NotImplementedError):
-            paddle.framework.io._load_lod_tensor(1)
+            paddle.framework.io._load_dense_tensor(1)
 
     def test_save_load_selected_rows(self):
         paddle.enable_static()
-        place = (
-            base.CPUPlace()
-            if not paddle.base.core.is_compiled_with_cuda()
-            else base.CUDAPlace(0)
-        )
+        place = get_device_place()
         height = 10
         rows = [0, 4, 7]
         row_numel = 12
@@ -299,3 +293,7 @@ class TestSaveLoadBinaryFormat(unittest.TestCase):
             paddle.framework.io._save_selected_rows(selected_rows, 1)
         with self.assertRaises(NotImplementedError):
             paddle.framework.io._load_selected_rows(1)
+
+
+if __name__ == '__main__':
+    unittest.main()

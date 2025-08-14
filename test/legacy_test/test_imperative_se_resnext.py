@@ -263,7 +263,7 @@ class SeResNeXt(paddle.nn.Layer):
             shortcut = False
             for i in range(depth[block]):
                 bottleneck_block = self.add_sublayer(
-                    'bb_%d_%d' % (block, i),
+                    f'bb_{block}_{i}',
                     BottleneckBlock(
                         num_channels=num_channels,
                         num_filters=num_filters[block],
@@ -312,13 +312,13 @@ class SeResNeXt(paddle.nn.Layer):
 
 class TestImperativeResneXt(unittest.TestCase):
     def reader_decorator(self, reader):
-        def _reader_imple():
+        def _reader_simple():
             for item in reader():
                 doc = np.array(item[0]).reshape(3, 224, 224)
                 label = np.array(item[1]).astype('int64').reshape(1)
                 yield doc, label
 
-        return _reader_imple
+        return _reader_simple
 
     def test_se_resnext_float32(self):
         seed = 90
@@ -447,7 +447,7 @@ class TestImperativeResneXt(unittest.TestCase):
                 name='label', shape=[-1, 1], dtype='int64'
             )
             out = se_resnext(img)
-            softmax_out = paddle.nn.function.softmax(out)
+            softmax_out = paddle.nn.functional.softmax(out)
             loss = paddle.nn.functional.cross_entropy(
                 input=softmax_out,
                 label=label,

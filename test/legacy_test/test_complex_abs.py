@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest
+from op_test import OpTest, get_places
 
 import paddle
 import paddle.base.dygraph as dg
@@ -80,9 +80,7 @@ class TestComplexAbsOpZeroValues(OpTest):
 class TestAbs(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [paddle.CPUPlace()]
-        if paddle.is_compiled_with_cuda():
-            self._places.append(paddle.CUDAPlace(0))
+        self._places = get_places()
 
     def test_all_positive(self):
         for dtype in self._dtypes:

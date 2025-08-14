@@ -15,12 +15,11 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest
+from op_test import OpTest, get_places
 
 import paddle
 from paddle import static
 from paddle.base import dygraph
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -50,6 +49,7 @@ class TestViewAsComplexOp(OpTest):
         self.check_grad(
             ['X'],
             'Out',
+            check_pir=True,
         )
 
 
@@ -71,6 +71,7 @@ class TestViewAsRealOp(OpTest):
         self.check_grad(
             ['X'],
             'Out',
+            check_pir=True,
         )
 
 
@@ -85,7 +86,6 @@ class TestViewAsComplexAPI(unittest.TestCase):
             out_np = paddle.as_complex(x).numpy()
         np.testing.assert_allclose(self.out, out_np, rtol=1e-05)
 
-    @test_with_pir_api
     def test_static(self):
         mp, sp = static.Program(), static.Program()
         with static.program_guard(mp, sp):
@@ -109,7 +109,6 @@ class TestViewAsRealAPI(unittest.TestCase):
             out_np = paddle.as_real(x).numpy()
         np.testing.assert_allclose(self.out, out_np, rtol=1e-05)
 
-    @test_with_pir_api
     def test_static(self):
         mp, sp = static.Program(), static.Program()
         with static.program_guard(mp, sp):
@@ -120,6 +119,22 @@ class TestViewAsRealAPI(unittest.TestCase):
         exe.run(sp)
         [out_np] = exe.run(mp, feed={"x": self.x}, fetch_list=[out])
         np.testing.assert_allclose(self.out, out_np, rtol=1e-05)
+
+
+class TestViewAsRealAPI_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.x = np.random.randn(10, 0) + 1j * np.random.randn(10, 0)
+        self.out = ref_view_as_real(self.x)
+
+    def test_dygraph(self):
+        for place in get_places():
+            with dygraph.guard(place):
+                x_tensor = paddle.to_tensor(self.x)
+                x_tensor.stop_gradient = False
+                out = paddle.as_real(x_tensor)
+                np.testing.assert_allclose(self.out, out.numpy(), rtol=1e-05)
+                out.sum().backward()
+                np.testing.assert_allclose(x_tensor.grad.shape, x_tensor.shape)
 
 
 if __name__ == "__main__":

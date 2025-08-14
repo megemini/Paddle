@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from mkldnn_op_test import format_reorder
+from onednn_op_test import format_reorder
 from op_test import OpTest
 
 from paddle.base import core
@@ -26,7 +26,7 @@ class TestTransposeOp(OpTest):
         self.init_op_type()
         self.initTestCase()
         self.initInputData()
-        self.use_mkldnn = True
+        self.use_onednn = True
         self._cpu_only = True
         self.axis = (0, 2, 3, 1)
 
@@ -36,7 +36,7 @@ class TestTransposeOp(OpTest):
 
         self.attrs = {
             'axis': list(self.axis),
-            'use_mkldnn': self.use_mkldnn,
+            'use_onednn': self.use_onednn,
         }
 
         self.outputs = {
@@ -48,9 +48,13 @@ class TestTransposeOp(OpTest):
         self.op_type = "transpose2"
 
     def test_check_output(self):
-        # TODO(wangzhongpu): support mkldnn op in dygraph mode
+        # TODO(wangzhongpu): support onednn op in dygraph mode
         self.check_output_with_place(
-            core.CPUPlace(), 1e-5, no_check_set=['XShape'], check_dygraph=False
+            core.CPUPlace(),
+            1e-5,
+            no_check_set=['XShape'],
+            check_dygraph=False,
+            check_pir_onednn=True,
         )
 
     def initTestCase(self):

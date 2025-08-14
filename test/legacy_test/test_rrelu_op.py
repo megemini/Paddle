@@ -15,13 +15,12 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_device_place
 
 import paddle
 import paddle.nn.functional as F
 from paddle import base
 from paddle.base import core, dygraph
-from paddle.pir_utils import test_with_pir_api
 
 paddle.seed(102)
 np.random.seed(102)
@@ -51,13 +50,8 @@ class TestFunctionalRReluAPI(unittest.TestCase):
         self.upper_0 = 0.25
         self.upper_1 = 0.33
 
-        self.places = [
-            base.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else base.CPUPlace()
-        ]
+        self.places = [get_device_place()]
 
-    @test_with_pir_api
     def check_static_result(self, place):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -104,7 +98,6 @@ class TestFunctionalRReluAPI(unittest.TestCase):
         for place in self.places:
             self.check_static_result(place=place)
 
-    @test_with_pir_api
     def test_static_graph_functional(self):
         '''test_static_graph_functional'''
 
@@ -175,7 +168,6 @@ class TestFunctionalRReluAPI(unittest.TestCase):
                     )
                 )
 
-    @test_with_pir_api
     def test_static_graph_layer(self):
         '''test_static_graph_layer'''
 
@@ -491,6 +483,26 @@ class RReluTrainingTestBF16OP(RReluTrainingTest):
     def test_check_grad(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(place, ['X'], 'Out', check_pir=True)
+
+
+class RReluTest_ZeroSize(RReluTest):
+    def init_params(self):
+        self.init_dtype()
+        self.x_shape = [2, 0, 4, 5]
+
+        x_np = np.random.uniform(-1, 1, self.x_shape).astype(self.dtype)
+        out_np = ref_rrelu(x_np, self.lower, self.upper)
+        noise_np = np.ones(self.x_shape).astype(self.dtype)
+        noise_np[x_np < 0] = (self.lower + self.upper) / 2.0
+
+        self.inputs = {'X': x_np}
+        self.outputs = {'Out': out_np, 'Noise': noise_np}
+        self.convert_input_output()
+        self.attrs = {
+            'lower': self.lower,
+            "upper": self.upper,
+            "is_test": self.is_test,
+        }
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@
 #include "glog/logging.h"
 #include "paddle/fluid/distributed/ps/table/graph/graph_weighted_sampler.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/string/string_helper.h"
+#include "paddle/utils/string/string_helper.h"
 
 namespace paddle {
 namespace distributed {
@@ -104,7 +104,10 @@ class GraphNode : public Node {
       int k, const std::shared_ptr<std::mt19937_64> rng) {
     return sampler->sample_k(k, rng);
   }
-  virtual uint64_t get_neighbor_id(int idx) { return edges->get_id(idx); }
+  virtual uint64_t get_neighbor_id(int idx) {
+    return static_cast<uint64_t>(edges->get_id(idx));
+  }
+
 #ifdef PADDLE_WITH_CUDA
   virtual half get_neighbor_weight(int idx) { return edges->get_weight(idx); }
 #else
@@ -135,14 +138,16 @@ class FeatureNode : public Node {
 
   virtual int get_feature_ids(std::vector<uint64_t> *res) const {
     PADDLE_ENFORCE_NOT_NULL(res,
-                            paddle::platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "get_feature_ids res should not be null"));
     errno = 0;
     for (auto &feature_item : feature) {
       const uint64_t *feas = (const uint64_t *)(feature_item.c_str());
       size_t num = feature_item.length() / sizeof(uint64_t);
-      CHECK((feature_item.length() % sizeof(uint64_t)) == 0)
-          << "bad feature_item: [" << feature_item << "]";
+      PADDLE_ENFORCE_EQ((feature_item.length() % sizeof(uint64_t)),
+                        0,
+                        common::errors::PreconditionNotMet(
+                            "bad feature_item: [%s]", feature_item.c_str()));
       size_t n = res->size();
       res->resize(n + num);
       for (size_t i = 0; i < num; ++i) {
@@ -152,14 +157,14 @@ class FeatureNode : public Node {
     PADDLE_ENFORCE_EQ(
         errno,
         0,
-        paddle::platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "get_feature_ids get errno should be 0, but got %d.", errno));
     return 0;
   }
 
   virtual int get_feature_ids(int slot_idx, std::vector<uint64_t> *res) const {
     PADDLE_ENFORCE_NOT_NULL(res,
-                            paddle::platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "get_feature_ids res should not be null"));
     res->clear();
     errno = 0;
@@ -168,8 +173,10 @@ class FeatureNode : public Node {
       const uint64_t *feas = (const uint64_t *)(s.c_str());
 
       size_t num = s.length() / sizeof(uint64_t);
-      CHECK((s.length() % sizeof(uint64_t)) == 0)
-          << "bad feature_item: [" << s << "]";
+      PADDLE_ENFORCE_EQ((s.length() % sizeof(uint64_t)),
+                        0,
+                        common::errors::PreconditionNotMet(
+                            "bad feature_item: [%s]", s.c_str()));
       res->resize(num);
       for (size_t i = 0; i < num; ++i) {
         (*res)[i] = feas[i];
@@ -178,7 +185,7 @@ class FeatureNode : public Node {
     PADDLE_ENFORCE_EQ(
         errno,
         0,
-        paddle::platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "get_feature_ids get errno should be 0, but got %d.", errno));
     return 0;
   }
@@ -192,8 +199,10 @@ class FeatureNode : public Node {
       const std::string &s = this->feature[slot_idx];
       const uint64_t *feas = (const uint64_t *)(s.c_str());
       num = s.length() / sizeof(uint64_t);
-      CHECK((s.length() % sizeof(uint64_t)) == 0)
-          << "bad feature_item: [" << s << "]";
+      PADDLE_ENFORCE_EQ((s.length() % sizeof(uint64_t)),
+                        0,
+                        common::errors::PreconditionNotMet(
+                            "bad feature_item: [%s]", s.c_str()));
       for (size_t i = 0; i < num; ++i) {
         feature_id.push_back(feas[i]);
         slot_id.push_back(slot_idx);
@@ -202,7 +211,7 @@ class FeatureNode : public Node {
     PADDLE_ENFORCE_EQ(
         errno,
         0,
-        paddle::platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "get_feature_ids get errno should be 0, but got %d.", errno));
     return num;
   }
@@ -331,7 +340,7 @@ class FloatFeatureNode : public FeatureNode {
 
   virtual int get_feature_ids(std::vector<uint64_t> *res) const {
     PADDLE_ENFORCE_NOT_NULL(res,
-                            paddle::platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "get_feature_ids res should not be null"));
     errno = 0;
     for (int slot_idx = 0; slot_idx < float_feature_start_idx; slot_idx++) {
@@ -339,8 +348,10 @@ class FloatFeatureNode : public FeatureNode {
       // for (auto &feature_item : feature) {
       const uint64_t *feas = (const uint64_t *)(feature_item.c_str());
       size_t num = feature_item.length() / sizeof(uint64_t);
-      CHECK((feature_item.length() % sizeof(uint64_t)) == 0)
-          << "bad feature_item: [" << feature_item << "]";
+      PADDLE_ENFORCE_EQ((feature_item.length() % sizeof(uint64_t)),
+                        0,
+                        common::errors::PreconditionNotMet(
+                            "bad feature_item: [%s]", feature_item.c_str()));
       size_t n = res->size();
       res->resize(n + num);
       for (size_t i = 0; i < num; ++i) {
@@ -350,14 +361,14 @@ class FloatFeatureNode : public FeatureNode {
     PADDLE_ENFORCE_EQ(
         errno,
         0,
-        paddle::platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "get_feature_ids get errno should be 0, but got %d.", errno));
     return 0;
   }
 
   virtual int get_feature_ids(int slot_idx, std::vector<uint64_t> *res) const {
     PADDLE_ENFORCE_NOT_NULL(res,
-                            paddle::platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "get_feature_ids res should not be null"));
     res->clear();
     errno = 0;
@@ -366,8 +377,10 @@ class FloatFeatureNode : public FeatureNode {
       const uint64_t *feas = (const uint64_t *)(s.c_str());
 
       size_t num = s.length() / sizeof(uint64_t);
-      CHECK((s.length() % sizeof(uint64_t)) == 0)
-          << "bad feature_item: [" << s << "]";
+      PADDLE_ENFORCE_EQ((s.length() % sizeof(uint64_t)),
+                        0,
+                        common::errors::PreconditionNotMet(
+                            "bad feature_item: [%s]", s.c_str()));
       res->resize(num);
       for (size_t i = 0; i < num; ++i) {
         (*res)[i] = feas[i];
@@ -376,7 +389,7 @@ class FloatFeatureNode : public FeatureNode {
     PADDLE_ENFORCE_EQ(
         errno,
         0,
-        paddle::platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "get_feature_ids get errno should be 0, but got %d.", errno));
     return 0;
   }
@@ -390,8 +403,10 @@ class FloatFeatureNode : public FeatureNode {
       const std::string &s = this->feature[slot_idx];
       const uint64_t *feas = (const uint64_t *)(s.c_str());
       num = s.length() / sizeof(uint64_t);
-      CHECK((s.length() % sizeof(uint64_t)) == 0)
-          << "bad feature_item: [" << s << "]";
+      PADDLE_ENFORCE_EQ((s.length() % sizeof(uint64_t)),
+                        0,
+                        common::errors::PreconditionNotMet(
+                            "bad feature_item: [%s]", s.c_str()));
       for (size_t i = 0; i < num; ++i) {
         feature_id.push_back(feas[i]);
         slot_id.push_back(slot_idx);
@@ -400,7 +415,7 @@ class FloatFeatureNode : public FeatureNode {
     PADDLE_ENFORCE_EQ(
         errno,
         0,
-        paddle::platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "get_feature_ids get errno should be 0, but got %d.", errno));
     return num;
   }
@@ -416,8 +431,10 @@ class FloatFeatureNode : public FeatureNode {
       const std::string &s = this->feature[float_feature_start_idx + slot_idx];
       const float *feas = (const float *)(s.c_str());
       num = s.length() / sizeof(float);
-      CHECK((s.length() % sizeof(float)) == 0)
-          << "bad feature_item: [" << s << "]";
+      PADDLE_ENFORCE_EQ((s.length() % sizeof(float)),
+                        0,
+                        common::errors::PreconditionNotMet(
+                            "bad feature_item: [%s]", s.c_str()));
       for (size_t i = 0; i < num; ++i) {
         float_feature.push_back(feas[i]);
         slot_id.push_back(slot_idx);
@@ -426,7 +443,7 @@ class FloatFeatureNode : public FeatureNode {
     PADDLE_ENFORCE_EQ(
         errno,
         0,
-        paddle::platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "get_feature_ids get errno should be 0, but got %d.", errno));
     return num;
   }

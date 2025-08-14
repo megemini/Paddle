@@ -18,9 +18,7 @@
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 std::vector<std::string> GetNodeNames(const std::vector<Node *> &node_vector) {
   std::vector<std::string> out_vector;
@@ -42,7 +40,7 @@ Node *GetInputNode(const Node *op, const std::string &name) {
   }
 
   PADDLE_ENFORCE_NOT_NULL(
-      out, platform::errors::InvalidArgument("Input's name cannot be found."));
+      out, common::errors::InvalidArgument("Input's name cannot be found."));
 
   return out;
 }
@@ -58,7 +56,7 @@ Node *GetOutputNode(const Node *op, const std::string &name) {
   }
 
   PADDLE_ENFORCE_NOT_NULL(
-      out, platform::errors::InvalidArgument("Output's name cannot be found."));
+      out, common::errors::InvalidArgument("Output's name cannot be found."));
 
   return out;
 }
@@ -112,7 +110,7 @@ void InsertOpToGraph(const std::vector<std::vector<Node *>> &inout_node_vectors,
       fuse_adamw_op_desc.SetInput("SkipUpdate", {});
     }
 
-    for (auto &name : config.repalce_outputs_name) {
+    for (auto &name : config.replace_outputs_name) {
       fuse_adamw_op_desc.SetOutput(name, GetNodeNames(inout_node_vectors[i]));
       i++;
     }
@@ -151,7 +149,7 @@ void InsertOpToGraph(const std::vector<std::vector<Node *>> &inout_node_vectors,
         IR_NODE_LINK_TO(inout_node_vectors[j][k], fuse_adamw_node);
       }
       for (; j < config.replace_inputs_name.size() +
-                     config.repalce_outputs_name.size();
+                     config.replace_outputs_name.size();
            j++) {
         IR_NODE_LINK_TO(fuse_adamw_node, inout_node_vectors[j][k]);
       }
@@ -178,7 +176,7 @@ bool InitAndCheckAttrs(const size_t &found_adamw_count,
   bool lazy_mode = false;
   int64_t min_row_size_to_use_multithread = 1000;
 
-  // Get skip_update and coeff, these wiil be used to check whether we can
+  // Get skip_update and coeff, these will be used to check whether we can
   // use fuse_adamw.
   for (auto &node : adamw_op->inputs) {
     auto in_name = adamw_op_desc->Input("SkipUpdate");
@@ -194,7 +192,7 @@ bool InitAndCheckAttrs(const size_t &found_adamw_count,
 
   // Get attrs and block
   if (found_adamw_count == 0) {
-    // Get blokc
+    // Get block
     config->block = adamw_op_desc->Block();
     // Get attrs
     config->beta1 = PADDLE_GET_CONST(float, adamw_op_desc->GetAttr("beta1"));
@@ -254,7 +252,7 @@ ir::Graph *FuseAdamWPass::FuseAdamWFun(ir::Graph *graph,
                                        const bool with_decay,
                                        const bool multi_precision) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
 
   VLOG(4) << "handle fuse AdadW";
 
@@ -312,8 +310,6 @@ ir::Graph *FuseAdamWPass::FuseAdamWFun(ir::Graph *graph,
   return graph;
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fuse_adamw_op_pass, paddle::framework::ir::FuseAdamWPass);

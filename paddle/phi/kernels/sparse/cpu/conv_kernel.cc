@@ -19,8 +19,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/funcs/blas/blas.h"
 #include "paddle/phi/kernels/sparse/cpu/conv.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 /**
  * x: (N, D, H, W, C)
@@ -137,7 +136,7 @@ void Conv3dCooCPUKernel(const CPUContext& dev_ctx,
   Gather<T, IntT>(
       x.values().data<T>(), rulebook_ptr + n, n, in_channels, in_features_ptr);
 
-  // 3. call gemm for every werght
+  // 3. call gemm for every weight
   auto blas = phi::funcs::GetBlas<CPUContext, T>(dev_ctx);
   int offset = 0;
   for (int i = 0; i < kernel_size; i++) {
@@ -206,8 +205,7 @@ void Conv3dCooKernel(const Context& dev_ctx,
                                                                counter);
                                }));
 }
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(
     conv3d_coo, CPU, ALL_LAYOUT, phi::sparse::Conv3dCooKernel, float, double) {

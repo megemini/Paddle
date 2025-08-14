@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ast
+import os
+import re
+import subprocess
+import sys
 import unittest
 
 import numpy as np
@@ -21,9 +26,136 @@ import paddle.nn.functional as F
 from paddle.base import core
 from paddle.decomposition import decomp
 
+REGEX_FLAGS = re.compile(
+    r"Result\(prim_all=(?P<prim_all>.*), prim_fwd=(?P<prim_fwd>.*), prim_bwd=(?P<prim_bwd>.*)\)"
+)
+
+
+class TestPrimFlags(unittest.TestCase):
+    def test_prim_flags_default(self):
+        self.assertFalse(core._is_bwd_prim_enabled())
+        self.assertFalse(core._is_fwd_prim_enabled())
+        self.assertFalse(core._is_all_prim_enabled())
+
+    def check_prim_flags_under_subprocess(
+        self, instructions, env, expected_flags
+    ):
+        all_instrs = [
+            "import paddle",
+            *instructions,
+            "prim_all = paddle.base.core._is_all_prim_enabled()",
+            "prim_fwd = paddle.base.core._is_fwd_prim_enabled()",
+            "prim_bwd = paddle.base.core._is_bwd_prim_enabled()",
+            "print(f'Result(prim_all={prim_all}, prim_fwd={prim_fwd}, prim_bwd={prim_bwd})', end='')",
+        ]
+        inherited_env = os.environ.copy()
+        inherited_env.update(env)
+        result = subprocess.run(
+            [sys.executable, '-c', '; '.join(all_instrs)],
+            capture_output=True,
+            env=inherited_env,
+        )
+        if result.returncode != 0:
+            self.fail(f"Failed to run subprocess: {result.stderr}")
+        matched_flags = REGEX_FLAGS.search(result.stdout.decode())
+        self.assertIsNotNone(
+            matched_flags, f"Failed to parse flags: {result.stdout}"
+        )
+        flags = (
+            ast.literal_eval(matched_flags.group("prim_all")),
+            ast.literal_eval(matched_flags.group("prim_fwd")),
+            ast.literal_eval(matched_flags.group("prim_bwd")),
+        )
+        self.assertEqual(
+            flags, expected_flags, f"Expected: {expected_flags}, got: {flags}"
+        )
+
+    def test_prim_flags_under_subprocess(self):
+        # Check envs
+        self.check_prim_flags_under_subprocess(
+            [],
+            {},
+            (False, False, False),  # (prim_all, prim_fwd, prim_bwd)
+        )
+        self.check_prim_flags_under_subprocess(
+            [],
+            {"FLAGS_prim_backward": "True"},
+            (False, False, True),
+        )
+        self.check_prim_flags_under_subprocess(
+            [],
+            {"FLAGS_prim_forward": "True"},
+            (False, True, False),
+        )
+        self.check_prim_flags_under_subprocess(
+            [],
+            {"FLAGS_prim_all": "True"},
+            (True, True, True),
+        )
+        self.check_prim_flags_under_subprocess(
+            [],
+            {"FLAGS_prim_all": "True", "FLAGS_prim_forward": "False"},
+            (False, False, True),
+        )
+        self.check_prim_flags_under_subprocess(
+            [],
+            {"FLAGS_prim_all": "True", "FLAGS_prim_backward": "False"},
+            (False, True, False),
+        )
+        # Check apis
+        self.check_prim_flags_under_subprocess(
+            ["paddle.base.core._set_prim_all_enabled(True)"],
+            {},
+            (True, True, True),
+        )
+        self.check_prim_flags_under_subprocess(
+            ["paddle.base.core._set_prim_forward_enabled(True)"],
+            {},
+            (False, True, False),
+        )
+        self.check_prim_flags_under_subprocess(
+            ["paddle.base.core._set_prim_backward_enabled(True)"],
+            {},
+            (False, False, True),
+        )
+        self.check_prim_flags_under_subprocess(
+            [
+                "paddle.base.core._set_prim_all_enabled(True)",
+                "paddle.base.core._set_prim_forward_enabled(False)",
+            ],
+            {},
+            (False, False, True),
+        )
+        self.check_prim_flags_under_subprocess(
+            [
+                "paddle.base.core._set_prim_all_enabled(True)",
+                "paddle.base.core._set_prim_backward_enabled(False)",
+            ],
+            {},
+            (False, True, False),
+        )
+        self.check_prim_flags_under_subprocess(
+            [
+                "paddle.base.core._set_prim_forward_enabled(True)",
+                "paddle.base.core._set_prim_backward_enabled(True)",
+            ],
+            {},
+            (True, True, True),
+        )
+        # Check envs and apis
+        self.check_prim_flags_under_subprocess(
+            [
+                "paddle.base.core._set_prim_all_enabled(False)",
+            ],
+            {
+                "FLAGS_prim_all": "True",
+            },
+            (False, False, False),
+        )
+
 
 class TestPrimBlacklistFlags(unittest.TestCase):
-    def not_in_blacklist(self):
+    def not_in_blacklist(self, op_name):
         inputs = np.random.random([2, 3, 4]).astype("float32")
         paddle.enable_static()
         core._set_prim_forward_enabled(True)
@@ -34,24 +166,25 @@ class TestPrimBlacklistFlags(unittest.TestCase):
                 'x', shape=inputs.shape, dtype=str(inputs.dtype)
             )
             y = F.gelu(x)
+            z = F.silu(y)
 
             fwd_ops = [op.name() for op in main_program.global_block().ops]
             # Ensure that tanh in original block
-            self.assertTrue('pd_op.gelu' in fwd_ops)
+            self.assertTrue(op_name in fwd_ops)
 
-            [y] = decomp.decompose(main_program, [y])
+            z = decomp.decompose(main_program, [z])
 
             fwd_ops_new = [op.name() for op in main_program.global_block().ops]
-            # Ensure that tanh is splitted into small ops
-            self.assertTrue('pd_op.gelu' not in fwd_ops_new)
+            # Ensure that tanh is split into small ops
+            self.assertTrue(op_name not in fwd_ops_new)
 
         exe = paddle.static.Executor()
         exe.run(startup_program)
-        _ = exe.run(main_program, feed={'x': inputs}, fetch_list=[y])
+        _ = exe.run(main_program, feed={'x': inputs}, fetch_list=[z])
         paddle.disable_static()
         core._set_prim_forward_enabled(False)
 
-    def in_blacklist(self):
+    def in_blacklist(self, op_name):
         inputs = np.random.random([2, 3, 4]).astype("float32")
         paddle.enable_static()
         core._set_prim_forward_enabled(True)
@@ -62,27 +195,33 @@ class TestPrimBlacklistFlags(unittest.TestCase):
                 'x', shape=inputs.shape, dtype=str(inputs.dtype)
             )
             y = F.gelu(x)
+            z = F.silu(y)
 
             fwd_ops = [op.name() for op in main_program.global_block().ops]
             # Ensure that tanh in original block
-            self.assertTrue('pd_op.gelu' in fwd_ops)
+            self.assertTrue(op_name in fwd_ops)
 
-            _ = decomp.decompose(main_program, [y])
+            z = decomp.decompose(main_program, [z])
 
             fwd_ops_new = [op.name() for op in main_program.global_block().ops]
-            # Ensure that tanh is splitted into small ops
-            self.assertTrue('pd_op.gelu' in fwd_ops_new)
+            # Ensure that tanh is split into small ops
+            self.assertTrue(op_name in fwd_ops_new)
 
         exe = paddle.static.Executor()
         exe.run(startup_program)
-        _ = exe.run(main_program, feed={'x': inputs}, fetch_list=[y])
+        _ = exe.run(main_program, feed={'x': inputs}, fetch_list=[z])
         paddle.disable_static()
         core._set_prim_forward_enabled(False)
 
     def test_prim_forward_blacklist(self):
-        self.not_in_blacklist()
+        self.not_in_blacklist("pd_op.gelu")
         core._set_prim_forward_blacklist("pd_op.gelu")
-        self.in_blacklist()
+        self.in_blacklist("pd_op.gelu")
+
+    def test_prim_forward_blacklist_flag(self):
+        self.not_in_blacklist("pd_op.silu")
+        paddle.set_flags({"FLAGS_prim_forward_blacklist": "pd_op.silu"})
+        self.in_blacklist("pd_op.silu")
 
 
 class PrimeNet(paddle.nn.Layer):
@@ -111,7 +250,7 @@ class TestPrimBackwardBlacklistFlags(unittest.TestCase):
     def check_prim(self, net):
         program = net.forward.program_cache.last()[-1][-1].train_program
         if isinstance(
-            program, paddle.jit.dy2static.pir_partial_program.RunableProgram
+            program, paddle.jit.dy2static.pir_partial_program.RunnableProgram
         ):
             program = program.program
         block = program.global_block()
@@ -122,7 +261,7 @@ class TestPrimBackwardBlacklistFlags(unittest.TestCase):
 
     def test_prim_backward_blacklist(self):
         core._set_prim_all_enabled(True)
-        core._set_prim_backward_blacklist("tanh_grad", "exp_grad")
+        core._set_prim_backward_blacklist("pd_op.tanh_grad", "pd_op.exp_grad")
         self.train()
         core._set_prim_all_enabled(False)
 

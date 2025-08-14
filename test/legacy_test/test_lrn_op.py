@@ -15,11 +15,10 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, paddle_static_guard
+from op_test import OpTest, get_places, paddle_static_guard
 
 import paddle
 from paddle import base
-from paddle.base import Program, core, program_guard
 
 
 class TestLRNOp(OpTest):
@@ -96,10 +95,10 @@ class TestLRNOp(OpTest):
         self.data_format = 'NCHW'
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_dygraph=False)
 
 
 class TestLRNOpAttrDataFormat(TestLRNOp):
@@ -110,102 +109,97 @@ class TestLRNOpAttrDataFormat(TestLRNOp):
 class TestLocalResponseNormFAPI(unittest.TestCase):
     def setUp(self):
         np.random.seed(123)
-        self.places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(base.CUDAPlace(0))
+        self.places = get_places()
 
     def check_static_3d_input(self, place):
-        with paddle_static_guard():
-            with base.program_guard(base.Program(), base.Program()):
-                in_np1 = np.random.random([3, 40, 40]).astype("float32")
-                in_np2 = np.transpose(in_np1, (0, 2, 1))
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
+            in_np1 = np.random.random([3, 40, 40]).astype("float32")
+            in_np2 = np.transpose(in_np1, (0, 2, 1))
 
-                input1 = paddle.static.data(
-                    name="input1", shape=[3, 40, 40], dtype="float32"
-                )
-                input2 = paddle.static.data(
-                    name="input2", shape=[3, 40, 40], dtype="float32"
-                )
-                res1 = paddle.nn.functional.local_response_norm(
-                    x=input1, size=5, data_format='NCL'
-                )
-                res2 = paddle.nn.functional.local_response_norm(
-                    x=input2, size=5, data_format='NLC'
-                )
-                exe = base.Executor(place)
-                fetches = exe.run(
-                    base.default_main_program(),
-                    feed={"input1": in_np1, "input2": in_np2},
-                    fetch_list=[res1, res2],
-                )
+            input1 = paddle.static.data(
+                name="input1", shape=[3, 40, 40], dtype="float32"
+            )
+            input2 = paddle.static.data(
+                name="input2", shape=[3, 40, 40], dtype="float32"
+            )
+            res1 = paddle.nn.functional.local_response_norm(
+                x=input1, size=5, data_format='NCL'
+            )
+            res2 = paddle.nn.functional.local_response_norm(
+                x=input2, size=5, data_format='NLC'
+            )
+            exe = base.Executor(place)
+            fetches = exe.run(
+                paddle.static.default_main_program(),
+                feed={"input1": in_np1, "input2": in_np2},
+                fetch_list=[res1, res2],
+            )
 
-                fetches1_tran = np.transpose(fetches[1], (0, 2, 1))
-                np.testing.assert_allclose(
-                    fetches[0], fetches1_tran, rtol=1e-05
-                )
+            fetches1_tran = np.transpose(fetches[1], (0, 2, 1))
+            np.testing.assert_allclose(fetches[0], fetches1_tran, rtol=1e-05)
 
     def check_static_4d_input(self, place):
-        with paddle_static_guard():
-            with base.program_guard(base.Program(), base.Program()):
-                input1 = paddle.static.data(
-                    name="input1", shape=[3, 3, 40, 40], dtype="float32"
-                )
-                input2 = paddle.static.data(
-                    name="input2", shape=[3, 40, 40, 3], dtype="float32"
-                )
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
+            input1 = paddle.static.data(
+                name="input1", shape=[3, 3, 40, 40], dtype="float32"
+            )
+            input2 = paddle.static.data(
+                name="input2", shape=[3, 40, 40, 3], dtype="float32"
+            )
 
-                res1 = paddle.nn.functional.local_response_norm(
-                    x=input1, size=5, data_format='NCHW'
-                )
-                res2 = paddle.nn.functional.local_response_norm(
-                    x=input2, size=5, data_format='NHWC'
-                )
+            res1 = paddle.nn.functional.local_response_norm(
+                x=input1, size=5, data_format='NCHW'
+            )
+            res2 = paddle.nn.functional.local_response_norm(
+                x=input2, size=5, data_format='NHWC'
+            )
 
-                in_np1 = np.random.random([3, 3, 40, 40]).astype("float32")
-                in_np2 = np.transpose(in_np1, (0, 2, 3, 1))
+            in_np1 = np.random.random([3, 3, 40, 40]).astype("float32")
+            in_np2 = np.transpose(in_np1, (0, 2, 3, 1))
 
-                exe = base.Executor(place)
-                fetches = exe.run(
-                    base.default_main_program(),
-                    feed={"input1": in_np1, "input2": in_np2},
-                    fetch_list=[res1, res2],
-                )
+            exe = base.Executor(place)
+            fetches = exe.run(
+                paddle.static.default_main_program(),
+                feed={"input1": in_np1, "input2": in_np2},
+                fetch_list=[res1, res2],
+            )
 
-                fetches1_tran = np.transpose(fetches[1], (0, 3, 1, 2))
-                np.testing.assert_allclose(
-                    fetches[0], fetches1_tran, rtol=1e-05
-                )
+            fetches1_tran = np.transpose(fetches[1], (0, 3, 1, 2))
+            np.testing.assert_allclose(fetches[0], fetches1_tran, rtol=1e-05)
 
     def check_static_5d_input(self, place):
-        with paddle_static_guard():
-            with base.program_guard(base.Program(), base.Program()):
-                input1 = paddle.static.data(
-                    name="input1", shape=[3, 3, 3, 40, 40], dtype="float32"
-                )
-                input2 = paddle.static.data(
-                    name="input2", shape=[3, 3, 40, 40, 3], dtype="float32"
-                )
-                res1 = paddle.nn.functional.local_response_norm(
-                    x=input1, size=5, data_format='NCDHW'
-                )
-                res2 = paddle.nn.functional.local_response_norm(
-                    x=input2, size=5, data_format='NDHWC'
-                )
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
+            input1 = paddle.static.data(
+                name="input1", shape=[3, 3, 3, 40, 40], dtype="float32"
+            )
+            input2 = paddle.static.data(
+                name="input2", shape=[3, 3, 40, 40, 3], dtype="float32"
+            )
+            res1 = paddle.nn.functional.local_response_norm(
+                x=input1, size=5, data_format='NCDHW'
+            )
+            res2 = paddle.nn.functional.local_response_norm(
+                x=input2, size=5, data_format='NDHWC'
+            )
 
-                in_np1 = np.random.random([3, 3, 3, 40, 40]).astype("float32")
-                in_np2 = np.transpose(in_np1, (0, 2, 3, 4, 1))
+            in_np1 = np.random.random([3, 3, 3, 40, 40]).astype("float32")
+            in_np2 = np.transpose(in_np1, (0, 2, 3, 4, 1))
 
-                exe = base.Executor(place)
-                fetches = exe.run(
-                    base.default_main_program(),
-                    feed={"input1": in_np1, "input2": in_np2},
-                    fetch_list=[res1, res2],
-                )
+            exe = base.Executor(place)
+            fetches = exe.run(
+                paddle.static.default_main_program(),
+                feed={"input1": in_np1, "input2": in_np2},
+                fetch_list=[res1, res2],
+            )
 
-                fetches1_tran = np.transpose(fetches[1], (0, 4, 1, 2, 3))
-                np.testing.assert_allclose(
-                    fetches[0], fetches1_tran, rtol=1e-05
-                )
+            fetches1_tran = np.transpose(fetches[1], (0, 4, 1, 2, 3))
+            np.testing.assert_allclose(fetches[0], fetches1_tran, rtol=1e-05)
 
     def test_static(self):
         with paddle_static_guard():
@@ -276,60 +270,61 @@ class TestLocalResponseNormFAPI(unittest.TestCase):
 
 
 class TestLocalResponseNormFAPIError(unittest.TestCase):
+
     def test_errors(self):
-        with paddle_static_guard():
-            with program_guard(Program(), Program()):
+        with (
+            paddle_static_guard(),
+            paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ),
+        ):
 
-                def test_Variable():
-                    # the input of lrn must be Variable.
-                    x1 = base.create_lod_tensor(
-                        np.array([-1, 3, 5, 5]),
-                        [[1, 1, 1, 1]],
-                        base.CPUPlace(),
-                    )
-                    paddle.nn.functional.local_response_norm(x1, size=5)
+            def test_Variable():
+                # the input of lrn must be Variable.
+                x1 = base.create_lod_tensor(
+                    np.array([-1, 3, 5, 5]),
+                    [[1, 1, 1, 1]],
+                    base.CPUPlace(),
+                )
+                paddle.nn.functional.local_response_norm(x1, size=5)
 
-                self.assertRaises(TypeError, test_Variable)
+            self.assertRaises(TypeError, test_Variable)
 
-                def test_datatype():
-                    x = paddle.static.data(
-                        name='x', shape=[3, 4, 5, 6], dtype="int32"
-                    )
-                    paddle.nn.functional.local_response_norm(x, size=5)
+            def test_datatype():
+                x = paddle.static.data(
+                    name='x', shape=[3, 4, 5, 6], dtype="int32"
+                )
+                paddle.nn.functional.local_response_norm(x, size=5)
 
-                self.assertRaises(TypeError, test_datatype)
+            self.assertRaises(TypeError, test_datatype)
 
-                def test_dataformat():
-                    x = paddle.static.data(
-                        name='x', shape=[3, 4, 5, 6], dtype="float32"
-                    )
-                    paddle.nn.functional.local_response_norm(
-                        x, size=5, data_format="NCTHW"
-                    )
+            def test_dataformat():
+                x = paddle.static.data(
+                    name='x', shape=[3, 4, 5, 6], dtype="float32"
+                )
+                paddle.nn.functional.local_response_norm(
+                    x, size=5, data_format="NCTHW"
+                )
 
-                self.assertRaises(ValueError, test_dataformat)
+            self.assertRaises(ValueError, test_dataformat)
 
-                def test_dim():
-                    x = paddle.static.data(
-                        name='x', shape=[3, 4], dtype="float32"
-                    )
-                    paddle.nn.functional.local_response_norm(x, size=5)
+            def test_dim():
+                x = paddle.static.data(name='x', shape=[3, 4], dtype="float32")
+                paddle.nn.functional.local_response_norm(x, size=5)
 
-                self.assertRaises(ValueError, test_dim)
+            self.assertRaises(ValueError, test_dim)
 
-                def test_shape():
-                    x = paddle.rand(shape=[0, 0, 2, 3], dtype="float32")
-                    paddle.nn.functional.local_response_norm(x, size=5)
+            def test_shape():
+                x = paddle.rand(shape=[0, 0, 2, 3], dtype="float32")
+                paddle.nn.functional.local_response_norm(x, size=5)
 
-                self.assertRaises(ValueError, test_shape)
+            self.assertRaises(ValueError, test_shape)
 
 
 class TestLocalResponseNormCAPI(unittest.TestCase):
     def setUp(self):
         np.random.seed(123)
-        self.places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(base.CUDAPlace(0))
+        self.places = get_places()
 
     def test_dygraph(self):
         for place in self.places:
@@ -349,29 +344,63 @@ class TestLocalResponseNormCAPI(unittest.TestCase):
     def test_static_fp16_gpu(self):
         if paddle.base.core.is_compiled_with_cuda():
             place = paddle.CUDAPlace(0)
-            with paddle_static_guard():
-                with paddle.static.program_guard(
+            with (
+                paddle_static_guard(),
+                paddle.static.program_guard(
                     paddle.static.Program(), paddle.static.Program()
-                ):
-                    input = np.random.random([3, 3, 112, 112]).astype("float16")
+                ),
+            ):
+                input = np.random.random([3, 3, 112, 112]).astype("float16")
 
-                    x = paddle.static.data(
-                        name="x", shape=[3, 3, 112, 112], dtype="float16"
-                    )
+                x = paddle.static.data(
+                    name="x", shape=[3, 3, 112, 112], dtype="float16"
+                )
 
-                    m = paddle.nn.LocalResponseNorm(size=5)
-                    y = m(x)
+                m = paddle.nn.LocalResponseNorm(size=5)
+                y = m(x)
 
-                    exe = paddle.static.Executor(place)
-                    res = exe.run(
-                        paddle.static.default_main_program(),
-                        feed={
-                            "x": input,
-                        },
-                        fetch_list=[y],
-                    )
+                exe = paddle.static.Executor(place)
+                res = exe.run(
+                    paddle.static.default_main_program(),
+                    feed={
+                        "x": input,
+                    },
+                    fetch_list=[y],
+                )
 
-                    np.testing.assert_array_equal(res[0].shape, input.shape)
+                np.testing.assert_array_equal(res[0].shape, input.shape)
+
+
+class TestLocalResponseNormAPI_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(123)
+        self.places = get_places()
+
+    def check_dygraph(self, place):
+        with base.dygraph.guard(place):
+            in_np1 = np.random.random([0, 40, 40]).astype("float32")
+            in_np2 = np.transpose(in_np1, (0, 2, 1))
+
+            in1 = paddle.to_tensor(in_np1)
+            in1.stop_gradient = False
+            in2 = paddle.to_tensor(in_np2)
+
+            res1 = paddle.nn.functional.local_response_norm(
+                x=in1, size=5, data_format='NCL'
+            )
+            res2 = paddle.nn.functional.local_response_norm(
+                x=in2, size=5, data_format='NLC'
+            )
+
+            res2_tran = np.transpose(res2.numpy(), (0, 2, 1))
+            np.testing.assert_allclose(res1.numpy(), res2_tran, rtol=1e-05)
+
+            res1.sum().backward()
+            np.testing.assert_allclose(in1.grad.shape, in1.shape)
+
+    def test_dygraph(self):
+        for place in self.places:
+            self.check_dygraph(place)
 
 
 if __name__ == "__main__":

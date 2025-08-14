@@ -15,10 +15,12 @@
 from .instruction_pass import apply_instr_pass  # noqa: F401
 from .instruction_utils import (  # noqa: F401
     Instruction,
+    Space,
     calc_offset_from_bytecode_offset,
     calc_stack_effect,
     convert_instruction,
     gen_instr,
+    get_instruction_size,
     get_instructions,
     instrs_info,
     modify_extended_args,
@@ -29,7 +31,5 @@ from .instruction_utils import (  # noqa: F401
     reset_offset,
 )
 from .opcode_analysis import (  # noqa: F401
-    Space,
-    analysis_inputs,
-    analysis_used_names_with_space,
+    analysis_used_names,
 )

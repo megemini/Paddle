@@ -15,6 +15,11 @@ limitations under the License. */
 
 #pragma once
 
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+#include "paddle/phi/backends/custom/custom_context.h"
+#include "paddle/phi/backends/gpu/gpu_helper.h"
+#include "paddle/phi/backends/gpu/gpu_info.h"
+#else
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
     defined(PADDLE_WITH_XPU_KP)
 
@@ -69,7 +74,7 @@ class DnnWorkspaceHandle {
 
   void ResetWorkspace();
 
-  void ReallocWorkspace(size_t required_workspace_bytes);
+  TEST_API void ReallocWorkspace(size_t required_workspace_bytes);
 
   DnnWorkspaceHandle(DnnWorkspaceHandle&&) = default;
   DnnWorkspaceHandle& operator=(DnnWorkspaceHandle&&) = delete;
@@ -139,7 +144,7 @@ class PADDLE_API GPUContext : public DeviceContext,
   int GetMaxThreadsPerBlock() const;
 
   /*! \brief  Return the max grid dim size in the device context */
-  std::array<int, 3> GetCUDAMaxGridDimSize() const;
+  std::array<unsigned int, 3> GetCUDAMaxGridDimSize() const;
 
   /*! \brief  Return eigen device in the device context. */
   Eigen::GpuDevice* eigen_device() const;
@@ -188,6 +193,11 @@ class PADDLE_API GPUContext : public DeviceContext,
   /*! \brief  Set nccl communicators. */
   void set_nccl_comm(ncclComm_t comm);
 
+  // NOTE: External users manage resources. Used in inference scenarios.
+  // The Set interface is for inference only, DeviceContext will mark the
+  // resource as external, and will not delete any resource when destructing.
+  void SetStream(gpuStream_t);
+
  public:
   // NOTE: DeviceContext hold resources. Used in training scenarios.
   // The interface used by the training scene, DeviceContext will initialize
@@ -215,11 +225,6 @@ class PADDLE_API GPUContext : public DeviceContext,
   void SetCUDAStream(CUDAStream*, bool clear = true);
 
  protected:
-  // NOTE: External users manage resources. Used in inference scenarios.
-  // The Set interface is for inference only, DeviceContext will mark the
-  // resource as external, and will not delete any resource when destructing.
-  void SetStream(gpuStream_t);
-
   void SetEigenDevice(Eigen::GpuDevice*);
   void SetEigenDevice(std::function<Eigen::GpuDevice*()>&&);
 
@@ -254,7 +259,7 @@ class PADDLE_API GPUContext : public DeviceContext,
 
   void SetMaxThreadsPerBlock(int val);
 
-  void SetMaxGridDimSize(const std::array<int, 3>& val);
+  void SetMaxGridDimSize(const std::array<unsigned int, 3>& val);
 
   void SetDriverVersion(int val);
 
@@ -309,4 +314,5 @@ class GPUPinnedContext
 #endif
 }  // namespace phi
 
+#endif
 #endif

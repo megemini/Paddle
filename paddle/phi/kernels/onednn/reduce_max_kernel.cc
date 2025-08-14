@@ -15,14 +15,20 @@ limitations under the License. */
 #include "paddle/phi/kernels/reduce_max_kernel.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/onednn/reduce_kernel_impl.h"
+#include "paddle/phi/kernels/reduce_kernel_impl.h"
 
 namespace phi {
+
 template <typename T, typename Context>
 void MaxKernel(const Context& dev_ctx,
                const DenseTensor& x,
                const IntArray& dims,
                bool keep_dim,
                DenseTensor* out) {
+  if (x.numel() == 0) {
+    dev_ctx.template Alloc<T>(out);
+    return;
+  }
   bool reduce_all = recompute_reduce_all(x, dims);
   ReduceKernel<T, Context>(dev_ctx,
                            x,
@@ -35,4 +41,6 @@ void MaxKernel(const Context& dev_ctx,
 }  // namespace phi
 
 PD_REGISTER_KERNEL(
-    max, OneDNN, ONEDNN, phi::MaxKernel, float, phi::dtype::bfloat16) {}
+    max, OneDNN, ONEDNN, phi::MaxKernel, float, phi::dtype::bfloat16) {
+  kernel->check_if_onednn_kernel_support_ = phi::ReduceCheckIfOneDNNSupport;
+}

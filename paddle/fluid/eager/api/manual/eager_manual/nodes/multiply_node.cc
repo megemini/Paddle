@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_functions.h"
 #include "paddle/fluid/eager/api/manual/eager_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
@@ -20,18 +21,21 @@
 #include "paddle/fluid/eager/utils.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/imperative/tracer.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/fluid/prim/api/all.h"
 #include "paddle/fluid/prim/api/composite_backward/composite_backward_api.h"
 #include "paddle/fluid/prim/utils/utils.h"
 #include "paddle/phi/api/all.h"
-#include "paddle/phi/api/backward/backward_api.h"
-#include "paddle/phi/api/backward/sparse_bw_api.h"
+#include "paddle/phi/api/backward/backward_api_base.h"
+#include "paddle/phi/api/backward/sparse_backward_api_base.h"
 #include "paddle/phi/api/include/sparse_api.h"
 #include "paddle/phi/api/lib/api_custom_impl.h"
-#include "paddle/phi/core/flags.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
-PHI_DECLARE_bool(check_nan_inf);
+using egr::ConvertAllInputsToDistTensor;
+using egr::InputsContainDistTensor;
+COMMON_DECLARE_bool(check_cuda_error);
+
+COMMON_DECLARE_bool(check_nan_inf);
 
 paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
 MultiplyGradNode::operator()(
@@ -41,6 +45,20 @@ MultiplyGradNode::operator()(
     bool is_new_grad) {
   VLOG(3) << "Running AD API GRAD: "
           << "multiply_grad";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("MultiplyGradNode begin");
+  }
+  // This 'Local_XXXGradNode' record event is different with
+  // 'Global_XXXGradNode' event.
+  // * 'Local_XXXGradNode' will only cover execution time of this function.
+  // * 'Global_XXXGradNode' will not only cover execution time of this function,
+  // but also include gradient
+  //    accumulation when the output(s) of corresponding forward OP are shared
+  //    by other OP(s), which may have extra accumulation overhead than
+  //    'Local_XXXGradNode'.
+  phi::RecordEvent node_execution_inner(
+      "Local_MultiplyGradNode", phi::TracerEventType::OperatorInner, 1);
+
   // Fill Zero For GradIn Tensors
   const auto& input_metas = this->InputMeta();
   egr::EagerUtils::FillZeroForEmptyGradInput(&grads[0][0], input_metas[0][0]);
@@ -53,6 +71,14 @@ MultiplyGradNode::operator()(
   auto y = egr::EagerUtils::RecoverTensorWrapper(&this->y_);
   auto& grad_out = hooked_grads[0][0];
   auto& axis = this->axis_;
+
+  // Convert All Inputs to DistTensor if Necessary
+  const phi::distributed::ProcessMesh* mesh = nullptr;
+  bool inputs_contain_dist_tensor = InputsContainDistTensor(&mesh, grad_out);
+  if (inputs_contain_dist_tensor) {
+    ConvertAllInputsToDistTensor(mesh, x, y);
+  }
+
   // Prepare Grad function call
 
   const auto& out_metas = OutputMeta();
@@ -75,9 +101,9 @@ MultiplyGradNode::operator()(
   bool trace_backward = egr::Controller::Instance().HasGrad() && create_graph;
 
   // Set DistAttr of Out Tensor for semi-auto parallel
-  if (IsRunAutoParallel()) {
+  if (IsRunAutoParallel() || inputs_contain_dist_tensor) {
     egr::EagerUtils::SetGradOutputDistAttr(
-        out_metas, {0, 1}, api_output_0, api_output_1);
+        out_metas, {0, 1}, *mesh, api_output_0, api_output_1);
   }
 
   // Inplace Check
@@ -110,7 +136,11 @@ MultiplyGradNode::operator()(
 
   // Call grad_api function
 
-  if (paddle::prim::PrimCommonUtils::IsEagerPrimEnabled()) {
+  std::string grad_op_name = "multiply_grad";
+  auto need_skip =
+      paddle::prim::StaticCompositeContext::Instance().CheckSkipCompOps(
+          grad_op_name);
+  if (paddle::prim::PrimCommonUtils::IsEagerPrimEnabled() && !need_skip) {
     bool original_global_grad = egr::Controller::Instance().HasGrad();
     if (!create_graph) {
       egr::Controller::Instance().SetHasGrad(create_graph);
@@ -144,34 +174,34 @@ MultiplyGradNode::operator()(
 
   auto& grad_x = returns[0][0];
   egr::AutogradMeta* grad_x_autograd_meta =
-      returns[0][0].initialized() ? egr::EagerUtils::autograd_meta(&grad_x)
-                                  : nullptr;
+      returns[0][0].has_allocation() ? egr::EagerUtils::autograd_meta(&grad_x)
+                                     : nullptr;
   if (grad_x_autograd_meta) grad_x_autograd_meta->SetStopGradient(false);
 
   auto& grad_y = returns[1][0];
   egr::AutogradMeta* grad_y_autograd_meta =
-      returns[1][0].initialized() ? egr::EagerUtils::autograd_meta(&grad_y)
-                                  : nullptr;
+      returns[1][0].has_allocation() ? egr::EagerUtils::autograd_meta(&grad_y)
+                                     : nullptr;
   if (grad_y_autograd_meta) grad_y_autograd_meta->SetStopGradient(false);
 
   // Create Grad Node
 
-  if (!paddle::prim::PrimCommonUtils::IsEagerPrimEnabled()) {
+  if (!paddle::prim::PrimCommonUtils::IsEagerPrimEnabled() || need_skip) {
     if (trace_backward) {
-      paddle::platform::RecordEvent node_creation_record_event(
+      phi::RecordEvent node_creation_record_event(
           "multiply_grad node_creation",
-          paddle::platform::TracerEventType::OperatorInner,
+          phi::TracerEventType::OperatorInner,
           1);
 
       // Node Construction
       auto grad_node = std::shared_ptr<MultiplyDoubleGradNode>(  // NOLINT
           new MultiplyDoubleGradNode(2, 3));
       // SetAttributes if needed
-      grad_node->SetAttributeaxis(axis);
+      grad_node->SetAttribute_axis(axis);
       // Set TensorWrappers for Forward Inputs if needed
-      grad_node->SetTensorWrapperx(x);
-      grad_node->SetTensorWrappery(y);
-      grad_node->SetTensorWrappergrad_out(grad_out);
+      grad_node->SetTensorWrapper_x(x);
+      grad_node->SetTensorWrapper_y(y);
+      grad_node->SetTensorWrapper_grad_out(grad_out);
       // SetGradOutMeta & SetEdges
       grad_node->SetGradOutMeta(x, 0);
       grad_node->SetGradOutMeta(y, 1);
@@ -196,6 +226,7 @@ MultiplyGradNode::operator()(
   }
 
   VLOG(4) << "Finish AD API GRAD: multiply_grad";
+  VLOG(6) << "gradnode_ptr = " << this;
   // LOG IF DEBUG
 
   if (VLOG_IS_ON(4)) {
@@ -227,6 +258,14 @@ MultiplyGradNode::operator()(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }
 
+  if (HasNodePostHook()) {
+    returns = ApplyNodePostHooks(returns, hooked_grads);
+  }
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("MultiplyGradNode finish");
+  }
+
   // Return
   if (NeedComplexToRealConversion()) HandleComplexGradToRealGrad(&returns);
   return returns;
@@ -240,6 +279,20 @@ MultiplyDoubleGradNode::operator()(
     bool is_new_grad) {
   VLOG(3) << "Running AD API GRAD: "
           << "multiply_double_grad";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("MultiplyDoubleGradNode begin");
+  }
+  // This 'Local_XXXGradNode' record event is different with
+  // 'Global_XXXGradNode' event.
+  // * 'Local_XXXGradNode' will only cover execution time of this function.
+  // * 'Global_XXXGradNode' will not only cover execution time of this function,
+  // but also include gradient
+  //    accumulation when the output(s) of corresponding forward OP are shared
+  //    by other OP(s), which may have extra accumulation overhead than
+  //    'Local_XXXGradNode'.
+  phi::RecordEvent node_execution_inner(
+      "Local_MultiplyDoubleGradNode", phi::TracerEventType::OperatorInner, 1);
+
   // Fill Zero For GradIn Tensors
   const auto& input_metas = this->InputMeta();
   egr::EagerUtils::FillZeroForEmptyOptionalGradInput(&grads[0][0],
@@ -257,14 +310,14 @@ MultiplyDoubleGradNode::operator()(
   auto& fwd_grad_grad_x = hooked_grads[0][0];
 
   paddle::optional<paddle::Tensor> fwd_grad_grad_x_optional;
-  if (fwd_grad_grad_x.initialized())
+  if (fwd_grad_grad_x.has_allocation())
     fwd_grad_grad_x_optional =
         paddle::make_optional<paddle::Tensor>(fwd_grad_grad_x);
 
   auto& fwd_grad_grad_y = hooked_grads[1][0];
 
   paddle::optional<paddle::Tensor> fwd_grad_grad_y_optional;
-  if (fwd_grad_grad_y.initialized())
+  if (fwd_grad_grad_y.has_allocation())
     fwd_grad_grad_y_optional =
         paddle::make_optional<paddle::Tensor>(fwd_grad_grad_y);
 
@@ -297,7 +350,7 @@ MultiplyDoubleGradNode::operator()(
   // Inplace Check
 
   bool can_be_inplaced = false;
-  if (fwd_grad_grad_x.initialized()) {
+  if (fwd_grad_grad_x.has_allocation()) {
     VLOG(10) << fwd_grad_grad_x.name() << "(grad_x_grad) use_count: "
              << fwd_grad_grad_x.impl().use_count();
     if (fwd_grad_grad_x.impl().use_count() == 1 ||
@@ -309,7 +362,7 @@ MultiplyDoubleGradNode::operator()(
   // Inplace Strategy
 
   if (trace_backward) {
-    VLOG(6) << "No Inplace should happend for wrappered input: "
+    VLOG(6) << "No Inplace should happened for wrapped input: "
                "{inplace_grad_input_str}";
   } else {
     if (api_output_2 != nullptr && can_be_inplaced) {
@@ -356,22 +409,39 @@ MultiplyDoubleGradNode::operator()(
 
   // Call grad_api function
 
-  bool original_global_grad = egr::Controller::Instance().HasGrad();
-  if (!create_graph) {
-    egr::Controller::Instance().SetHasGrad(create_graph);
-  }
-  paddle::prim::multiply_double_grad<paddle::Tensor>(x,
-                                                     y,
-                                                     fwd_grad_out,
-                                                     fwd_grad_grad_x_optional,
-                                                     fwd_grad_grad_y_optional,
-                                                     axis,
-                                                     api_output_0,
-                                                     api_output_1,
-                                                     api_output_2);
-  VLOG(4) << "Composite api multiply_double_grad is called ";
-  if (!create_graph) {
-    egr::Controller::Instance().SetHasGrad(original_global_grad);
+  std::string grad_op_name = "multiply_double_grad";
+  auto need_skip =
+      paddle::prim::StaticCompositeContext::Instance().CheckSkipCompOps(
+          grad_op_name);
+  if (!need_skip) {
+    bool original_global_grad = egr::Controller::Instance().HasGrad();
+    if (!create_graph) {
+      egr::Controller::Instance().SetHasGrad(create_graph);
+    }
+    paddle::prim::multiply_double_grad<paddle::Tensor>(x,
+                                                       y,
+                                                       fwd_grad_out,
+                                                       fwd_grad_grad_x_optional,
+                                                       fwd_grad_grad_y_optional,
+                                                       axis,
+                                                       api_output_0,
+                                                       api_output_1,
+                                                       api_output_2);
+    VLOG(4) << "Composite api multiply_double_grad is called ";
+    if (!create_graph) {
+      egr::Controller::Instance().SetHasGrad(original_global_grad);
+    }
+  } else {
+    paddle::experimental::multiply_double_grad(x,
+                                               y,
+                                               fwd_grad_out,
+                                               fwd_grad_grad_x_optional,
+                                               fwd_grad_grad_y_optional,
+                                               axis,
+                                               api_output_0,
+                                               api_output_1,
+                                               api_output_2);
+    VLOG(4) << "Fused api multiply_double_grad is called";
   }
 
   // Check NaN and Inf id needed
@@ -391,19 +461,19 @@ MultiplyDoubleGradNode::operator()(
 
   auto& grad_x = returns[0][0];
   egr::AutogradMeta* grad_x_autograd_meta =
-      returns[0][0].initialized() ? egr::EagerUtils::autograd_meta(&grad_x)
-                                  : nullptr;
+      returns[0][0].has_allocation() ? egr::EagerUtils::autograd_meta(&grad_x)
+                                     : nullptr;
   if (grad_x_autograd_meta) grad_x_autograd_meta->SetStopGradient(false);
 
   auto& grad_y = returns[1][0];
   egr::AutogradMeta* grad_y_autograd_meta =
-      returns[1][0].initialized() ? egr::EagerUtils::autograd_meta(&grad_y)
-                                  : nullptr;
+      returns[1][0].has_allocation() ? egr::EagerUtils::autograd_meta(&grad_y)
+                                     : nullptr;
   if (grad_y_autograd_meta) grad_y_autograd_meta->SetStopGradient(false);
 
   auto& grad_grad_out = returns[2][0];
   egr::AutogradMeta* grad_grad_out_autograd_meta =
-      returns[2][0].initialized()
+      returns[2][0].has_allocation()
           ? egr::EagerUtils::autograd_meta(&grad_grad_out)
           : nullptr;
   if (grad_grad_out_autograd_meta)
@@ -411,7 +481,16 @@ MultiplyDoubleGradNode::operator()(
 
   // Create Grad Node
 
+  if (need_skip) {
+    if (trace_backward) {
+      PADDLE_THROW(common::errors::Unavailable(
+          "The Op multiply_double_grad doesn't have any grad "
+          "op. If you don't intend calculating higher order "
+          "derivatives, please set `create_graph`to False."));
+    }
+  }
   VLOG(4) << "Finish AD API GRAD: multiply_double_grad";
+  VLOG(6) << "gradnode_ptr = " << this;
   // LOG IF DEBUG
 
   if (VLOG_IS_ON(4)) {
@@ -460,6 +539,14 @@ MultiplyDoubleGradNode::operator()(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }
 
+  if (HasNodePostHook()) {
+    returns = ApplyNodePostHooks(returns, hooked_grads);
+  }
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("MultiplyDoubleGradNode finish");
+  }
+
   // Return
   if (NeedComplexToRealConversion()) HandleComplexGradToRealGrad(&returns);
   return returns;
@@ -474,6 +561,20 @@ MultiplyGradNode::operator()(
     bool is_new_grad) {
   VLOG(3) << "Running AD API GRAD: "
           << "multiply_grad";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("sparse::MultiplyGradNode begin");
+  }
+  // This 'Local_XXXGradNode' record event is different with
+  // 'Global_XXXGradNode' event.
+  // * 'Local_XXXGradNode' will only cover execution time of this function.
+  // * 'Global_XXXGradNode' will not only cover execution time of this function,
+  // but also include gradient
+  //    accumulation when the output(s) of corresponding forward OP are shared
+  //    by other OP(s), which may have extra accumulation overhead than
+  //    'Local_XXXGradNode'.
+  phi::RecordEvent node_execution_inner(
+      "Local_MultiplyGradNode", phi::TracerEventType::OperatorInner, 1);
+
   // Fill Zero For GradIn Tensors
   const auto& input_metas = this->InputMeta();
   egr::EagerUtils::FillZeroForEmptyGradInput(&grads[0][0], input_metas[0][0]);
@@ -555,24 +656,25 @@ MultiplyGradNode::operator()(
 
   auto& x_grad = returns[0][0];
   egr::AutogradMeta* x_grad_autograd_meta =
-      returns[0][0].initialized() ? egr::EagerUtils::autograd_meta(&x_grad)
-                                  : nullptr;
+      returns[0][0].has_allocation() ? egr::EagerUtils::autograd_meta(&x_grad)
+                                     : nullptr;
   if (x_grad_autograd_meta) x_grad_autograd_meta->SetStopGradient(false);
 
   auto& y_grad = returns[1][0];
   egr::AutogradMeta* y_grad_autograd_meta =
-      returns[1][0].initialized() ? egr::EagerUtils::autograd_meta(&y_grad)
-                                  : nullptr;
+      returns[1][0].has_allocation() ? egr::EagerUtils::autograd_meta(&y_grad)
+                                     : nullptr;
   if (y_grad_autograd_meta) y_grad_autograd_meta->SetStopGradient(false);
 
   // Create Grad Node
   if (trace_backward) {
-    PADDLE_THROW(phi::errors::Unavailable(
-        "The Op multiply_grad doesn't have any grad"
-        "op. If you don't intend calculating higher order"
+    PADDLE_THROW(common::errors::Unavailable(
+        "The Op multiply_grad doesn't have any grad "
+        "op. If you don't intend calculating higher order "
         "derivatives, please set `create_graph`to False."));
   }
   VLOG(4) << "Finish AD API GRAD: multiply_grad";
+  VLOG(6) << "gradnode_ptr = " << this;
   // LOG IF DEBUG
 
   if (VLOG_IS_ON(4)) {
@@ -605,6 +707,12 @@ MultiplyGradNode::operator()(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }
 
+  if (HasNodePostHook()) {
+    returns = ApplyNodePostHooks(returns, hooked_grads);
+  }
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("sparse::MultiplyGradNode finish");
+  }
   // Return
   if (NeedComplexToRealConversion()) HandleComplexGradToRealGrad(&returns);
   return returns;

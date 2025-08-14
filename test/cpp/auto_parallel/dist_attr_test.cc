@@ -22,13 +22,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_desc.h"
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/framework/var_desc.h"
+#include "paddle/phi/core/distributed/auto_parallel/proto_helper.h"
 
 namespace phi {
 namespace distributed {
 namespace auto_parallel {
 
-using paddle::framework::BlockDesc;
-using paddle::framework::OpDesc;
 using paddle::framework::ProgramDesc;
 using paddle::framework::VarDesc;
 
@@ -39,13 +38,13 @@ TEST(DistAttr, ctor) {
   ProgramDesc program;
   auto* global_block = program.MutableBlock(0);
   auto* x = global_block->Var("X");
-  x->SetType(paddle::framework::proto::VarType::LOD_TENSOR);
+  x->SetType(paddle::framework::proto::VarType::DENSE_TENSOR);
   x->SetLoDLevel(0);
   x->SetDataType(paddle::framework::proto::VarType::FP32);
   x->SetShape({1000, 784});
 
   auto* y = global_block->Var("Y");
-  y->SetType(paddle::framework::proto::VarType::LOD_TENSOR);
+  y->SetType(paddle::framework::proto::VarType::DENSE_TENSOR);
   y->SetLoDLevel(0);
   y->SetDataType(paddle::framework::proto::VarType::FP32);
   y->SetShape({784, 100});
@@ -56,7 +55,7 @@ TEST(DistAttr, ctor) {
   op->SetInput("Y", {y->Name()});
 
   auto* out = global_block->Var("Out");
-  out->SetType(paddle::framework::proto::VarType::LOD_TENSOR);
+  out->SetType(paddle::framework::proto::VarType::DENSE_TENSOR);
   out->SetShape({1000, 100});
   op->SetOutput("Out", {out->Name()});
 
@@ -99,7 +98,7 @@ TEST(DistAttr, ctor) {
   std::stringstream x_sstream;
   x_sstream << x_dist_attr;
   EXPECT_EQ(x_sstream.str(), x_dist_attr.to_string());
-  auto x_proto = x_dist_attr.to_proto();
+  auto x_proto = phi::distributed::to_proto(x_dist_attr);
   TensorDistAttr new_x_dist_attr = get_dist_attr(x);
   new_x_dist_attr.from_proto(x_proto);
   EXPECT_EQ(x_dist_attr, new_x_dist_attr);

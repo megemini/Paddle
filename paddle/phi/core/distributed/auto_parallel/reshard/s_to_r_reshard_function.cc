@@ -23,15 +23,93 @@
 #include "paddle/phi/core/distributed/store/store_utils.h"
 #include "paddle/phi/kernels/all_gather_kernel.h"
 #include "paddle/phi/kernels/concat_kernel.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/split_kernel.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
+
+namespace {
+
+void ReshardSToRWithPadding(DeviceContext* dev_ctx,
+                            int64_t split_axis,
+                            const std::vector<int64_t>& process_ids,
+                            const DenseTensor& in,
+                            int64_t padding_nums,
+                            DenseTensor* out,
+                            int64_t split_factor = 1) {
+  VLOG(4) << "split factor is " << split_factor;
+  int64_t num_of_process = process_ids.size();
+  auto dtype = in.dtype();
+
+  // For balanced split to replicate, we need to do all gather first.
+  // If the input value doesn't split on axis 0, we need to split
+  // and concat on specific axis.
+  RESHARD_FUNCTOR_WITH_COMM(
+      dev_ctx, AllGather, dtype, process_ids, in, num_of_process, out);
+
+  if (split_axis != 0 || padding_nums != 0 || split_factor > 1) {
+    PADDLE_ENFORCE_EQ((in.dims()[0] % split_factor),
+                      0,
+                      common::errors::InvalidArgument(
+                          "The specified axis of tensor should be evenly "
+                          "splited, but got %d and %d.",
+                          in.dims()[0],
+                          split_factor));
+    IntArray sections(std::vector<int64_t>(num_of_process * split_factor,
+                                           in.dims()[0] / split_factor));
+
+    std::vector<DenseTensor> split_out_vec;
+    RESHARD_FUNCTOR(dev_ctx,
+                    Split,
+                    dtype,
+                    *out,
+                    sections,
+                    /*split_axis*/ 0,
+                    &split_out_vec);
+
+    if (padding_nums != 0) {
+      std::vector<DenseTensor> tmp_out_vec;
+      IntArray tmp_sections(std::vector<int64_t>{
+          in.dims()[split_axis] - padding_nums, padding_nums});
+      RESHARD_FUNCTOR(dev_ctx,
+                      Split,
+                      dtype,
+                      split_out_vec[num_of_process - 1],
+                      tmp_sections,
+                      split_axis,
+                      &tmp_out_vec);
+      split_out_vec[num_of_process - 1] = tmp_out_vec[0];
+    }
+
+    // Concat the result after split on correct axis.
+    std::vector<const DenseTensor*> concat_input_vec;
+    concat_input_vec.reserve(split_out_vec.size());
+
+    for (size_t idx = 0; idx < split_out_vec.size(); idx++) {
+      int64_t new_idx =
+          idx % num_of_process * split_factor + idx / num_of_process;
+      concat_input_vec.emplace_back(&(split_out_vec.at(new_idx)));
+    }
+
+    RESHARD_FUNCTOR(dev_ctx, Concat, dtype, concat_input_vec, split_axis, out);
+  }
+}
+
+std::map<int, int64_t> GetSplitAxisWithDimsMapping(
+    const std::vector<std::vector<int64_t>>& dims_mapping) {
+  std::map<int, int64_t> split_axis_to_mesh_axis;
+  for (size_t i = 0; i < dims_mapping.size(); ++i) {
+    if (dims_mapping[i].size() > 0) {
+      split_axis_to_mesh_axis.emplace(i, dims_mapping[i][0]);
+    }
+  }
+  return split_axis_to_mesh_axis;
+}
+}  // namespace
 
 bool SToRReshardFunction::IsSuitable(const DistTensor& in,
                                      const TensorDistAttr& out_dist_attr) {
   const auto& in_dist_attr = in.dist_attr();
-  const auto& in_dims_mapping = in_dist_attr.dims_mapping();
 
   RESHARD_SHORTCUT_IF_FALSE(in_dist_attr.is_shard());
   RESHARD_SHORTCUT_IF_FALSE(out_dist_attr.is_replicated());
@@ -43,14 +121,6 @@ bool SToRReshardFunction::IsSuitable(const DistTensor& in,
   RESHARD_SHORTCUT_IF_FALSE(out_process_mesh.ndim() == 1);
   RESHARD_SHORTCUT_IF_FALSE(in_process_mesh == out_process_mesh);
 
-  // Ensure the tensor is balanced split, or we need send/recv rather than
-  // all_gather
-  int split_axis = GetSplitAxisWithDimsMapping(in_dims_mapping).begin()->first;
-  int64_t num_of_process = in_process_mesh.size();
-  RESHARD_SHORTCUT_IF_FALSE(in.local_dims()[static_cast<int>(split_axis)] *
-                                num_of_process ==
-                            in.dims()[static_cast<int>(split_axis)]);
-
   return true;
 }
 
@@ -58,85 +128,92 @@ void SToRReshardFunction::Eval(DeviceContext* dev_ctx,
                                const DistTensor& in,
                                const TensorDistAttr& out_dist_attr,
                                DistTensor* out) {
-  VLOG(3) << "Call SToRReshardFunction Eval";
+  VLOG(3) << "Call " << Name();
   const auto& in_dist_attr = in.dist_attr();
-  const auto& in_dims_mapping = in_dist_attr.dims_mapping();
+  const auto& in_dims_mapping = in_dist_attr.multi_dims_mapping();
   const auto& in_process_mesh = in_dist_attr.process_mesh();
   const auto& in_process_ids = in_process_mesh.process_ids();
-  auto dtype = in.dtype();
-
-  // Since the precondition ensure the out_process_ids is equal to the
-  // in_process_ids, so the participate process ids mush equal to either
-  // in_process_ids or out_process_ids.
-  RESHARD_FUNCTOR_WITH_COMM(dev_ctx,
-                            AllGather,
-                            dtype,
-                            in_process_ids,
-                            in.value(),
-                            in_process_ids.size(),
-                            GetMutableTensor(out));
-  int split_axis = GetSplitAxisWithDimsMapping(in_dims_mapping).begin()->first;
-
-  if (split_axis == 0) {
-    // If the input dist tensor is shard(0), the subsequent split
-    // and concat is unnecessary.
+  if (in_process_ids.size() == 1) {
+    SetValue(out, in.value());
     SetDistProps(out, in.dims(), out_dist_attr);
-  } else {
-    // Since the result of all_gather always concat the tensor on axis 0,
-    // first we need to split the result on axis 0,
-    // then we need to concat the split result on input split axis.
-    int64_t default_split_axis = 0;
-    int64_t num_of_process = static_cast<int64_t>(in_process_ids.size());
-
-    IntArray sections(std::vector<int64_t>(
-        num_of_process,
-        in.value().dims()[static_cast<int>(default_split_axis)]));
-    std::vector<DenseTensor> split_out_vec;
-    RESHARD_FUNCTOR(dev_ctx,
-                    Split,
-                    dtype,
-                    out->value(),
-                    sections,
-                    default_split_axis,
-                    &split_out_vec);
-
-    // Concat the result after split on correct axis.
-    std::vector<const DenseTensor*> concat_input_vec;
-    for (const auto& tensor : split_out_vec) {
-      concat_input_vec.emplace_back(&tensor);
-    }
-
-    RESHARD_FUNCTOR(dev_ctx,
-                    Concat,
-                    dtype,
-                    concat_input_vec,
-                    split_axis,
-                    GetMutableTensor(out));
-
-    SetDistProps(out, in.dims(), out_dist_attr);
+    return;
   }
+
+  int split_axis = GetSplitAxisWithDimsMapping(in_dims_mapping).begin()->first;
+  int64_t mesh_axis =
+      GetSplitAxisWithDimsMapping(in_dims_mapping).begin()->second;
+  int64_t num_of_process = in_process_mesh.size();
+  int64_t num_of_padding = in.dims()[split_axis] % num_of_process;
+  VLOG(4) << "dist attr " << in_dist_attr.to_string();
+  int64_t split_factor = in_dist_attr.get_split_factor(mesh_axis);
+  bool is_balanced_split = (num_of_padding == 0);
+
+  if (is_balanced_split) {
+    VLOG(3) << "Balanced reshard from shard to replicated";
+    ReshardSToRWithPadding(dev_ctx,
+                           split_axis,
+                           in_process_ids,
+                           in.value(),
+                           /*padding_nums*/ 0,
+                           GetMutableTensor(out),
+                           split_factor);
+  } else {
+    VLOG(3) << "Unbalanced reshard from shard to replicated";
+    int64_t avg_size_on_split_axis =
+        (in.dims()[split_axis] + num_of_process - 1) / num_of_process;
+    int64_t padding_nums =
+        avg_size_on_split_axis * num_of_process - in.dims()[split_axis];
+    bool need_padding = (in.local_dims()[split_axis] != avg_size_on_split_axis);
+
+    if (need_padding) {
+      DDim concat_local_shape = in.local_dims();
+      concat_local_shape[split_axis] = padding_nums;
+      IntArray concat_local_shape_int_array(concat_local_shape.Get(),
+                                            concat_local_shape.size());
+      auto dtype = in.dtype();
+
+      DenseTensor concat_local_tensor;
+      RESHARD_FUNCTOR(dev_ctx,
+                      Full,
+                      dtype,
+                      concat_local_shape_int_array,
+                      0,
+                      &concat_local_tensor);
+
+      DenseTensor in_local_tensor = in.value();
+      std::vector<const DenseTensor*> concat_input_vec = {&in_local_tensor,
+                                                          &concat_local_tensor};
+
+      DenseTensor concat_result;
+      RESHARD_FUNCTOR(
+          dev_ctx, Concat, dtype, concat_input_vec, split_axis, &concat_result);
+      ReshardSToRWithPadding(dev_ctx,
+                             split_axis,
+                             in_process_ids,
+                             concat_result,
+                             padding_nums,
+                             GetMutableTensor(out));
+    } else {
+      ReshardSToRWithPadding(dev_ctx,
+                             split_axis,
+                             in_process_ids,
+                             in.value(),
+                             padding_nums,
+                             GetMutableTensor(out));
+    }
+  }
+  SetDistProps(out, in.dims(), out_dist_attr);
 }
 
 bool SToRReshardFunctionCrossMesh::IsSuitable(
     const DistTensor& in, const TensorDistAttr& out_dist_attr) {
   const auto& in_dist_attr = in.dist_attr();
-  const auto& in_dims_mapping = in_dist_attr.dims_mapping();
 
   RESHARD_SHORTCUT_IF_FALSE(in_dist_attr.is_shard());
   RESHARD_SHORTCUT_IF_FALSE(out_dist_attr.is_replicated());
 
   const auto& in_process_mesh = in_dist_attr.process_mesh();
   const auto& out_process_mesh = out_dist_attr.process_mesh();
-
-  int64_t cur_global_rank = GetCurGlobalRank();
-  if (in_process_mesh.contains(cur_global_rank)) {
-    int split_axis =
-        GetSplitAxisWithDimsMapping(in_dims_mapping).begin()->first;
-    int64_t num_of_process = in_process_mesh.size();
-    RESHARD_SHORTCUT_IF_FALSE(in.local_dims()[static_cast<int>(split_axis)] *
-                                  num_of_process ==
-                              in.dims()[static_cast<int>(split_axis)]);
-  }
 
   RESHARD_SHORTCUT_IF_FALSE(in_process_mesh.ndim() == 1);
   RESHARD_SHORTCUT_IF_FALSE(out_process_mesh.ndim() == 1);
@@ -151,7 +228,7 @@ void SToRReshardFunctionCrossMesh::Eval(DeviceContext* dev_ctx,
                                         const DistTensor& in,
                                         const TensorDistAttr& out_dist_attr,
                                         DistTensor* out) {
-  VLOG(3) << "Call SToRReshardFunctionCrossMesh Eval";
+  VLOG(3) << "Call " << Name();
   const auto& out_process_mesh = out_dist_attr.process_mesh();
 
   SameStatusReshardFunction same_status_func;
@@ -166,7 +243,7 @@ void SToRReshardFunctionCrossMesh::Eval(DeviceContext* dev_ctx,
     SToRReshardFunction s_to_r_func;
     PADDLE_ENFORCE(
         s_to_r_func.IsSuitable(tmp_result, out_dist_attr),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Invoke the s to r reshard function is not valid from %s to %s.",
             tmp_result.dist_attr(),
             out_dist_attr));
@@ -177,5 +254,4 @@ void SToRReshardFunctionCrossMesh::Eval(DeviceContext* dev_ctx,
   }
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

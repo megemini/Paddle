@@ -14,8 +14,18 @@ limitations under the License. */
 
 #include "paddle/phi/core/distributed/auto_parallel/inferspmd_utils.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
+
+InferSpmdContext::InferSpmdContext(
+    paddle::small_vector<DistMetaTensor, phi::kInputSmallVectorSize> inputs,
+    paddle::small_vector<Attribute, phi::kAttrSmallVectorSize> attrs) {
+  for (size_t i = 0; i < inputs.size(); i++) {
+    EmplaceBackInput(inputs[i]);
+  }
+  for (size_t i = 0; i < attrs.size(); i++) {
+    EmplaceBackAttr(attrs[i]);
+  }
+}
 
 void InferSpmdContext::EmplaceBackInput(DistMetaTensor input) {
   int index = static_cast<int>(inputs_.size());
@@ -45,7 +55,7 @@ AttrType InferSpmdContext::AttrAt(size_t idx) const {
   try {
     return paddle::get<AttrType>(attrs_.at(idx));
   } catch (paddle::bad_variant_access const& e) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Attribute cast error in InferSpmd Context, the input attr type is "
         "`%s`, but the expected attribute type is `%s`.",
         attrs_.at(idx).type().name(),
@@ -56,6 +66,7 @@ AttrType InferSpmdContext::AttrAt(size_t idx) const {
 template float InferSpmdContext::AttrAt(size_t idx) const;
 template int InferSpmdContext::AttrAt(size_t idx) const;
 template int64_t InferSpmdContext::AttrAt(size_t idx) const;
+template DataType InferSpmdContext::AttrAt(size_t idx) const;
 
 template <>
 bool InferSpmdContext::AttrAt(size_t idx) const {
@@ -67,7 +78,7 @@ bool InferSpmdContext::AttrAt(size_t idx) const {
       return paddle::get<bool>(attr);
     }
   } catch (paddle::bad_variant_access const& e) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Attribute cast error in InferSpmd Context, the input attr type is "
         "`%s`, but the expected attribute type is `bool`.",
         attrs_.at(idx).type().name()));
@@ -81,11 +92,14 @@ std::vector<int> InferSpmdContext::AttrAt(size_t idx) const {
     if (attr.type() == typeid(std::vector<bool>)) {
       std::vector<bool> val = PADDLE_GET_CONST(std::vector<bool>, attr);
       return std::vector<int>(val.begin(), val.end());
+    } else if (attr.type() == typeid(std::vector<int64_t>) &&
+               paddle::get<std::vector<int64_t>>(attr).empty()) {
+      return std::vector<int>();
     } else {
       return paddle::get<std::vector<int>>(attr);
     }
   } catch (paddle::bad_variant_access const& e) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Attribute cast error in InferSpmd Context, the input attr type is "
         "`%s`, but the expected attribute type is `std::vector<int>`.",
         attrs_.at(idx).type().name()));
@@ -106,9 +120,22 @@ std::vector<int64_t> InferSpmdContext::AttrAt(size_t idx) const {
       return PADDLE_GET_CONST(std::vector<int64_t>, attr);
     }
   } catch (paddle::bad_variant_access const& e) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Attribute cast error in InferSpmd Context, the input attr type is "
         "`%s`, but the expected attribute type is `std::vector<int64_t>`.",
+        attrs_.at(idx).type().name()));
+  }
+}
+
+template <>
+std::string InferSpmdContext::AttrAt(size_t idx) const {
+  try {
+    auto attr = attrs_.at(idx);
+    return PADDLE_GET_CONST(std::string, attr);
+  } catch (paddle::bad_variant_access const& e) {
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Attribute cast error in InferSpmd Context, the input attr type is "
+        "`%s`, but the expected attribute type is `std::string`.",
         attrs_.at(idx).type().name()));
   }
 }
@@ -144,7 +171,7 @@ bool SpmdRuleFactory::ContainsSpmdRule(const std::string& kernel_name) const {
 }
 
 int SpmdRuleFactory::InsertSpmdRule(std::string kernel_name, SpmdRule rule) {
-  spmd_rule_map_.insert({std::move(kernel_name), std::move(rule)});
+  spmd_rule_map_.insert({std::move(kernel_name), rule});
   return 0;
 }
 
@@ -154,10 +181,9 @@ const SpmdRule& SpmdRuleFactory::GetSpmdRule(
   PADDLE_ENFORCE_NE(
       it,
       spmd_rule_map_.end(),
-      phi::errors::NotFound("`%s` Kernel's Spmd rules is not registered.",
-                            kernel_name));
+      common::errors::NotFound("`%s` Kernel's Spmd rules is not registered.",
+                               kernel_name));
   return it->second;
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

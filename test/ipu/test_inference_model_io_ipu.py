@@ -56,64 +56,60 @@ class TestBase(IPUOpTest):
         scope = paddle.static.Scope()
         main_prog = paddle.static.Program()
         startup_prog = paddle.static.Program()
-        main_prog.random_seed = self.SEED
-        startup_prog.random_seed = self.SEED
+        paddle.seed(self.SEED)
         generator = paddle.base.unique_name.UniqueNameGenerator()
         self.full_name = '/'.join(
             [self.attrs['path'].name, self.attrs['model_name']]
         )
 
-        with paddle.base.unique_name.guard(generator):
-            with paddle.static.scope_guard(scope):
-                with paddle.static.program_guard(main_prog, startup_prog):
-                    x = paddle.static.data(
-                        name=self.feed_list[0],
-                        shape=self.feed_shape[0],
-                        dtype='float32',
-                    )
-                    conv1 = paddle.static.nn.conv2d(
-                        x,
-                        num_filters=3,
-                        filter_size=3,
-                        bias_attr=False,
-                        name='conv2d',
-                    )
-                    loss = paddle.mean(conv1)
-
-                    if self.attrs['is_training']:
-                        if self.attrs['opt_type'] == 'sgd':
-                            sgd = paddle.optimizer.SGD(learning_rate=1e-2)
-                            sgd.minimize(loss)
-                        elif self.attrs['opt_type'] == 'adam':
-                            adam = paddle.optimizer.Adam(learning_rate=1e-2)
-                            adam.minimize(loss)
-                        elif self.attrs['opt_type'] == 'lamb':
-                            lamb = paddle.optimizer.Lamb(learning_rate=1e-2)
-                            lamb.minimize(loss)
-                fetch_list = [loss.name]
-
-                place = paddle.IPUPlace()
-                exe = paddle.static.Executor(place)
-                exe.run(startup_prog)
-
-                ipu_strategy = paddle.static.IpuStrategy()
-                ipu_strategy.set_graph_config(
-                    is_training=self.attrs['is_training']
+        with (
+            paddle.base.unique_name.guard(generator),
+            paddle.static.scope_guard(scope),
+        ):
+            with paddle.static.program_guard(main_prog, startup_prog):
+                x = paddle.static.data(
+                    name=self.feed_list[0],
+                    shape=self.feed_shape[0],
+                    dtype='float32',
                 )
-                program = paddle.static.IpuCompiledProgram(
-                    main_prog, ipu_strategy=ipu_strategy
-                ).compile(self.feed_list, fetch_list)
+                conv1 = paddle.nn.Conv2D(
+                    in_channels=x.shape[1],
+                    out_channels=3,
+                    kernel_size=3,
+                    bias_attr=False,
+                )(x)
+                loss = paddle.mean(conv1)
 
-                result = []
-                for i in range(self.attrs['steps']):
-                    tmp = exe.run(
-                        program, feed=self.feed, fetch_list=fetch_list
-                    )
-                    result.append(tmp)
+                if self.attrs['is_training']:
+                    if self.attrs['opt_type'] == 'sgd':
+                        sgd = paddle.optimizer.SGD(learning_rate=1e-2)
+                        sgd.minimize(loss)
+                    elif self.attrs['opt_type'] == 'adam':
+                        adam = paddle.optimizer.Adam(learning_rate=1e-2)
+                        adam.minimize(loss)
+                    elif self.attrs['opt_type'] == 'lamb':
+                        lamb = paddle.optimizer.Lamb(learning_rate=1e-2)
+                        lamb.minimize(loss)
+            fetch_list = [loss]
 
-                paddle.static.save_inference_model(
-                    self.full_name, x, loss, exe, program=program.org_program
-                )
+            place = paddle.IPUPlace()
+            exe = paddle.static.Executor(place)
+            exe.run(startup_prog)
+
+            ipu_strategy = paddle.static.IpuStrategy()
+            ipu_strategy.set_graph_config(is_training=self.attrs['is_training'])
+            program = paddle.static.IpuCompiledProgram(
+                main_prog, ipu_strategy=ipu_strategy
+            ).compile(self.feed_list, fetch_list)
+
+            result = []
+            for i in range(self.attrs['steps']):
+                tmp = exe.run(program, feed=self.feed, fetch_list=fetch_list)
+                result.append(tmp)
+
+            paddle.static.save_inference_model(
+                self.full_name, x, loss, exe, program=program.org_program
+            )
 
     def _test_load(self, run_ipu):
         if run_ipu:

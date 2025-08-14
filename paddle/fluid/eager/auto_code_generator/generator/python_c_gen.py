@@ -26,7 +26,12 @@ from codegen_utils import (
 #########################
 # Global Configurations #
 #########################
-skipped_forward_api_names = set()
+skipped_forward_api_names = {
+    "scale_grad",
+    "push_gpups_sparse",
+    "multiply_grad",
+    "pull_sparse_v2_grad",
+}
 
 
 def SkipAPIGeneration(forward_api_name):
@@ -69,28 +74,28 @@ def FindParsingFunctionFromAttributeType(atype):
 # Refactored Functions #
 ########################
 PARSE_PYTHON_C_TENSORS_TEMPLATE = (
-    "    auto {} = {}(\"{}\", \"{}\", args, {}, {});\n"
+    '    auto {} = {}("{}", "{}", args, {}, {});\n'
 )
 
 PARSE_PYTHON_C_TENSOR_REF_TEMPLATE = (
-    "    auto& {} = {}(\"{}\", \"{}\", args, {}, {});\n"
+    '    auto& {} = {}("{}", "{}", args, {}, {});\n'
 )
 
 CONVERT_TO_DISTTENSOR_AND_PARSE_PYTHON_C_TENSORS_TEMPLATE = (
-    "    {} = {}(\"{}\", \"{}\", args, {}, {}, mesh);\n"
+    '    {} = {}("{}", "{}", args, {}, {}, mesh);\n'
 )
 
 CONVERT_INPUT_TENSORS_TO_DIST_TENSOR_WITH_SINGLE_TENSOR_TEMPLATE = """
     const phi::distributed::ProcessMesh* mesh = nullptr;
-    if (InputsContainDistTensor(&mesh{input_names})) {{
-      ConvertAllInputsToDistTensor(mesh{input_single_tensor_names});
+    if (egr::InputsContainDistTensor(&mesh{input_names})) {{
+      egr::ConvertAllInputsToDistTensor(mesh{input_single_tensor_names});
       {optional_and_vector_convert_code}
     }}
 """
 
 CONVERT_INPUT_TENSORS_TO_DIST_TENSOR_WITHOUT_SINGLE_TENSOR_TEMPLATE = """
     const phi::distributed::ProcessMesh* mesh = nullptr;
-    if (InputsContainDistTensor(&mesh{input_names})) {{
+    if (egr::InputsContainDistTensor(&mesh{input_names})) {{
       {optional_and_vector_convert_code}
     }}
 """
@@ -100,7 +105,9 @@ PARSE_PYTHON_C_ARGS_TEMPLATE = """    PyObject* {}_obj = PyTuple_GET_ITEM(args, 
 """
 
 
-RECORD_EVENT_TEMPLATE = "paddle::platform::RecordEvent {}(\"{} {}\", paddle::platform::TracerEventType::UserDefined, 1);"
+RECORD_EVENT_TEMPLATE = (
+    'phi::RecordEvent {}("{} {}", phi::TracerEventType::UserDefined, 1);'
+)
 
 
 RETURN_INPLACE_PYOBJECT_TEMPLATE = """
@@ -119,6 +126,8 @@ PyObject * eager_api_{}(PyObject *self, PyObject *args, PyObject *kwargs) {{
     // Get EagerTensors from args
 {}
     // Parse Attributes if needed
+{}
+    // Parse input_out if needed
 {}
     tstate = PyEval_SaveThread();
 
@@ -140,35 +149,35 @@ PyObject * eager_api_{}(PyObject *self, PyObject *args, PyObject *kwargs) {{
 }}
 """
 
-NOAMP_DYGRAPH_FUNCTION_TEMPLATE = "decltype({}({})) out = {}({});"
+NOAMP_DYGRAPH_FUNCTION_TEMPLATE = "decltype({}({})) ad_func_out = {}({});"
 
 
 FUNCTION_SET_DEVICE_TEMPLATE = """{}
     SetPythonStack();
-    if (paddle::platform::is_gpu_place(place)) {{
+    if (phi::is_gpu_place(place)) {{
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
       phi::backends::gpu::SetDeviceId(place.device);
       VLOG(4) <<"CurrentDeviceId: " << phi::backends::gpu::GetCurrentDeviceId() << " from " << (int)place.device;
 #else
-      PADDLE_THROW(paddle::platform::errors::PreconditionNotMet(
+      PADDLE_THROW(common::errors::PreconditionNotMet(
         "PaddlePaddle should compile with GPU if use CUDAPlace."));
 #endif
     }}
-    if (paddle::platform::is_custom_place(place)) {{
+    if (phi::is_custom_place(place)) {{
 #if defined(PADDLE_WITH_CUSTOM_DEVICE)
       phi::DeviceManager::SetDevice(place);
       VLOG(4) <<"CurrentDeviceId: " << phi::DeviceManager::GetDevice(place.GetDeviceType()) << " from " << (int)place.device;
 #else
-      PADDLE_THROW(paddle::platform::errors::PreconditionNotMet(
+      PADDLE_THROW(common::errors::PreconditionNotMet(
         "PaddlePaddle should compile with CUSTOM_DEVICE if use CustomPlace."));
 #endif
     }}
-    if (paddle::platform::is_xpu_place(place)) {{
+    if (phi::is_xpu_place(place)) {{
 #if defined(PADDLE_WITH_XPU)
       phi::backends::xpu::SetXPUDeviceId(place.device);
       VLOG(4) <<"CurrentDeviceId: " << phi::backends::xpu::GetXPUCurrentDeviceId() << " from " << (int)place.device;
 #else
-      PADDLE_THROW(paddle::platform::errors::PreconditionNotMet(
+      PADDLE_THROW(common::errors::PreconditionNotMet(
         "PaddlePaddle should compile with XPU if use XPUPlace."));
 #endif
     }}
@@ -177,7 +186,7 @@ FUNCTION_SET_DEVICE_TEMPLATE = """{}
 FUNCTION_NAME_TEMPLATE = "{}{}{}"
 
 
-PYTHON_C_FUNCTION_REG_TEMPLATE = "  {{\"{}{}\", (PyCFunction)(void(*)(void)) {}eager_api_{}, METH_VARARGS | METH_KEYWORDS, \"C++ interface function for {} in dygraph.\"}},\n"
+PYTHON_C_FUNCTION_REG_TEMPLATE = '  {{"{}{}", (PyCFunction)(void(*)(void)) {}eager_api_{}, METH_VARARGS | METH_KEYWORDS, "C++ interface function for {} in dygraph."}},\n'
 
 
 PYTHON_C_WRAPPER_TEMPLATE = """
@@ -187,14 +196,14 @@ PYTHON_C_WRAPPER_TEMPLATE = """
 #include "paddle/phi/backends/device_manager.h"
 #include "paddle/fluid/pybind/eager_utils.h"
 #include "paddle/fluid/pybind/exception.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 #include "paddle/fluid/pybind/op_function_common.h"
 #include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_functions.h"
+#include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_grad_functions.h"
 #include "paddle/fluid/eager/api/manual/eager_manual/dygraph_forward_api.h"
+#include "paddle/fluid/eager/utils.h"
 #include "paddle/fluid/pybind/eager_custom_python_api.h"
 #include "paddle/fluid/pybind/eager.h"
-#include "paddle/fluid/eager/amp_utils.h"
-#include "paddle/fluid/eager/eager_amp_auto_cast.h"
 #include "paddle/fluid/pybind/eager_op_function.h"
 namespace paddle {{
 namespace pybind {{
@@ -207,11 +216,11 @@ static PyMethodDef EagerFinalStateMethods[] = {{
 
 void BindFinalStateEagerOpFunctions(pybind11::module *module) {{
   if (PyModule_AddFunctions(module->ptr(), EagerFinalStateMethods) < 0) {{
-    PADDLE_THROW(platform::errors::Fatal ("Add functions to core.eager.ops failed!"));
+    PADDLE_THROW(common::errors::Fatal ("Add functions to core.eager.ops failed!"));
   }}
 
   if (PyModule_AddFunctions(module->ptr(), CustomEagerFinalStateMethods) < 0) {{
-    PADDLE_THROW(platform::errors::Fatal ("Add functions to core.eager.ops failed!"));
+    PADDLE_THROW(common::errors::Fatal ("Add functions to core.eager.ops failed!"));
   }}
 }}
 
@@ -281,11 +290,6 @@ PYTHON_C_H_TEMPLATE = """
 
 #include <Python.h>
 
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
-
 namespace paddle {{
 namespace pybind {{
 
@@ -325,7 +329,7 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
         # Generated Results
         self.python_c_function_str = ""
         self.python_c_function_reg_str = ""
-        self.python_c_funcion_declare_str = ""
+        self.python_c_function_declare_str = ""
 
     def CollectIsForwardOnly(self):
         forward_api_contents = self.forward_api_contents
@@ -333,7 +337,7 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
             False if 'backward' in forward_api_contents.keys() else True
         )
 
-    def GeneratePythonCFunction(self):
+    def GeneratePythonCFunction(self, no_input_out_tensor=False):
         namespace = self.namespace
         forward_inplace_map = self.forward_inplace_map
         forward_api_name = self.forward_api_name
@@ -496,12 +500,27 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
             dygraph_function_call_list[pos] = f"{name}"
         dygraph_function_call_str = ",".join(dygraph_function_call_list)
 
+        get_input_out_str = ""
+        if (
+            not no_input_out_tensor
+            and len(self.forward_outputs_position_map) == 1
+            and next(iter(self.forward_outputs_position_map.values()))[0]
+            == "Tensor"
+            and forward_api_name != "empty_like"
+        ):
+            dygraph_function_call_str = (
+                dygraph_function_call_str + ", input_out"
+            )
+            get_input_out_str = (
+                "    auto input_out = GetInputOutTensorFromKwargs(kwargs);"
+            )
+
         # Generate Python-C Function Definitions
         fwd_function_name = FUNCTION_NAME_TEMPLATE.format(
             "::", namespace, GetForwardFunctionName(forward_api_name)
         )
 
-        return_str = "    return ToPyObject(out);"
+        return_str = "    return ToPyObject(ad_func_out);"
 
         # Generate Record Event for performance profiling
         pythonc_record_event_str = RECORD_EVENT_TEMPLATE.format(
@@ -515,23 +534,24 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
             dygraph_function_call_str,
         )
 
-        # Generate Python-C Function Definetion
+        # Generate Python-C Function Definition
         self.python_c_function_str = PYTHON_C_FUNCTION_TEMPLATE.format(
             forward_api_name,
             pythonc_record_event_str,
             forward_api_name,
             get_eager_tensor_str,
             parse_attributes_str,
+            get_input_out_str,
             set_device_str,
             noamp_dygraph_function_str,
             return_str,
         )
-        self.python_c_funcion_declare_str = (
+        self.python_c_function_declare_str = (
             PYTHON_C_FUNCTION_DECLARE_TEMPLATE.format(name=forward_api_name)
         )
 
         # Set prefix of forward_api_name to avoid conflicts
-        prefix = self.namespace.strip("::")
+        prefix = self.namespace.removeprefix("::").removesuffix("::")
         forward_api_name_prefix = "" if prefix == "" else prefix + "_"
 
         # Generate Python-C Function Registration
@@ -552,6 +572,7 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
                 namespace,
                 GetForwardFunctionName(inplaced_forward_api_name),
             )
+            dygraph_function_call_str = ",".join(dygraph_function_call_list)
 
             inplace_noamp_dygraph_function_str = (
                 NOAMP_DYGRAPH_FUNCTION_TEMPLATE.format(
@@ -569,22 +590,23 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
                     inplace_args_pos_map[inplace_input],
                 )
             return_str += (
-                "    return ToPyObject(out, args, inplace_var_idx_map);"
+                "    return ToPyObject(ad_func_out, args, inplace_var_idx_map);"
             )
 
-            # Generate Python-C Function Definetion
+            # Generate Python-C Function Definition
             python_c_inplace_func_str = PYTHON_C_FUNCTION_TEMPLATE.format(
                 inplaced_forward_api_name,
                 pythonc_record_event_str,
                 inplaced_forward_api_name,
                 get_eager_tensor_str,
                 parse_attributes_str,
+                "",
                 set_device_str,
                 inplace_noamp_dygraph_function_str,
                 return_str,
             )
 
-            python_c_funcion_declare_str = (
+            python_c_function_declare_str = (
                 PYTHON_C_FUNCTION_DECLARE_TEMPLATE.format(
                     name=inplaced_forward_api_name
                 )
@@ -603,18 +625,20 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
             # self.forward_api_name ending with '_' means it only has inplace api
             if self.forward_api_name[-1] == '_':
                 self.python_c_function_str = python_c_inplace_func_str
-                self.python_c_funcion_declare_str = python_c_funcion_declare_str
+                self.python_c_function_declare_str = (
+                    python_c_function_declare_str
+                )
                 # Generate Python-C Function Registration
                 self.python_c_function_reg_str = python_c_inplace_func_reg_str
             else:
                 self.python_c_function_str += python_c_inplace_func_str
-                self.python_c_funcion_declare_str += (
-                    python_c_funcion_declare_str
+                self.python_c_function_declare_str += (
+                    python_c_function_declare_str
                 )
                 # Generate Python-C Function Registration
                 self.python_c_function_reg_str += python_c_inplace_func_reg_str
 
-    def run(self):
+    def run(self, no_input_out_tensor=False):
         # Initialized is_forward_only
         self.CollectIsForwardOnly()
 
@@ -636,7 +660,7 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
         )
 
         # Code Generation
-        self.GeneratePythonCFunction()
+        self.GeneratePythonCFunction(no_input_out_tensor)
 
         return True
 
@@ -652,17 +676,21 @@ class PythonCGenerator(GeneratorBase):
         # Generated Result
         self.python_c_functions_str = ""
         self.python_c_functions_reg_str = ""
-        self.python_c_funcion_declare_str = ""
+        self.python_c_function_declare_str = ""
 
-    def GeneratePythonCFunctions(self):
+    def GeneratePythonCFunctions(self, no_input_out_tensor=False):
         namespace = self.namespace
 
         forward_api_list = self.forward_api_list
         for forward_api_content in forward_api_list:
+            if "backward_op" in forward_api_content and forward_api_content[
+                "backward_op"
+            ].endswith(('double_grad', 'triple_grad', 'grad_grad')):
+                continue
             f_generator = PythonCSingleFunctionGenerator(
                 forward_api_content, namespace
             )
-            status = f_generator.run()
+            status = f_generator.run(no_input_out_tensor)
 
             if status:
                 self.python_c_functions_str += (
@@ -671,8 +699,8 @@ class PythonCGenerator(GeneratorBase):
                 self.python_c_functions_reg_str += (
                     f_generator.python_c_function_reg_str
                 )
-                self.python_c_funcion_declare_str += (
-                    f_generator.python_c_funcion_declare_str
+                self.python_c_function_declare_str += (
+                    f_generator.python_c_function_declare_str
                 )
 
     def AttachNamespace(self):
@@ -680,18 +708,17 @@ class PythonCGenerator(GeneratorBase):
         python_c_functions_str = self.python_c_functions_str
 
         if namespace != "":
-            if namespace.endswith("::"):
-                namespace = namespace[:-2]
+            namespace = namespace.removesuffix("::")
             self.python_c_functions_str = NAMESPACE_WRAPPER_TEMPLATE.format(
                 namespace, python_c_functions_str
             )
-            self.python_c_funcion_declare_str = (
+            self.python_c_function_declare_str = (
                 NAMESPACE_WRAPPER_TEMPLATE.format(
-                    namespace, self.python_c_funcion_declare_str
+                    namespace, self.python_c_function_declare_str
                 )
             )
 
-    def run(self):
+    def run(self, no_input_out_tensor=False):
         # Infer namespace from yaml_path
         self.InferNameSpace()
 
@@ -699,7 +726,7 @@ class PythonCGenerator(GeneratorBase):
         self.ParseForwardYamlContents()
 
         # Code Generation
-        self.GeneratePythonCFunctions()
+        self.GeneratePythonCFunctions(no_input_out_tensor)
 
         # Wrap with namespace
         self.AttachNamespace()
@@ -756,8 +783,14 @@ if __name__ == "__main__":
     for i in range(len(api_yaml_paths)):
         api_yaml_path = api_yaml_paths[i]
 
+        no_input_out_tensor = (
+            "backward" in api_yaml_path
+            or "strings" in api_yaml_path
+            or "sparse" in api_yaml_path
+        )
+
         py_c_generator = PythonCGenerator(api_yaml_path)
-        py_c_generator.run()
+        py_c_generator.run(no_input_out_tensor)
 
         generated_python_c_functions += (
             py_c_generator.python_c_functions_str + "\n"
@@ -766,20 +799,20 @@ if __name__ == "__main__":
             py_c_generator.python_c_functions_reg_str
         )
         generated_python_c_functions_header += (
-            py_c_generator.python_c_funcion_declare_str
+            py_c_generator.python_c_function_declare_str
         )
 
     python_c_str = GeneratePythonCWrappers(
         generated_python_c_functions, generated_python_c_registration
     )
 
-    soucre_path = args.source_path
+    source_path = args.source_path
     header_path = args.header_path
-    for path in [soucre_path, header_path]:
+    for path in [source_path, header_path]:
         if os.path.exists(path):
             os.remove(path)
 
-    GeneratePythonCFile(soucre_path, python_c_str)
+    GeneratePythonCFile(source_path, python_c_str)
     GeneratePythonCFile(
         header_path,
         PYTHON_C_H_TEMPLATE.format(body=generated_python_c_functions_header),

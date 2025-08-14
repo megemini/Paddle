@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from .base import (  # noqa: F401
-    ConstTypes,
     VariableBase,
     VariableFactory,
     find_traceable_vars,
@@ -22,15 +21,24 @@ from .base import (  # noqa: F401
 from .basic import (  # noqa: F401
     CellVariable,
     ConstantVariable,
+    DataClassInstanceVariable,
     DataVariable,
     DygraphTracerVariable,
+    EnumVariable,
+    ExceptionVariable,
     FunctionGlobalVariable,
     GlobalVariable,
     ModuleVariable,
     NullVariable,
-    NumpyVariable,
+    NumPyArrayVariable,
+    NumPyNumberVariable,
+    NumPyVariable,
     ObjectVariable,
+    ParameterVariable,
+    PlaceVariable,
     SliceVariable,
+    SuperVariable,
+    SymbolicVariable,
     TensorVariable,
 )
 from .callable import (  # noqa: F401
@@ -38,13 +46,17 @@ from .callable import (  # noqa: F401
     CallableVariable,
     ClassVariable,
     ContainerLayerVariable,
+    DataClassVariable,
     FunctionVariable,
     LayerVariable,
     MethodVariable,
+    NumPyApiVariable,
     PaddleApiVariable,
     PaddleLayerVariable,
+    PartialVariable,
+    UserCodeVariable,
     UserDefinedFunctionVariable,
-    UserDefinedGeneratorVariable,
+    UserDefinedGeneratorFunctionVariable,
     UserDefinedLayerVariable,
 )
 from .container import (  # noqa: F401
@@ -56,6 +68,7 @@ from .container import (  # noqa: F401
 )
 from .iter import (  # noqa: F401
     EnumerateVariable,
+    GeneratorVariable,
     IterVariable,
     MapVariable,
     SequenceIterVariable,

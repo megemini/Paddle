@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 
 import paddle
 from paddle import base
-from paddle.base import core
 
 paddle.enable_static()
 
@@ -33,26 +33,23 @@ class TestDeg2radAPI(unittest.TestCase):
         self.out_np = np.deg2rad(self.x_np)
 
     def test_static_graph(self):
-        startup_program = base.Program()
-        train_program = base.Program()
-        with base.program_guard(startup_program, train_program):
+        startup_program = paddle.static.Program()
+        train_program = paddle.static.Program()
+        with paddle.static.program_guard(startup_program, train_program):
             x = paddle.static.data(
                 name='input', dtype=self.x_dtype, shape=self.x_shape
             )
             out = paddle.deg2rad(x)
 
-            place = (
-                base.CUDAPlace(0)
-                if core.is_compiled_with_cuda()
-                else base.CPUPlace()
-            )
+            place = get_device_place()
             exe = base.Executor(place)
             res = exe.run(
-                base.default_main_program(),
                 feed={'input': self.x_np},
                 fetch_list=[out],
             )
-            self.assertTrue((np.array(out[0]) == self.out_np).all())
+            np.testing.assert_allclose(
+                np.array(res[0]), self.out_np, rtol=1e-05
+            )
 
     def test_dygraph(self):
         paddle.disable_static()
@@ -79,3 +76,7 @@ class TestDeg2radAPI2(TestDeg2radAPI):
         np.testing.assert_allclose(np.pi, result2.numpy(), rtol=1e-05)
 
         paddle.enable_static()
+
+
+if __name__ == '__main__':
+    unittest.main()

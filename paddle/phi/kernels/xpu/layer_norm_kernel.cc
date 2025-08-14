@@ -19,8 +19,47 @@
 
 namespace phi {
 
+template <typename T, typename TW, typename Context>
+void LayerNormKernelImpl(const Context& dev_ctx,
+                         const DenseTensor& x,
+                         const paddle::optional<DenseTensor>& scale,
+                         const paddle::optional<DenseTensor>& bias,
+                         float epsilon,
+                         int begin_norm_axis,
+                         DenseTensor* out,
+                         DenseTensor* mean,
+                         DenseTensor* variance) {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+  using XPUTypeTW = typename XPUTypeTrait<TW>::Type;
+  const auto& x_dims = x.dims();
+  auto matrix_dim = common::flatten_to_2d(x_dims, begin_norm_axis);
+  int64_t left = matrix_dim[0];
+  int64_t right = matrix_dim[1];
+
+  const auto* x_data = x.data<T>();
+  const auto* scale_data = scale.get_ptr() ? scale->data<TW>() : nullptr;
+  const auto* bias_data = bias.get_ptr() ? bias->data<TW>() : nullptr;
+  xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
+  auto* out_data = dev_ctx.template Alloc<T>(out);
+  auto* mean_data = dev_ctx.template Alloc<float>(mean);
+  auto* variance_data = dev_ctx.template Alloc<float>(variance);
+  if (x.numel() == 0) return;
+
+  int r = xpu::layer_norm(dev_ctx.x_context(),
+                          reinterpret_cast<const XPUType*>(x_data),
+                          reinterpret_cast<XPUType*>(out_data),
+                          left,
+                          right,
+                          epsilon,
+                          reinterpret_cast<const XPUTypeTW*>(scale_data),
+                          reinterpret_cast<const XPUTypeTW*>(bias_data),
+                          mean_data,
+                          variance_data);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "layer_norm");
+}
+
 template <typename T, typename Context>
-void LayerNormKernel(const Context& ctx,
+void LayerNormKernel(const Context& dev_ctx,
                      const DenseTensor& x,
                      const paddle::optional<DenseTensor>& scale,
                      const paddle::optional<DenseTensor>& bias,
@@ -29,74 +68,39 @@ void LayerNormKernel(const Context& ctx,
                      DenseTensor* out,
                      DenseTensor* mean,
                      DenseTensor* variance) {
-  using XPUType = typename XPUTypeTrait<T>::Type;
-  const auto& x_dims = x.dims();
-  auto matrix_dim = common::flatten_to_2d(x_dims, begin_norm_axis);
-  int left = static_cast<int>(matrix_dim[0]);
-  int right = static_cast<int>(matrix_dim[1]);
-  const auto* x_data = x.data<T>();
+  bool valid_scale = (scale.get_ptr() != nullptr);
+  bool valid_bias = (bias.get_ptr() != nullptr);
 
-  xpu::ctx_guard RAII_GUARD(ctx.x_context());
-
-  // scale
-  const float* scale_data_fp32 = nullptr;
-  const auto* scale_ptr = scale.get_ptr();
-  if (scale_ptr == nullptr) {
-    // no scale, do nothing
-  } else if (scale_ptr->dtype() ==
-             phi::CppTypeToDataType<phi::dtype::float16>::Type()) {
-    float* scale_data_temp =
-        RAII_GUARD.alloc_l3_or_gm<float>(scale_ptr->numel());
-    int r = xpu::cast<XPUType, float>(
-        ctx.x_context(),
-        reinterpret_cast<const XPUType*>(scale_ptr->data<T>()),
-        scale_data_temp,
-        scale_ptr->numel());
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-    scale_data_fp32 = scale_data_temp;
+  auto x_dtype = x.dtype();
+  phi::DataType scale_bias_dtype;
+  if (valid_scale) {
+    scale_bias_dtype = scale->dtype();
+    if (valid_bias) {
+      PADDLE_ENFORCE_EQ(scale->dtype(),
+                        bias->dtype(),
+                        common::errors::InvalidArgument(
+                            "This Scale and Bias of layer_norm op "
+                            "should have the same data type."));
+    }
   } else {
-    // no need to cast
-    scale_data_fp32 = scale_ptr->data<float>();
+    scale_bias_dtype = valid_bias ? bias->dtype() : x_dtype;
   }
 
-  // bias
-  const float* bias_data_fp32 = nullptr;
-  const auto* bias_ptr = bias.get_ptr();
-  if (bias_ptr == nullptr) {
-    // no bias, do nothing
-  } else if (bias_ptr->dtype() ==
-             phi::CppTypeToDataType<phi::dtype::float16>::Type()) {
-    float* bias_data_temp = RAII_GUARD.alloc_l3_or_gm<float>(bias_ptr->numel());
-    int r = xpu::cast<XPUType, float>(
-        ctx.x_context(),
-        reinterpret_cast<const XPUType*>(bias_ptr->data<T>()),
-        bias_data_temp,
-        bias_ptr->numel());
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-    bias_data_fp32 = bias_data_temp;
-  } else {
-    // no need to cast
-    bias_data_fp32 = bias_ptr->data<float>();
+  bool is_scale_bias_same_dtype_with_x = (x_dtype == scale_bias_dtype);
+  if (!is_scale_bias_same_dtype_with_x) {
+    PADDLE_ENFORCE_EQ(scale_bias_dtype,
+                      phi::DataType::FLOAT32,
+                      common::errors::InvalidArgument(
+                          "Unsupported data type of Scale and Bias"));
   }
 
-  auto* out_data = ctx.template Alloc<T>(out);
-  auto* mean_data = ctx.template Alloc<float>(mean);
-  auto* variance_data = ctx.template Alloc<float>(variance);
-
-  // int layer_norm(Context* ctx, const T* x, T* y, int64_t m, int64_t n, float
-  // eps, const float* scale, const float* bias, float* mean, float* var, bool
-  // is_rstd = false);
-  int r = xpu::layer_norm(ctx.x_context(),
-                          reinterpret_cast<const XPUType*>(x_data),
-                          reinterpret_cast<XPUType*>(out_data),
-                          left,
-                          right,
-                          epsilon,
-                          scale_data_fp32,
-                          bias_data_fp32,
-                          mean_data,
-                          variance_data);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "layer_norm");
+  if (is_scale_bias_same_dtype_with_x) {
+    LayerNormKernelImpl<T, T, Context>(
+        dev_ctx, x, scale, bias, epsilon, begin_norm_axis, out, mean, variance);
+  } else {
+    LayerNormKernelImpl<T, float, Context>(
+        dev_ctx, x, scale, bias, epsilon, begin_norm_axis, out, mean, variance);
+  }
 }
 }  // namespace phi
 
@@ -105,4 +109,8 @@ PD_REGISTER_KERNEL(layer_norm,
                    ALL_LAYOUT,
                    phi::LayerNormKernel,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {
+  kernel->OutputAt(1).SetDataType(phi::DataType::UNDEFINED);
+  kernel->OutputAt(2).SetDataType(phi::DataType::UNDEFINED);
+}

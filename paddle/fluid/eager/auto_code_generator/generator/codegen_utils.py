@@ -38,9 +38,7 @@ ops_to_fill_zero_for_empty_grads = {
     "tanh_grad",
     "tanh_double_grad",
     "tanh_triple_grad",
-    "sin_double_grad",
     "sin_triple_grad",
-    "cos_double_grad",
     "cos_triple_grad",
     "subtract_double_grad",
     "divide_double_grad",
@@ -59,6 +57,7 @@ ops_to_fill_zero_for_empty_grads = {
     "conv3d_double_grad",
     "depthwise_conv2d_grad_grad",
     "concat_double_grad",
+    "stack_double_grad",
     "expand_grad",
     "argsort_grad",
     "eigh_grad",
@@ -118,8 +117,11 @@ def ReadFwdFile(filepath):
     # empty file loaded by yaml is None
     contents = yaml.load(f, Loader=yaml.FullLoader)
     f.close()
-    # not all fused ops supoort dygraph
-    if filepath.endswith("fused_ops.yaml") is True:
+    # not all fused ops support dygraph
+    if (
+        filepath.endswith("fused_ops.yaml") is True
+        or filepath.endswith("fused_backward.yaml") is True
+    ):
         new_apis = [
             api
             for api in contents
@@ -134,7 +136,7 @@ def ReadBwdFile(filepath, bw_ops=None):
     f = open(filepath, 'r')
     if bw_ops is None:
         contents = yaml.load(f, Loader=yaml.FullLoader)
-        # not all fused ops supoort dygraph
+        # not all fused ops support dygraph
         if filepath.endswith("fused_backward.yaml") is True:
             new_apis = [
                 api
@@ -175,6 +177,19 @@ def FindForwardName(string):
 
 def IsGradName(string):
     return string.endswith("_grad")
+
+
+def FindRenameForwardName(string):
+    # when op has double_grad and double_grad api has same output of grad api,
+    # double_grad's forward yaml is different from input/output name of grad api
+    # this func find the rename name in double_grad's forward_yaml.
+    # eg acos_grad x_grad -> grad_x, out_grad -> grad_out
+    if string.endswith('_grad'):
+        base_part = string[:-5]
+        transformed_string = 'grad_' + base_part
+        return transformed_string
+    else:
+        raise Exception(f"{string} is not a grad name")
 
 
 def IsPlainTensorType(string):
@@ -296,8 +311,8 @@ def ParseYamlArgs(string):
     # attrs_list = [ [arg_name, arg_type, default_value, orig_position], ...]
     attrs_list = []
 
-    patten = re.compile(r',(?![^{]*\})')  # support int[] a={1,3}
-    args = re.split(patten, string.strip())
+    pattern = re.compile(r',(?![^{]*\})')  # support int[] a={1,3}
+    args = re.split(pattern, string.strip())
     args = [x.strip() for x in args]
     atype = r'((const )?\S+) '
     aname = r'(.*)'
@@ -423,11 +438,7 @@ def ParseYamlInplaceInfo(string):
     inplace_map = {}
     for pair in string.split(","):
         pair = pair.strip()
-        if pair.startswith("("):
-            pair = pair[1:]
-
-        if pair.endswith(")"):
-            pair = pair[:-1]
+        pair = pair.removeprefix("(").removesuffix(")")
 
         key = pair.split("->")[0].strip()
         val = pair.split("->")[1].strip()
@@ -543,20 +554,27 @@ class FunctionGeneratorBase:
 
     def CollectOriginalForwardInfo(self):
         forward_api_contents = self.forward_api_contents
-
-        self.forward_api_name = forward_api_contents['op']
-        forward_args_str = forward_api_contents['args']
-        forward_returns_str = forward_api_contents['output']
-
         assert (
             'op' in forward_api_contents.keys()
-        ), "Unable to find \"op\" in forward_api_contents keys"
+            or 'backward_op' in forward_api_contents.keys()
+        ), 'Unable to find "op" in forward_api_contents keys'
+
+        if 'op' in forward_api_contents.keys():
+            self.forward_api_name = forward_api_contents['op']
+        elif 'backward_op' in forward_api_contents.keys():
+            self.forward_api_name = forward_api_contents['backward_op']
+
         assert (
             'args' in forward_api_contents.keys()
-        ), "Unable to find \"args\" in forward_api_contents keys"
+        ), 'Unable to find "args" in forward_api_contents keys'
+
+        forward_args_str = forward_api_contents['args']
+
         assert (
             'output' in forward_api_contents.keys()
-        ), "Unable to find \"output\" in forward_api_contents keys"
+        ), 'Unable to find "output" in forward_api_contents keys'
+
+        forward_returns_str = forward_api_contents['output']
 
         # Collect Original Forward Inputs/Outputs and then perform validation checks
         (

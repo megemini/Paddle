@@ -57,6 +57,9 @@ class FusedAdamOpMaker : public framework::OpProtoAndCheckerMaker {
     AddInput("LearningRate", "(Tensor, default Tensor<float>) Learning rate");
     AddInput("Moments1", "(Tensor) Input first moments").AsDuplicable();
     AddInput("Moments2", "(Tensor) Input second moments").AsDuplicable();
+    AddInput("Moments2Max", "(Tensor) Input second moments max for amsgrad")
+        .AsDispensable()
+        .AsDuplicable();
     AddInput("Beta1Pows",
              "(Tensor, default Tensor<float>) Input beta1 power accumulator")
         .AsDuplicable();
@@ -72,6 +75,10 @@ class FusedAdamOpMaker : public framework::OpProtoAndCheckerMaker {
     AddOutput("ParamsOut", "(Tensor) Output parameters").AsDuplicable();
     AddOutput("Moments1Out", "(Tensor) Output first moments").AsDuplicable();
     AddOutput("Moments2Out", "(Tensor) Output second moments").AsDuplicable();
+    AddOutput("Moments2MaxOut",
+              "(Tensor) Output second moments max for amsgrad")
+        .AsDispensable()
+        .AsDuplicable();
     AddOutput("Beta1PowsOut", "(Tensor) Output beta1 power accumulator")
         .AsDuplicable();
     AddOutput("Beta2PowsOut", "(Tensor) Output beta2 power accumulator")
@@ -108,7 +115,7 @@ class FusedAdamOpMaker : public framework::OpProtoAndCheckerMaker {
         .SetDefault(0);
     AddAttr<bool>("use_adamw",
                   "(bool, default False) "
-                  "Whether to use AdamW"
+                  "Whether to use AdamW. "
                   "True for decoupled weight decay")
         .SetDefault(false);
     AddAttr<bool>("multi_precision",
@@ -121,6 +128,10 @@ class FusedAdamOpMaker : public framework::OpProtoAndCheckerMaker {
                   "(bool, default false) "
                   "Whether to use global beta_pow for whole model instead of "
                   "creating beta_pow for each parameter.")
+        .SetDefault(false);
+    AddAttr<bool>("amsgrad",
+                  "(bool, default false) "
+                  "Whether to use the AMSGrad of this algorithm.")
         .SetDefault(false);
 
     AddComment(R"DOC(

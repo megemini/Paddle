@@ -27,8 +27,8 @@ from paddle.base import core
 class TestTransposeOp(OpTest):
     def setUp(self):
         self.op_type = "transpose2"
-        self.use_mkldnn = True
-        self.mkldnn_data_type = "bfloat16"
+        self.use_onednn = True
+        self.onednn_data_type = "bfloat16"
         self.init_test_case()
         self.init_test_data()
         self.axis = (0, 2, 3, 1)
@@ -37,8 +37,8 @@ class TestTransposeOp(OpTest):
 
         self.attrs = {
             'axis': list(self.axis),
-            'use_mkldnn': self.use_mkldnn,
-            'mkldnn_data_type': self.mkldnn_data_type,
+            'use_onednn': self.use_onednn,
+            'mkldnn_data_type': self.onednn_data_type,
         }
 
         self.outputs = {
@@ -47,7 +47,9 @@ class TestTransposeOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace(), no_check_set=['XShape'])
+        self.check_output_with_place(
+            core.CPUPlace(), no_check_set=['XShape'], check_pir_onednn=True
+        )
 
     def init_test_case(self):
         self.shape = (2, 3, 4, 5)

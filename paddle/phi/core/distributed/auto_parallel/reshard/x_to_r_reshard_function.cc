@@ -25,25 +25,7 @@
 #include "paddle/phi/kernels/p_recv_kernel.h"
 #include "paddle/phi/kernels/p_send_kernel.h"
 
-namespace phi {
-namespace distributed {
-
-namespace {
-
-std::vector<int64_t> GetUnionProcessIds(std::vector<int64_t> in_process_ids,
-                                        std::vector<int64_t> out_process_ids) {
-  std::vector<int64_t> result;
-  std::sort(in_process_ids.begin(), in_process_ids.end());
-  std::sort(out_process_ids.begin(), out_process_ids.end());
-  std::set_union(in_process_ids.begin(),
-                 in_process_ids.end(),
-                 out_process_ids.begin(),
-                 out_process_ids.end(),
-                 std::back_inserter(result));
-  return result;
-}
-
-}  // namespace
+namespace phi::distributed {
 
 bool XToRShrinkReshardFunction::IsSuitable(
     const DistTensor& in, const TensorDistAttr& out_dist_attr) {
@@ -66,7 +48,7 @@ void XToRShrinkReshardFunction::Eval(phi::DeviceContext* dev_ctx,
                                      const DistTensor& in,
                                      const TensorDistAttr& out_dist_attr,
                                      DistTensor* out) {
-  VLOG(3) << "Call XToRShrinkReshardFunction Eval";
+  VLOG(3) << "Call " << Name();
   const auto& in_dist_attr = in.dist_attr();
   const auto& in_dims_mapping = in_dist_attr.dims_mapping();
   const auto& in_mesh = in_dist_attr.process_mesh();
@@ -79,7 +61,6 @@ void XToRShrinkReshardFunction::Eval(phi::DeviceContext* dev_ctx,
   const auto& in_partial_status = in_dist_attr.partial_status();
   auto all_process_ids = GetUnionProcessIds(in_process_ids, out_process_ids);
   std::unordered_map<int64_t, DenseTensor> rank_to_result;
-  bool dynamic_shape = true;
 
   // Step 1: other ranks need to send value to the root
   if (!in_dist_attr.is_replicated()) {
@@ -91,7 +72,7 @@ void XToRShrinkReshardFunction::Eval(phi::DeviceContext* dev_ctx,
                                 all_process_ids,
                                 in.value(),
                                 root_rank,
-                                dynamic_shape);
+                                /*dynamic_shape=*/true);
     } else {
       for (size_t i = 0; i < all_process_ids.size(); ++i) {
         if (all_process_ids[i] != root_rank) {
@@ -101,7 +82,8 @@ void XToRShrinkReshardFunction::Eval(phi::DeviceContext* dev_ctx,
                                     dtype,
                                     all_process_ids,
                                     all_process_ids[i],
-                                    dynamic_shape,
+                                    {} /*out_shape*/,
+                                    /*dynamic_shape=*/true,
                                     &rank_to_result[all_process_ids[i]]);
         }
       }
@@ -111,11 +93,11 @@ void XToRShrinkReshardFunction::Eval(phi::DeviceContext* dev_ctx,
   // Step 2: concat or reduce based on dist attr
   if (cur_global_rank == root_rank) {
     std::vector<const DenseTensor*> input_vec;
-    for (size_t i = 0; i < in_process_ids.size(); ++i) {
-      if (in_process_ids[i] == cur_global_rank) {
+    for (const auto& in_process_id : in_process_ids) {
+      if (in_process_id == cur_global_rank) {
         input_vec.emplace_back(&(in.value()));
       } else {
-        input_vec.emplace_back(&(rank_to_result[in_process_ids[i]]));
+        input_vec.emplace_back(&(rank_to_result[in_process_id]));
       }
     }
     if (in_dist_attr.is_shard()) {
@@ -137,7 +119,7 @@ void XToRShrinkReshardFunction::Eval(phi::DeviceContext* dev_ctx,
         }
         SetValue(out, result_add_out);
       } else {
-        PADDLE_THROW(phi::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "The reduce type is not supported, will be supported soon."));
       }
     } else {
@@ -147,5 +129,4 @@ void XToRShrinkReshardFunction::Eval(phi::DeviceContext* dev_ctx,
   }
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

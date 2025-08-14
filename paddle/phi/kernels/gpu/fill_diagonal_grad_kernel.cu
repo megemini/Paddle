@@ -44,23 +44,24 @@ __global__ void fill_constant_kernel(const int64_t featuresize,
 }
 
 template <typename T, typename Context>
-void FillDiagonalGradKernel(const Context& ctx,
+void FillDiagonalGradKernel(const Context& dev_ctx,
                             const DenseTensor& out_grad,
                             float value,
                             int offset,
                             bool wrap,
                             DenseTensor* x_grad) {
   const int64_t kMaxBlockDim = 512;
-  auto* in_data = ctx.template Alloc<T>(x_grad);
+  auto* in_data = dev_ctx.template Alloc<T>(x_grad);
+  if (x_grad && x_grad->numel() == 0) return;
 
-  phi::Copy(ctx, out_grad, ctx.GetPlace(), false, x_grad);
+  phi::Copy(dev_ctx, out_grad, dev_ctx.GetPlace(), false, x_grad);
 
   auto size = x_grad->numel();
   auto out_dims = x_grad->dims();
   auto strides = funcs::CalStride(out_dims);
 
   auto wrapsize = std::min(size, out_dims[1] * out_dims[1]);
-  // The wrap mode supported only the dims equels to 2; In wrap mode, the
+  // The wrap mode supported only the dims equals to 2; In wrap mode, the
   // value will be filled in cycles
   if (wrap) {
     wrapsize = size;

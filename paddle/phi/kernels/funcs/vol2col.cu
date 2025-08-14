@@ -89,7 +89,7 @@ __global__ void vol2col(int num_kernels,
 }
 
 /*
- * im = [input_channels,intpu_depth, input_height, input_width] for
+ * im = [input_channels,input_depth, input_height, input_width] for
  * channels_first
  * im = [input_depth, input_height, input_width, input_channels] for
  * channels_last
@@ -102,7 +102,7 @@ __global__ void vol2col(int num_kernels,
 //  public:
 template <class DeviceContext, class T>
 void Vol2ColFunctor<DeviceContext, T>::operator()(
-    const DeviceContext& context,
+    const DeviceContext& dev_ctx,
     const phi::DenseTensor& vol,
     const std::vector<int>& dilations,
     const std::vector<int>& strides,
@@ -111,12 +111,12 @@ void Vol2ColFunctor<DeviceContext, T>::operator()(
     const DataLayout data_layout) const {
   PADDLE_ENFORCE_EQ(vol.dims().size(),
                     4,
-                    phi::errors::InvalidArgument(
-                        "The dimension of  vol should be 4, but received %d.",
+                    common::errors::InvalidArgument(
+                        "The dimension of vol should be 4, but received %d.",
                         vol.dims().size()));
   PADDLE_ENFORCE_EQ(col->dims().size(),
                     7,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The dimension of col should be 7, but received %d.",
                         col->dims().size()));
 
@@ -148,7 +148,7 @@ void Vol2ColFunctor<DeviceContext, T>::operator()(
                          1;
   PADDLE_ENFORCE_EQ(input_depth_tmp,
                     output_depth,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "input_depth(%d) and output_depth(%d) are mismatching.",
                         input_depth_tmp,
                         output_depth));
@@ -159,7 +159,7 @@ void Vol2ColFunctor<DeviceContext, T>::operator()(
   PADDLE_ENFORCE_EQ(
       input_height_tmp,
       output_height,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "input_height(%d) and output_height(%d) are mismatching.",
           input_height_tmp,
           output_height));
@@ -169,7 +169,7 @@ void Vol2ColFunctor<DeviceContext, T>::operator()(
                          1;
   PADDLE_ENFORCE_EQ(input_width_tmp,
                     output_width,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "input_width(%d) and output_width(%d) are mismatching.",
                         input_width_tmp,
                         output_width));
@@ -179,13 +179,13 @@ void Vol2ColFunctor<DeviceContext, T>::operator()(
 
   int max_threads = 1024;
 #ifdef WITH_NV_JETSON
-  phi::backends::gpu::ChangeThreadNum(context, &max_threads);
+  phi::backends::gpu::ChangeThreadNum(dev_ctx, &max_threads);
 #endif
 
   const int threads = max_threads;
   const int blocks = (num_outputs + max_threads - 1) / max_threads;
 
-  vol2col<T><<<blocks, threads, 0, context.stream()>>>(num_outputs,
+  vol2col<T><<<blocks, threads, 0, dev_ctx.stream()>>>(num_outputs,
                                                        vol.data<T>(),
                                                        input_depth,
                                                        input_height,
@@ -308,7 +308,7 @@ __global__ void col2vol(int num_kernels,
 //  public:
 template <class DeviceContext, class T>
 void Col2VolFunctor<DeviceContext, T>::operator()(
-    const DeviceContext& context,
+    const DeviceContext& dev_ctx,
     const phi::DenseTensor& col,
     const std::vector<int>& dilations,
     const std::vector<int>& strides,
@@ -317,13 +317,13 @@ void Col2VolFunctor<DeviceContext, T>::operator()(
     const DataLayout data_layout) const {
   PADDLE_ENFORCE_EQ(vol->dims().size(),
                     4,
-                    phi::errors::InvalidArgument(
-                        "The dimension of vol  should be 4, but received %d.",
+                    common::errors::InvalidArgument(
+                        "The dimension of vol should be 4, but received %d.",
                         vol->dims().size()));
   PADDLE_ENFORCE_EQ(col.dims().size(),
                     7,
-                    phi::errors::InvalidArgument(
-                        "The dimension of col  should be 7, but received %d.",
+                    common::errors::InvalidArgument(
+                        "The dimension of col should be 7, but received %d.",
                         col.dims().size()));
 
   int input_channels =
@@ -355,7 +355,7 @@ void Col2VolFunctor<DeviceContext, T>::operator()(
                          1;
   PADDLE_ENFORCE_EQ(input_depth_tmp,
                     output_depth,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "input_depth(%d) and output_depth(%d) are mismatching.",
                         input_depth_tmp,
                         output_depth));
@@ -366,7 +366,7 @@ void Col2VolFunctor<DeviceContext, T>::operator()(
   PADDLE_ENFORCE_EQ(
       input_height_tmp,
       output_height,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "input_height(%d) and output_height(%d) are mismatching.",
           input_height_tmp,
           output_height));
@@ -376,7 +376,7 @@ void Col2VolFunctor<DeviceContext, T>::operator()(
                          1;
   PADDLE_ENFORCE_EQ(input_width_tmp,
                     output_width,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "input_width(%d) and output_width(%d) are mismatching.",
                         input_width_tmp,
                         output_width));
@@ -385,13 +385,13 @@ void Col2VolFunctor<DeviceContext, T>::operator()(
 
   int max_threads = 1024;
 #ifdef WITH_NV_JETSON
-  phi::backends::gpu::ChangeThreadNum(context, &max_threads);
+  phi::backends::gpu::ChangeThreadNum(dev_ctx, &max_threads);
 #endif
 
   const int threads = max_threads;
   const int blocks = (num_kernels + max_threads - 1) / max_threads;
 
-  col2vol<T><<<blocks, threads, 0, context.stream()>>>(num_kernels,
+  col2vol<T><<<blocks, threads, 0, dev_ctx.stream()>>>(num_kernels,
                                                        col.data<T>(),
                                                        input_depth,
                                                        input_height,

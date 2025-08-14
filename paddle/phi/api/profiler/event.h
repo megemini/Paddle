@@ -140,23 +140,9 @@ class CudaEvent {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 
  public:
-  CudaEvent() {
-#ifdef PADDLE_WITH_HIP
-    hipEventCreateWithFlags(&event_, flags_);
-#else
-    cudaEventCreateWithFlags(&event_, flags_);
-#endif
-    VLOG(4) << "CudaEvent " << event_;
-  }
+  CudaEvent();
 
-  explicit CudaEvent(unsigned int flags) : flags_(flags) {
-#ifdef PADDLE_WITH_HIP
-    hipEventCreateWithFlags(&event_, flags_);
-#else
-    cudaEventCreateWithFlags(&event_, flags_);
-#endif
-    VLOG(4) << "CudaEvent " << event_;
-  }
+  explicit CudaEvent(unsigned int flags);
 
   ~CudaEvent() {
 #ifdef PADDLE_WITH_HIP
@@ -174,27 +160,9 @@ class CudaEvent {
 #endif
   }
 
-  bool Query() {
-#ifdef PADDLE_WITH_HIP
-    gpuError_t err = hipEventQuery(event_);
-    if (err == hipSuccess) {
-      return true;
-    }
-    if (err == hipErrorNotReady) {
-      return false;
-    }
-#else
-    gpuError_t err = cudaEventQuery(event_);
-    if (err == cudaSuccess) {
-      return true;
-    }
-    if (err == cudaErrorNotReady) {
-      return false;
-    }
-#endif
-    PADDLE_ENFORCE_GPU_SUCCESS(err);
-    return false;
-  }
+  bool Query();
+
+  float ElapsedTime(CudaEvent *end_event);
 
   void Synchronize() {
 #ifdef PADDLE_WITH_HIP

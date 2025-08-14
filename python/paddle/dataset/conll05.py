@@ -48,9 +48,7 @@ def load_label_dict(filename):
     with open(filename, 'r') as f:
         for i, line in enumerate(f):
             line = line.strip()
-            if line.startswith("B-"):
-                tag_dict.add(line[2:])
-            elif line.startswith("I-"):
+            if line.startswith(("B-", "I-")):
                 tag_dict.add(line[2:])
         index = 0
         for tag in tag_dict:
@@ -83,9 +81,10 @@ def corpus_reader(data_path, words_name, props_name):
         tf = tarfile.open(data_path)
         wf = tf.extractfile(words_name)
         pf = tf.extractfile(props_name)
-        with gzip.GzipFile(fileobj=wf) as words_file, gzip.GzipFile(
-            fileobj=pf
-        ) as props_file:
+        with (
+            gzip.GzipFile(fileobj=wf) as words_file,
+            gzip.GzipFile(fileobj=pf) as props_file,
+        ):
             sentences = []
             labels = []
             one_seg = []
@@ -126,9 +125,7 @@ def corpus_reader(data_path, words_name, props_name):
                                     lbl_seq.append('B-' + cur_tag)
                                     is_in_bracket = True
                                 else:
-                                    raise RuntimeError(
-                                        'Unexpected label: %s' % l
-                                    )
+                                    raise RuntimeError(f'Unexpected label: {l}')
 
                             yield sentences, verb_list[i], lbl_seq
 

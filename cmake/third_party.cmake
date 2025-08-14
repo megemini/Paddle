@@ -13,7 +13,12 @@
 # limitations under the License.
 
 include(ExternalProject)
-# Creat a target named "third_party", which can compile external dependencies on all platform(windows/linux/mac)
+# Create a target named "third_party", which can compile external dependencies on all platform(windows/linux/mac)
+
+# Avoid warning about DOWNLOAD_EXTRACT_TIMESTAMP in CMake 3.24
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
+  cmake_policy(SET CMP0135 NEW)
+endif()
 
 set(THIRD_PARTY_PATH
     "${CMAKE_BINARY_DIR}/third_party"
@@ -33,19 +38,107 @@ if(NOT WITH_SETUP_INSTALL)
   #NOTE(risemeup1):Initialize any submodules.
   message(
     STATUS
-      "Check submodules of paddle, and run 'git submodule update --init --recursive'"
+      "Check submodules of paddle, and run 'git submodule sync --recursive && git submodule update --init --recursive'"
   )
+
+  # execute_process does not support sequential commands, so we execute echo command separately
   execute_process(
-    COMMAND git submodule update --init --recursive
+    COMMAND git submodule sync --recursive
     WORKING_DIRECTORY ${PADDLE_SOURCE_DIR}
     RESULT_VARIABLE result_var)
   if(NOT result_var EQUAL 0)
-    message(FATAL_ERROR "Failed to get submodule, please check your network !")
+    message(FATAL_ERROR "Failed to sync submodule, please check your network !")
+  endif()
+
+  if(WITH_OPENVINO)
+    execute_process(
+      COMMAND git submodule update --init --depth=1 third_party/openvino
+      WORKING_DIRECTORY ${PADDLE_SOURCE_DIR}
+      RESULT_VARIABLE result_var)
+    # List of modules to be deleted
+    set(delete_module
+        "thirdparty/zlib/zlib"
+        "thirdparty/gflags/gflags"
+        "thirdparty/gtest/gtest"
+        "thirdparty/ocl/icd_loader"
+        "thirdparty/ocl/cl_headers"
+        "thirdparty/ocl/clhpp_headers"
+        "thirdparty/onnx/onnx"
+        "src/bindings/python/thirdparty/pybind11"
+        "thirdparty/ittapi/ittapi"
+        "cmake/developer_package/ncc_naming_style/ncc"
+        "src/plugins/intel_gpu/thirdparty/onednn_gpu"
+        "thirdparty/open_model_zoo"
+        "thirdparty/json/nlohmann_json"
+        "thirdparty/flatbuffers/flatbuffers"
+        "thirdparty/snappy"
+        "thirdparty/level_zero/level-zero"
+        "src/plugins/intel_npu/thirdparty/level-zero-ext"
+        "src/plugins/intel_npu/thirdparty/yaml-cpp")
+    # Iterate over each module and perform actions
+    foreach(module IN LISTS delete_module)
+      # Remove the module from git cache
+      execute_process(
+        COMMAND git rm --cached ${module}
+        WORKING_DIRECTORY ${PADDLE_SOURCE_DIR}/third_party/openvino
+        RESULT_VARIABLE git_rm_result)
+    endforeach()
+    execute_process(
+      COMMAND git submodule update --init --recursive
+      WORKING_DIRECTORY ${PADDLE_SOURCE_DIR}
+      RESULT_VARIABLE result_var)
+  else()
+    execute_process(
+      COMMAND git submodule status
+      WORKING_DIRECTORY ${PADDLE_SOURCE_DIR}
+      OUTPUT_VARIABLE submodule_list
+      RESULT_VARIABLE result_var)
+    string(REGEX MATCHALL "third_party/[^ )\n]+" submodule_paths
+                 "${submodule_list}")
+    foreach(submodule IN LISTS submodule_paths)
+      if(NOT submodule STREQUAL "third_party/openvino")
+        execute_process(
+          COMMAND git submodule update --init --recursive ${submodule}
+          WORKING_DIRECTORY ${PADDLE_SOURCE_DIR}
+          RESULT_VARIABLE result_var)
+      endif()
+    endforeach()
+  endif()
+  if(NOT result_var EQUAL 0)
+    if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+      set(THIRD_PARTY_TAR_URL
+          https://xly-devops.bj.bcebos.com/PR/build_whl/0/third_party.tar.gz
+          CACHE STRING "third_party.tar.gz url")
+      execute_process(
+        COMMAND wget -q ${THIRD_PARTY_TAR_URL}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        RESULT_VARIABLE wget_result)
+      if(NOT wget_result EQUAL 0)
+        message(
+          FATAL_ERROR
+            "Failed to download third_party.tar.gz, please check your network !"
+        )
+      else()
+        execute_process(
+          COMMAND tar -xzf third_party.tar.gz -C ${CMAKE_SOURCE_DIR}/
+          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+          RESULT_VARIABLE tar_result)
+        if(NOT tar_result EQUAL 0)
+          message(
+            FATAL_ERROR
+              "Failed to extract third_party.tar.gz, please make sure tar.gz file is not corrupted !"
+          )
+        endif()
+      endif()
+    else()
+      message(
+        FATAL_ERROR "Failed to update submodule, please check your network !")
+    endif()
   endif()
 
 endif()
-# cache funciton to avoid repeat download code of third_party.
-# This function has 4 parameters, URL / REPOSITOR / TAG / DIR:
+# cache function to avoid repeat download code of third_party.
+# This function has 4 parameters, URL / REPOSITORY / TAG / DIR:
 # 1. URL:           specify download url of 3rd party
 # 2. REPOSITORY:    specify git REPOSITORY of 3rd party
 # 3. TAG:           specify git tag/branch/commitID of 3rd party
@@ -53,7 +146,7 @@ endif()
 #
 # The function Return 1 PARENT_SCOPE variables:
 #  - ${TARGET}_DOWNLOAD_CMD: Simply place "${TARGET}_DOWNLOAD_CMD" in ExternalProject_Add,
-#                            and you no longer need to set any donwnload steps in ExternalProject_Add.
+#                            and you no longer need to set any download steps in ExternalProject_Add.
 # For example:
 #    Cache_third_party(${TARGET}
 #            REPOSITORY ${TARGET_REPOSITORY}
@@ -134,10 +227,10 @@ macro(UNSET_VAR VAR_NAME)
   unset(${VAR_NAME})
 endmacro()
 
-# Funciton to Download the dependencies during compilation
+# Function to Download the dependencies during compilation
 # This function has 2 parameters, URL / DIRNAME:
 # 1. URL:           The download url of 3rd dependencies
-# 2. NAME:          The name of file, that determin the dirname
+# 2. NAME:          The name of file, that determine the dirname
 #
 function(file_download_and_uncompress URL NAME)
   set(options "")
@@ -202,23 +295,6 @@ if(WIN32 OR APPLE)
         CACHE STRING "Disable BOX_PS package in Windows and MacOS" FORCE)
   endif()
 
-  if(WITH_PSLIB)
-    message(WARNING "Windows or Mac is not supported with PSLIB in Paddle yet."
-                    "Force WITH_PSLIB=OFF")
-    set(WITH_PSLIB
-        OFF
-        CACHE STRING "Disable PSLIB package in Windows and MacOS" FORCE)
-  endif()
-
-  if(WITH_ARM_BRPC)
-    message(
-      WARNING "Windows or Mac is not supported with ARM_BRPC in Paddle yet."
-              "Force WITH_ARM_BRPC=OFF")
-    set(WITH_ARM_BRPC
-        OFF
-        CACHE STRING "Disable ARM_BRPC package in Windows and MacOS" FORCE)
-  endif()
-
   if(WITH_LIBMCT)
     message(WARNING "Windows or Mac is not supported with LIBMCT in Paddle yet."
                     "Force WITH_LIBMCT=OFF")
@@ -238,19 +314,19 @@ if(WIN32 OR APPLE)
 endif()
 
 set(WITH_MKLML ${WITH_MKL})
-if(NOT DEFINED WITH_MKLDNN)
+if(NOT DEFINED WITH_ONEDNN)
   if(WITH_MKL AND AVX2_FOUND)
-    set(WITH_MKLDNN ON)
+    set(WITH_ONEDNN ON)
   else()
     message(STATUS "Do not have AVX2 intrinsics and disabled MKL-DNN.")
-    set(WITH_MKLDNN OFF)
+    set(WITH_ONEDNN OFF)
   endif()
 endif()
 
 if(WIN32)
   if(MSVC)
     if(MSVC_VERSION LESS 1920)
-      set(WITH_MKLDNN OFF)
+      set(WITH_ONEDNN OFF)
     endif()
   endif()
 endif()
@@ -287,7 +363,7 @@ if(WITH_CINN)
   if(WITH_MKL)
     add_definitions(-DCINN_WITH_MKL_CBLAS)
   endif()
-  if(WITH_MKLDNN)
+  if(WITH_ONEDNN)
     add_definitions(-DCINN_WITH_DNNL)
   endif()
   include(cmake/cinn/version.cmake)
@@ -296,28 +372,11 @@ if(WITH_CINN)
          DESTINATION ${CMAKE_BINARY_DIR}/cmake/cinn)
   endif()
   include(${CMAKE_BINARY_DIR}/cmake/cinn/config.cmake)
-  include(cmake/cinn/external/absl.cmake)
   include(cmake/cinn/external/llvm.cmake)
   include(cmake/cinn/external/isl.cmake)
   include(cmake/cinn/external/ginac.cmake)
   include(cmake/cinn/external/openmp.cmake)
   include(cmake/cinn/external/jitify.cmake)
-endif()
-
-# cinn_only includes third-party libraries separately
-if(CINN_ONLY)
-  include(external/gtest)
-  include(external/protobuf)
-  if(WITH_PYTHON)
-    include(external/pybind11)
-  endif()
-  if(WITH_MKL)
-    include(external/mklml)
-  endif()
-  if(WITH_MKLDNN)
-    include(external/mkldnn)
-  endif()
-  return()
 endif()
 
 include(external/eigen) # download eigen3
@@ -362,14 +421,24 @@ elseif(${CBLAS_PROVIDER} STREQUAL EXTERN_OPENBLAS)
   list(APPEND third_party_deps extern_openblas)
 endif()
 
-if(WITH_MKLDNN)
-  include(external/mkldnn) # download, build, install mkldnn
-  list(APPEND third_party_deps extern_mkldnn)
+if(WITH_ONEDNN)
+  include(external/onednn) # download, build, install onednn
+  list(APPEND third_party_deps extern_onednn)
 endif()
 
 include(external/protobuf) # find first, then download, build, install protobuf
 if(TARGET extern_protobuf)
   list(APPEND third_party_deps extern_protobuf)
+endif()
+
+include(external/json) # find first, then build json
+if(TARGET extern_json)
+  list(APPEND third_party_deps extern_json)
+endif()
+
+include(external/yaml) # find first, then build yaml
+if(TARGET extern_yaml)
+  list(APPEND third_party_deps extern_yaml)
 endif()
 
 if(NOT ((NOT WITH_PYTHON) AND ON_INFER))
@@ -383,6 +452,11 @@ if(WITH_TESTING OR WITH_DISTRIBUTE)
   list(APPEND third_party_deps extern_gtest)
 endif()
 
+if(WITH_FLAGCX)
+  include(external/flagcx)
+  list(APPEND third_party_deps flagcx)
+endif()
+
 if(WITH_ONNXRUNTIME)
   include(external/onnxruntime
   )# download, build, install onnxruntime、paddle2onnx
@@ -391,7 +465,9 @@ if(WITH_ONNXRUNTIME)
 endif()
 
 if(WITH_GPU)
-  if(${CMAKE_CUDA_COMPILER_VERSION} LESS 11.0)
+  if(${CMAKE_CUDA_COMPILER_VERSION} LESS 11.0
+     OR (${CMAKE_CUDA_COMPILER_VERSION} GREATER_EQUAL 11.7
+         AND ${CMAKE_CUDA_COMPILER_VERSION} LESS 11.9))
     include(external/cub) # download cub
     list(APPEND third_party_deps extern_cub)
   elseif(${CMAKE_CUDA_COMPILER_VERSION} GREATER_EQUAL 12.0 AND WITH_SHARED_PHI)
@@ -428,29 +504,6 @@ if(WITH_XPU)
   list(APPEND third_party_deps extern_xpu)
 endif()
 
-if(WITH_PSLIB)
-  include(external/pslib) # download, build, install pslib
-  list(APPEND third_party_deps extern_pslib)
-  if(WITH_LIBMCT)
-    include(external/libmct) # download, build, install libmct
-    list(APPEND third_party_deps extern_libxsmm)
-  endif()
-  if(WITH_PSLIB_BRPC)
-    include(external/pslib_brpc) # download, build, install pslib_brpc
-    list(APPEND third_party_deps extern_pslib_brpc)
-  else()
-    include(external/snappy)
-    list(APPEND third_party_deps extern_snappy)
-
-    include(external/leveldb)
-    list(APPEND third_party_deps extern_leveldb)
-    if(NOT WITH_HETERPS)
-      include(external/brpc)
-      list(APPEND third_party_deps extern_brpc)
-    endif()
-  endif()
-endif()
-
 if(NOT WIN32 AND NOT APPLE)
   include(external/gloo)
   list(APPEND third_party_deps extern_gloo)
@@ -459,57 +512,6 @@ endif()
 if(WITH_BOX_PS)
   include(external/box_ps)
   list(APPEND third_party_deps extern_box_ps)
-endif()
-
-if(WITH_PSCORE)
-  include(external/snappy)
-  list(APPEND third_party_deps extern_snappy)
-
-  include(external/leveldb)
-  list(APPEND third_party_deps extern_leveldb)
-
-  if(WITH_ARM_BRPC)
-    include(external/arm_brpc)
-    list(APPEND third_party_deps extern_arm_brpc)
-  else()
-    include(external/brpc)
-    list(APPEND third_party_deps extern_brpc)
-  endif()
-
-  include(external/libmct) # download, build, install libmct
-  list(APPEND third_party_deps extern_libmct)
-
-  include(external/rocksdb) # download, build, install rocksdb
-  list(APPEND third_party_deps extern_rocksdb)
-
-  include(external/jemalloc) # download, build, install jemalloc
-  list(APPEND third_party_deps extern_jemalloc)
-endif()
-
-if(WITH_RPC
-   AND NOT WITH_PSCORE
-   AND NOT WITH_PSLIB)
-  include(external/snappy)
-  list(APPEND third_party_deps extern_snappy)
-
-  include(external/leveldb)
-  list(APPEND third_party_deps extern_leveldb)
-
-  include(external/brpc)
-  list(APPEND third_party_deps extern_brpc)
-endif()
-
-if(WITH_DISTRIBUTE
-   AND NOT WITH_PSLIB
-   AND NOT WITH_PSCORE
-   AND NOT WITH_RPC)
-  include(external/snappy)
-  list(APPEND third_party_deps extern_snappy)
-
-  include(external/leveldb)
-  list(APPEND third_party_deps extern_leveldb)
-  include(external/brpc)
-  list(APPEND third_party_deps extern_brpc)
 endif()
 
 if(WITH_XBYAK)
@@ -527,11 +529,6 @@ if(WITH_DGC)
   include(external/dgc) # download, build, install dgc
   add_definitions(-DPADDLE_WITH_DGC)
   list(APPEND third_party_deps extern_dgc)
-endif()
-
-if(WITH_LITE)
-  message(STATUS "Compile Paddle with Lite Engine.")
-  include(external/lite)
 endif()
 
 if(WITH_CRYPTO)
@@ -561,11 +558,32 @@ if(WITH_CUSPARSELT)
   list(APPEND third_party_deps extern_cusparselt)
 endif()
 
+if(WITH_ROCM)
+  include(external/flashattn)
+  list(APPEND third_party_deps extern_flashattn)
+  set(WITH_FLASHATTN ON)
+endif()
+
 if(WITH_GPU
    AND NOT WITH_ARM
    AND NOT WIN32
    AND NOT APPLE)
-  if(${CMAKE_CUDA_COMPILER_VERSION} GREATER_EQUAL 11.4)
+  if(${CMAKE_CUDA_COMPILER_VERSION} GREATER_EQUAL 12.3)
+    foreach(arch ${NVCC_ARCH_BIN})
+      if(${arch} GREATER_EQUAL 90)
+        set(WITH_FLASHATTN_V3 ON)
+        break()
+      endif()
+    endforeach()
+    foreach(arch ${NVCC_ARCH_BIN})
+      if(${arch} GREATER_EQUAL 80)
+        include(external/flashattn)
+        list(APPEND third_party_deps extern_flashattn)
+        set(WITH_FLASHATTN ON)
+        break()
+      endif()
+    endforeach()
+  elseif(${CMAKE_CUDA_COMPILER_VERSION} GREATER_EQUAL 11.4)
     foreach(arch ${NVCC_ARCH_BIN})
       if(${arch} GREATER_EQUAL 80)
         include(external/flashattn)
@@ -580,6 +598,22 @@ endif()
 if(WITH_CUDNN_FRONTEND)
   include(external/cudnn-frontend) # download cudnn-frontend
   list(APPEND third_party_deps extern_cudnn_frontend)
+endif()
+
+if(WITH_OPENVINO)
+  include(external/openvino)
+  list(APPEND third_party_deps extern_openvino)
+endif()
+
+string(FIND "${CUDA_ARCH_BIN}" "90" ARCH_BIN_CONTAINS_90)
+if(NOT WITH_GPU
+   OR NOT WITH_DISTRIBUTE
+   OR (ARCH_BIN_CONTAINS_90 EQUAL -1))
+  set(WITH_NVSHMEM OFF)
+endif()
+if(WITH_NVSHMEM)
+  include(external/nvshmem)
+  list(APPEND third_party_deps extern_nvshmem)
 endif()
 
 add_custom_target(third_party ALL DEPENDS ${third_party_deps})

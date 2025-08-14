@@ -16,9 +16,7 @@
 #include <iostream>
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class SizeOpConverter : public OpConverter {
  public:
@@ -39,11 +37,9 @@ class SizeOpConverter : public OpConverter {
                                        reduce_dim,
                                        false);
     auto output_name = op_desc.Output("Out")[0];
-    RreplenishLayerAndOutput(layer, "size", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "size", {output_name}, test_mode);
   }
 };
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(size, SizeOpConverter);

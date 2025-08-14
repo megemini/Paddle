@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO: define statistical functions of a tensor
+from __future__ import annotations
+
+import warnings
+from typing import TYPE_CHECKING, Literal
+
+from typing_extensions import TypeAlias, overload
 
 import paddle
 from paddle import _C_ops
@@ -20,23 +25,37 @@ from paddle.framework import (
     in_dynamic_mode,
     in_dynamic_or_pir_mode,
 )
+from paddle.utils.decorator_utils import ParamAliasDecorator
 
 from ..base.data_feeder import check_type, check_variable_and_dtype
 from ..common_ops_import import Variable
 from ..framework import LayerHelper, core
 from .math import _get_reduce_axis_with_tensor
-from .search import where
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+
+_Interpolation: TypeAlias = Literal[
+    'linear', 'higher', 'lower', 'midpoint', 'nearest'
+]
 __all__ = []
 
 
-def mean(x, axis=None, keepdim=False, name=None):
+def mean(
+    x: Tensor,
+    axis: int | Sequence[int] | None = None,
+    keepdim: bool = False,
+    name: str | None = None,
+) -> Tensor:
     """
     Computes the mean of the input tensor's elements along ``axis``.
 
     Args:
-        x (Tensor): The input Tensor with data type float32, float64.
-        axis (int|list|tuple, optional): The axis along which to perform mean
+        x (Tensor): The input Tensor with data type bool, bfloat16, float16, float32,
+            float64, int32, int64, complex64, complex128.
+        axis (int|list|tuple|None, optional): The axis along which to perform mean
             calculations. ``axis`` should be int, list(int) or tuple(int). If
             ``axis`` is a list/tuple of dimension(s), mean is calculated along
             all element(s) of ``axis`` . ``axis`` or element(s) of ``axis``
@@ -49,7 +68,7 @@ def mean(x, axis=None, keepdim=False, name=None):
             the output Tensor is the same as ``x`` except in the reduced
             dimensions(it is of size 1 in this case). Otherwise, the shape of
             the output Tensor is squeezed in ``axis`` . Default is False.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -93,7 +112,17 @@ def mean(x, axis=None, keepdim=False, name=None):
         check_variable_and_dtype(
             x,
             'x/input',
-            ['uint16', 'float16', 'float32', 'float64'],
+            [
+                'bool',
+                'uint16',
+                'float16',
+                'float32',
+                'float64',
+                'int32',
+                'int64',
+                'complex64',
+                'complex128',
+            ],
             'mean/reduce_mean',
         )
         check_type(
@@ -121,13 +150,20 @@ def mean(x, axis=None, keepdim=False, name=None):
         return out
 
 
-def var(x, axis=None, unbiased=True, keepdim=False, name=None):
+@ParamAliasDecorator({"x": ["input"], "axis": ["dim"]})
+def var(
+    x: Tensor,
+    axis: int | Sequence[int] | None = None,
+    unbiased: bool = True,
+    keepdim: bool = False,
+    name: str | None = None,
+) -> Tensor:
     """
     Computes the variance of ``x`` along ``axis`` .
 
     Args:
         x (Tensor): The input Tensor with data type float16, float32, float64.
-        axis (int|list|tuple, optional): The axis along which to perform variance calculations. ``axis`` should be int, list(int) or tuple(int).
+        axis (int|list|tuple|None, optional): The axis along which to perform variance calculations. ``axis`` should be int, list(int) or tuple(int).
 
             - If ``axis`` is a list/tuple of dimension(s), variance is calculated along all element(s) of ``axis`` . ``axis`` or element(s) of ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             - If ``axis`` or element(s) of ``axis`` is less than 0, it works the same way as :math:`axis + D` .
@@ -135,7 +171,7 @@ def var(x, axis=None, unbiased=True, keepdim=False, name=None):
 
         unbiased (bool, optional): Whether to use the unbiased estimation. If ``unbiased`` is True, the divisor used in the computation is :math:`N - 1`, where :math:`N` represents the number of elements along ``axis`` , otherwise the divisor is :math:`N`. Default is True.
         keep_dim (bool, optional): Whether to reserve the reduced dimension in the output Tensor. The result tensor will have one fewer dimension than the input unless keep_dim is true. Default is False.
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         Tensor, results of variance along ``axis`` of ``x``, with the same data type as ``x``.
@@ -159,28 +195,52 @@ def var(x, axis=None, unbiased=True, keepdim=False, name=None):
         )
 
     u = mean(x, axis, True, name)
-    out = paddle.sum(paddle.pow((x - u), 2), axis, keepdim=keepdim, name=name)
+    dtype = paddle.float32 if x.dtype == paddle.float16 else x.dtype
+    out = paddle.sum(
+        paddle.pow((x - u), 2), axis, keepdim=keepdim, name=name, dtype=dtype
+    )
 
-    dtype = x.dtype
     n = paddle.cast(paddle.numel(x), "int64") / paddle.cast(
         paddle.numel(out), "int64"
     )
     n = n.astype(dtype)
     if unbiased:
         one_const = paddle.ones([], x.dtype)
-        n = where(n > one_const, n - 1.0, one_const)
+        if paddle.in_dynamic_mode() and n <= one_const:
+            warnings.warn("Degrees of freedom is <= 0.", stacklevel=2)
+        n = n - 1.0
     n.stop_gradient = True
     out /= n
+
+    def _replace_nan(out):
+        indices = paddle.arange(out.numel(), dtype='int64')
+        out_nan = paddle.index_fill(
+            out.flatten(), indices, 0, float('nan')
+        ).reshape(out.shape)
+        return out_nan
+
+    if 0 in x.shape:
+        out = _replace_nan(out)
+    if len(x.shape) == 0 and not unbiased:
+        out = paddle.to_tensor(0, stop_gradient=out.stop_gradient)
+    if out.dtype != x.dtype:
+        return out.astype(x.dtype)
     return out
 
 
-def std(x, axis=None, unbiased=True, keepdim=False, name=None):
+def std(
+    x: Tensor,
+    axis: int | Sequence[int] | None = None,
+    unbiased: bool = True,
+    keepdim: bool = False,
+    name: str | None = None,
+) -> Tensor:
     """
     Computes the standard-deviation of ``x`` along ``axis`` .
 
     Args:
         x (Tensor): The input Tensor with data type float16, float32, float64.
-        axis (int|list|tuple, optional): The axis along which to perform
+        axis (int|list|tuple|None, optional): The axis along which to perform
             standard-deviation calculations. ``axis`` should be int, list(int)
             or tuple(int). If ``axis`` is a list/tuple of dimension(s),
             standard-deviation is calculated along all element(s) of ``axis`` .
@@ -200,7 +260,7 @@ def std(x, axis=None, unbiased=True, keepdim=False, name=None):
             the output Tensor is the same as ``x`` except in the reduced
             dimensions(it is of size 1 in this case). Otherwise, the shape of
             the output Tensor is squeezed in ``axis`` . Default is False.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -232,13 +292,13 @@ def std(x, axis=None, unbiased=True, keepdim=False, name=None):
     return paddle.sqrt(out)
 
 
-def numel(x, name=None):
+def numel(x: Tensor, name: str | None = None) -> Tensor:
     """
     Returns the number of elements for a tensor, which is a 0-D int64 Tensor with shape [].
 
     Args:
-        x (Tensor): The input Tensor, it's data type can be bool, float16, float32, float64, int32, int64, complex64, complex128.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Tensor, it's data type can be bool, float16, float32, float64, uint8, int8, int32, int64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -269,7 +329,33 @@ def numel(x, name=None):
         return out
 
 
-def nanmedian(x, axis=None, keepdim=False, name=None):
+@overload
+def nanmedian(
+    x: Tensor,
+    axis: int,
+    keepdim: bool = ...,
+    mode: Literal['min'] = ...,
+    name: str | None = ...,
+) -> tuple[Tensor, Tensor]: ...
+
+
+@overload
+def nanmedian(
+    x: Tensor,
+    axis: int | Sequence[int] | None = ...,
+    keepdim: bool = ...,
+    mode: Literal['avg', 'min'] = ...,
+    name: str | None = ...,
+) -> Tensor: ...
+
+
+def nanmedian(
+    x,
+    axis=None,
+    keepdim=False,
+    mode='avg',
+    name=None,
+):
     r"""
     Compute the median along the specified axis, while ignoring NaNs.
 
@@ -288,11 +374,16 @@ def nanmedian(x, axis=None, keepdim=False, name=None):
             the output Tensor is the same as ``x`` except in the reduced
             dimensions(it is of size 1 in this case). Otherwise, the shape of
             the output Tensor is squeezed in ``axis`` . Default is False.
-        name (str, optional): Name for the operation (optional, default is None).
+        mode (str, optional): Whether to use mean or min operation to calculate
+            the nanmedian values when the input tensor has an even number of non-NaN elements
+            along the dimension ``axis``. Support 'avg' and 'min'. Default is 'avg'.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
-        Tensor, results of median along ``axis`` of ``x``. The output dtype is the same as `x`.
+        Tensor or tuple of Tensor. If ``mode`` == 'min' and ``axis`` is int, the result
+        will be a tuple of two tensors (nanmedian value and nanmedian index). Otherwise,
+        only nanmedian value will be returned.
 
     Examples:
         .. code-block:: python
@@ -315,6 +406,26 @@ def nanmedian(x, axis=None, keepdim=False, name=None):
             >>> y4 = x.nanmedian((0, 1))
             >>> print(y4.numpy())
             2.0
+
+            >>> y5 = x.nanmedian(mode='min')
+            >>> print(y5.numpy())
+            2.0
+
+            >>> y6, y6_index = x.nanmedian(0, mode='min')
+            >>> print(y6.numpy())
+            [0. 1. 2.]
+            >>> print(y6_index.numpy())
+            [1 1 1]
+
+            >>> y7, y7_index = x.nanmedian(1, mode='min')
+            >>> print(y7.numpy())
+            [2. 1.]
+            >>> print(y7_index.numpy())
+            [1 1]
+
+            >>> y8 = x.nanmedian((0,1), mode='min')
+            >>> print(y8.numpy())
+            2.0
     """
     if not isinstance(x, (Variable, paddle.pir.Value)):
         raise TypeError("In median, the input x should be a Tensor.")
@@ -322,6 +433,10 @@ def nanmedian(x, axis=None, keepdim=False, name=None):
     if isinstance(axis, (list, tuple)) and len(axis) == 0:
         raise ValueError("Axis list should not be empty.")
 
+    if mode not in ('avg', 'min'):
+        raise ValueError(f"Mode {mode} is not supported. Must be avg or min.")
+
+    need_index = (axis is not None) and (not isinstance(axis, (list, tuple)))
     if axis is None:
         axis = []
     elif isinstance(axis, tuple):
@@ -330,7 +445,8 @@ def nanmedian(x, axis=None, keepdim=False, name=None):
         axis = [axis]
 
     if in_dynamic_or_pir_mode():
-        return _C_ops.nanmedian(x, axis, keepdim)
+        out, indices = _C_ops.nanmedian(x, axis, keepdim, mode)
+        indices.stop_gradient = True
     else:
         check_variable_and_dtype(
             x,
@@ -340,25 +456,55 @@ def nanmedian(x, axis=None, keepdim=False, name=None):
         )
 
         helper = LayerHelper('nanmedian', **locals())
-        attrs = {'axis': axis, 'keepdim': keepdim}
+        attrs = {'axis': axis, 'keepdim': keepdim, 'mode': mode}
         out = helper.create_variable_for_type_inference(x.dtype)
-        medians = helper.create_variable_for_type_inference(x.dtype)
+        indices = helper.create_variable_for_type_inference(paddle.int64)
         helper.append_op(
             type='nanmedian',
             inputs={'X': x},
-            outputs={'Out': out, 'MedianIndex': medians},
+            outputs={'Out': out, 'MedianIndex': indices},
             attrs=attrs,
         )
+        indices.stop_gradient = True
+    if mode == 'min' and need_index:
+        return out, indices
+    else:
         return out
 
 
-def median(x, axis=None, keepdim=False, name=None):
+@overload
+def median(
+    x: Tensor,
+    axis: int = ...,
+    keepdim: bool = ...,
+    mode: Literal['min'] = ...,
+    name: str | None = ...,
+) -> tuple[Tensor, Tensor]: ...
+
+
+@overload
+def median(
+    x: Tensor,
+    axis: int | None = ...,
+    keepdim: bool = ...,
+    mode: Literal['avg', 'min'] = ...,
+    name: str | None = ...,
+) -> Tensor: ...
+
+
+def median(
+    x,
+    axis=None,
+    keepdim=False,
+    mode='avg',
+    name=None,
+):
     """
     Compute the median along the specified axis.
 
     Args:
-        x (Tensor): The input Tensor, it's data type can be bool, float16, float32, float64, int32, int64.
-        axis (int, optional): The axis along which to perform median calculations ``axis`` should be int.
+        x (Tensor): The input Tensor, it's data type can be bfloat16, float16, float32, float64, int32, int64.
+        axis (int|None, optional): The axis along which to perform median calculations ``axis`` should be int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
             If ``axis`` is None, median is calculated over all elements of ``x``. Default is None.
@@ -367,16 +513,29 @@ def median(x, axis=None, keepdim=False, name=None):
             the output Tensor is the same as ``x`` except in the reduced
             dimensions(it is of size 1 in this case). Otherwise, the shape of
             the output Tensor is squeezed in ``axis`` . Default is False.
-        name (str, optional): Name for the operation (optional, default is None).
+        mode (str, optional): Whether to use mean or min operation to calculate
+            the median values when the input tensor has an even number of elements
+            in the dimension ``axis``. Support 'avg' and 'min'. Default is 'avg'.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
-        Tensor, results of median along ``axis`` of ``x``. If data type of ``x`` is float64, data type of results will be float64, otherwise data type will be float32.
+        Tensor or tuple of Tensor.
+        If ``mode`` == 'avg', the result will be the tensor of median values;
+        If ``mode`` == 'min' and ``axis`` is None, the result will be the tensor of median values;
+        If ``mode`` == 'min' and ``axis`` is not None, the result will be a tuple of two tensors
+        containing median values and their indices.
+
+        When ``mode`` == 'avg', if data type of ``x`` is float64, data type of median values will be float64,
+        otherwise data type of median values will be float32.
+        When ``mode`` == 'min', the data type of median values will be the same as ``x``. The data type of
+        indices will be int64.
 
     Examples:
         .. code-block:: python
 
             >>> import paddle
+            >>> import numpy as np
 
             >>> x = paddle.arange(12).reshape([3, 4])
             >>> print(x)
@@ -405,13 +564,43 @@ def median(x, axis=None, keepdim=False, name=None):
             Tensor(shape=[1, 4], dtype=float32, place=Place(cpu), stop_gradient=True,
             [[4., 5., 6., 7.]])
 
+            >>> y5 = paddle.median(x, mode='min')
+            >>> print(y5)
+            Tensor(shape=[], dtype=int64, place=Place(cpu), stop_gradient=True,
+            5)
+
+            >>> median_value, median_indices = paddle.median(x, axis=1, mode='min')
+            >>> print(median_value)
+            Tensor(shape=[3], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [1, 5, 9])
+            >>> print(median_indices)
+            Tensor(shape=[3], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [1, 1, 1])
+
+            >>> # cases containing nan values
+            >>> x = paddle.to_tensor(np.array([[1,float('nan'),3,float('nan')],[1,2,3,4],[float('nan'),1,2,3]]))
+
+            >>> y6 = paddle.median(x, axis=-1, keepdim=True)
+            >>> print(y6)
+            Tensor(shape=[3, 1], dtype=float64, place=Place(cpu), stop_gradient=True,
+            [[nan       ],
+             [2.50000000],
+             [nan       ]])
+
+            >>> median_value, median_indices = paddle.median(x, axis=1, keepdim=True, mode='min')
+            >>> print(median_value)
+            Tensor(shape=[3, 1], dtype=float64, place=Place(cpu), stop_gradient=True,
+            [[nan],
+             [2. ],
+             [nan]])
+            >>> print(median_indices)
+            Tensor(shape=[3, 1], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[1],
+             [1],
+             [0]])
     """
     if not isinstance(x, (Variable, paddle.pir.Value)):
         raise TypeError("In median, the input x should be a Tensor.")
-
-    if in_dynamic_mode() and x.size == 0:
-        # TODO: Currently, `__eq__` don't support arguments (`pir.Value` & `int`)
-        raise ValueError("In median, the size of input x should not be 0.")
 
     is_flatten = False
     dims = len(x.shape)
@@ -423,6 +612,9 @@ def median(x, axis=None, keepdim=False, name=None):
         ], 'when input 0-D, axis can only be [-1, 0] or default None'
         is_flatten = True
 
+    if mode not in ('avg', 'min'):
+        raise ValueError(f"Mode {mode} is not supported. Must be avg or min.")
+    need_idx = axis is not None
     if axis is None:
         is_flatten = True
 
@@ -438,28 +630,94 @@ def median(x, axis=None, keepdim=False, name=None):
             axis += dims
     sz = x.shape[axis]
     kth = sz >> 1
-    tensor_topk, idx = paddle.topk(x, kth + 1, axis=axis, largest=False)
-    dtype = (
-        'float64'
-        if x.dtype
-        in [core.VarDesc.VarType.FP64, paddle.base.core.DataType.FLOAT64]
-        else 'float32'
-    )
-    if sz & 1 == 0:
-        out_tensor = paddle.slice(
-            tensor_topk, axes=[axis], starts=[kth - 1], ends=[kth]
-        ) + paddle.slice(tensor_topk, axes=[axis], starts=[kth], ends=[kth + 1])
-        out_tensor = paddle.cast(out_tensor, dtype=dtype) / 2
-    else:
-        out_tensor = paddle.cast(
-            paddle.slice(
-                tensor_topk, axes=[axis], starts=[kth], ends=[kth + 1]
-            ),
-            dtype=dtype,
+    # Use `sort` when:
+    # 1. The axis is not the last dimension (memory non-contiguous)
+    # 2. The axis size exceeds 10000 (heuristic threshold for performance crossover)
+    # Rationale:
+    # - `paddle.topk` in non-contiguous dimensions has O(N*k) complexity (k=n/2 for median → O(n²)). in paddle/phi/kernels/gpu/top_k_kernel.cu
+    # - `paddle.sort` has guaranteed O(n log n) complexity regardless of axis
+    use_sort = (axis != dims - 1) and (sz > 10000)
+    if use_sort:
+        sorted_x = paddle.sort(x, axis=axis, stable=True)
+        tensor_topk = paddle.slice(
+            sorted_x, axes=[axis], starts=[0], ends=[kth + 1]
         )
-    out_tensor = out_tensor + paddle.sum(
-        paddle.cast(paddle.isnan(x), dtype=dtype) * x, axis=axis, keepdim=True
-    )
+        if need_idx:
+            idx = paddle.argsort(x, axis=axis, stable=True)
+            idx = paddle.slice(idx, axes=[axis], starts=[0], ends=[kth + 1])
+    else:
+        tensor_topk, idx = paddle.topk(x, kth + 1, axis=axis, largest=False)
+    if mode == 'avg':
+        dtype = (
+            'float64'
+            if x.dtype
+            in [core.VarDesc.VarType.FP64, paddle.base.core.DataType.FLOAT64]
+            else 'float32'
+        )
+        if sz & 1 == 0:
+            out_tensor = paddle.slice(
+                tensor_topk, axes=[axis], starts=[kth - 1], ends=[kth]
+            ) + paddle.slice(
+                tensor_topk, axes=[axis], starts=[kth], ends=[kth + 1]
+            )
+            out_tensor = paddle.cast(out_tensor, dtype=dtype) / 2
+        else:
+            out_tensor = paddle.cast(
+                paddle.slice(
+                    tensor_topk, axes=[axis], starts=[kth], ends=[kth + 1]
+                ),
+                dtype=dtype,
+            )
+        out_tensor = out_tensor + paddle.sum(
+            paddle.cast(paddle.isnan(x), dtype=dtype) * x.astype(dtype),
+            axis=axis,
+            keepdim=True,
+        )
+    else:  # mode == 'min'
+        if sz & 1 == 0 and kth != 0:
+            out_tensor = paddle.slice(
+                tensor_topk, axes=[axis], starts=[kth - 1], ends=[kth]
+            )
+            if need_idx:
+                out_idx = paddle.slice(
+                    idx, axes=[axis], starts=[kth - 1], ends=[kth]
+                )
+        else:
+            out_tensor = paddle.slice(
+                tensor_topk, axes=[axis], starts=[kth], ends=[kth + 1]
+            )
+            if need_idx:
+                out_idx = paddle.slice(
+                    idx, axes=[axis], starts=[kth], ends=[kth + 1]
+                )
+        # if contain nan on axis, return nan for that axis
+        out_tensor = out_tensor + paddle.sum(
+            paddle.cast(paddle.isnan(x), dtype=x.dtype) * x,
+            axis=axis,
+            keepdim=True,
+        ).astype(x.dtype)
+        if need_idx:
+            # replace index using the first nan value's index on axis for out_idx
+            # topk is not stable on cpu device, use argsort instead
+            x_isnan = paddle.isnan(x).astype("int64")
+            x_all_zero = paddle.zeros_like(x_isnan)
+            index_along_axis = paddle.argsort(
+                x_all_zero, axis=axis, stable=True
+            )
+
+            # find the index of the leading one in x_isnan
+            cumsum = x_isnan.cumsum(axis=axis)
+            x_isnan = x_isnan * paddle.where(cumsum > 1, 0, 1)
+
+            nan_index = paddle.sum(
+                index_along_axis * x_isnan, axis=axis, keepdim=True
+            )
+            nan_index_mask = paddle.sum(x_isnan, axis=axis, keepdim=True)
+            out_idx = (
+                out_idx * paddle.logical_not(nan_index_mask).astype('int64')
+                + nan_index
+            )
+
     if is_flatten:
         if keepdim:
             out_tensor = out_tensor.reshape([1] * dims)
@@ -468,27 +726,43 @@ def median(x, axis=None, keepdim=False, name=None):
     else:
         if not keepdim:
             out_tensor = out_tensor.squeeze(axis)
+
+    if mode == 'min' and need_idx:
+        if not keepdim:
+            out_idx = out_idx.squeeze(axis)
+        return out_tensor, out_idx
     return out_tensor
 
 
-def _compute_quantile(x, q, axis=None, keepdim=False, ignore_nan=False):
+def _compute_quantile(
+    x: Tensor,
+    q: float | Sequence[float] | Tensor | None,
+    axis: int | list[int] | None = None,
+    keepdim: bool = False,
+    interpolation: _Interpolation = "linear",
+    ignore_nan: bool = False,
+) -> Tensor:
     """
     Compute the quantile of the input along the specified axis.
 
     Args:
         x (Tensor): The input Tensor, it's data type can be float32, float64, int32, int64.
-        q (int|float|list): The q for calculate quantile, which should be in range [0, 1]. If q is a list,
-            each q will be calculated and the first dimension of output is same to the number of ``q`` .
+        q (int|float|list|Tensor): The q for calculate quantile, which should be in range [0, 1]. If q is a list or
+            a 1-D Tensor, each element of q will be calculated and the first dimension of output is same to the number of ``q`` .
+            If q is a 0-D Tensor, it will be treated as an integer or float.
         axis (int|list, optional): The axis along which to calculate quantile. ``axis`` should be int or list of int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
-            If ``axis`` is a list, quantile is calculated over all elements of given axises.
+            If ``axis`` is a list, quantile is calculated over all elements of given axes.
             If ``axis`` is None, quantile is calculated over all elements of ``x``. Default is None.
         keepdim (bool, optional): Whether to reserve the reduced dimension(s)
             in the output Tensor. If ``keepdim`` is True, the dimensions of
             the output Tensor is the same as ``x`` except in the reduced
             dimensions(it is of size 1 in this case). Otherwise, the shape of
             the output Tensor is squeezed in ``axis`` . Default is False.
+        interpolation (str, optional): The interpolation method to use
+            when the desired quantile falls between two data points. Must be one of linear, higher,
+            lower, midpoint and nearest. Default is linear.
         ignore_nan: (bool, optional): Whether to ignore NaN of input Tensor.
             If ``ignore_nan`` is True, it will calculate nanquantile.
             Otherwise it will calculate quantile. Default is False.
@@ -507,9 +781,34 @@ def _compute_quantile(x, q, axis=None, keepdim=False, ignore_nan=False):
     elif isinstance(q, (list, tuple)):
         if len(q) <= 0:
             raise ValueError("q should not be empty")
+    elif isinstance(q, (Variable, paddle.pir.Value)):
+        if len(q.shape) > 1:
+            raise ValueError("q should be a 0-D tensor or a 1-D tensor")
+        if len(q.shape) == 0:
+            q = [q]
     else:
-        raise TypeError("Type of q should be int, float, list or tuple.")
+        raise TypeError(
+            "Type of q should be int, float, list or tuple, or tensor"
+        )
+    for q_num in q:
+        # we do not validate tensor q in static mode
+        if not in_dynamic_mode() and isinstance(
+            q_num, (Variable, paddle.pir.Value)
+        ):
+            break
+        if q_num < 0 or q_num > 1:
+            raise ValueError("q should be in range [0, 1]")
 
+    if interpolation not in [
+        "linear",
+        "lower",
+        "higher",
+        "nearest",
+        "midpoint",
+    ]:
+        raise ValueError(
+            f"interpolation must be one of 'linear', 'lower', 'higher', 'nearest' or 'midpoint', but got {interpolation}"
+        )
     # Validate axis
     dims = len(x.shape)
     out_shape = list(x.shape)
@@ -550,21 +849,16 @@ def _compute_quantile(x, q, axis=None, keepdim=False, ignore_nan=False):
             out_shape[axis] = 1
 
     mask = x.isnan()
-    valid_counts = mask.logical_not().sum(
-        axis=axis, keepdim=True, dtype='float64'
-    )
+    valid_counts = mask.logical_not().sum(axis=axis, keepdim=True)
 
     indices = []
 
     for q_num in q:
-        if q_num < 0 or q_num > 1:
-            raise ValueError("q should be in range [0, 1]")
         if in_dynamic_or_pir_mode():
-            q_num = paddle.to_tensor(q_num, dtype='float64')
+            q_num = paddle.to_tensor(q_num, dtype=x.dtype)
         if ignore_nan:
             indices.append(q_num * (valid_counts - 1))
         else:
-            # TODO: Use paddle.index_fill instead of where
             index = q_num * (valid_counts - 1)
             last_index = x.shape[axis] - 1
             nums = paddle.full_like(index, fill_value=last_index)
@@ -573,63 +867,91 @@ def _compute_quantile(x, q, axis=None, keepdim=False, ignore_nan=False):
 
     sorted_tensor = paddle.sort(x, axis)
 
+    def _compute_index(index):
+        if interpolation == "nearest":
+            idx = paddle.round(index).astype(paddle.int32)
+            return paddle.take_along_axis(sorted_tensor, idx, axis=axis)
+
+        indices_below = paddle.floor(index).astype(paddle.int32)
+        if interpolation != "higher":
+            # avoid unnecessary compute
+            tensor_below = paddle.take_along_axis(
+                sorted_tensor, indices_below, axis=axis
+            )
+        if interpolation == "lower":
+            return tensor_below
+
+        indices_upper = paddle.ceil(index).astype(paddle.int32)
+        tensor_upper = paddle.take_along_axis(
+            sorted_tensor, indices_upper, axis=axis
+        )
+        if interpolation == "higher":
+            return tensor_upper
+
+        if interpolation == "midpoint":
+            return (tensor_upper + tensor_below) / 2
+
+        weights = (index - indices_below.astype(index.dtype)).astype(x.dtype)
+        # "linear"
+        return paddle.lerp(
+            tensor_below.astype(x.dtype),
+            tensor_upper.astype(x.dtype),
+            weights,
+        )
+
     outputs = []
 
     # TODO(chenjianye): replace the for-loop to directly take elements.
     for index in indices:
-        indices_below = paddle.floor(index).astype('int32')
-        indices_upper = paddle.ceil(index).astype('int32')
-        tensor_upper = paddle.take_along_axis(
-            sorted_tensor, indices_upper, axis=axis
-        )
-        tensor_below = paddle.take_along_axis(
-            sorted_tensor, indices_below, axis=axis
-        )
-        weights = index - indices_below.astype('float64')
-        out = paddle.lerp(
-            tensor_below.astype('float64'),
-            tensor_upper.astype('float64'),
-            weights,
-        )
+        out = _compute_index(index)
         if not keepdim:
             out = paddle.squeeze(out, axis=axis)
         else:
             out = out.reshape(out_shape)
         outputs.append(out)
 
-    if len(q) > 1:
+    if len(outputs) > 1:
         outputs = paddle.stack(outputs, 0)
     else:
         outputs = outputs[0]
-
+    # return outputs.astype(x.dtype)
     return outputs
 
 
-def quantile(x, q, axis=None, keepdim=False):
+def quantile(
+    x: Tensor,
+    q: float | Sequence[float] | Tensor,
+    axis: int | list[int] | None = None,
+    keepdim: bool = False,
+    interpolation: _Interpolation = "linear",
+) -> Tensor:
     """
     Compute the quantile of the input along the specified axis.
     If any values in a reduced row are NaN, then the quantiles for that reduction will be NaN.
 
     Args:
         x (Tensor): The input Tensor, it's data type can be float32, float64, int32, int64.
-        q (int|float|list): The q for calculate quantile, which should be in range [0, 1]. If q is a list,
-            each q will be calculated and the first dimension of output is same to the number of ``q`` .
+        q (int|float|list|Tensor): The q for calculate quantile, which should be in range [0, 1]. If q is a list or
+            a 1-D Tensor, each element of q will be calculated and the first dimension of output is same to the number of ``q`` .
+            If q is a 0-D Tensor, it will be treated as an integer or float.
         axis (int|list, optional): The axis along which to calculate quantile. ``axis`` should be int or list of int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
-            If ``axis`` is a list, quantile is calculated over all elements of given axises.
+            If ``axis`` is a list, quantile is calculated over all elements of given axes.
             If ``axis`` is None, quantile is calculated over all elements of ``x``. Default is None.
         keepdim (bool, optional): Whether to reserve the reduced dimension(s)
             in the output Tensor. If ``keepdim`` is True, the dimensions of
             the output Tensor is the same as ``x`` except in the reduced
             dimensions(it is of size 1 in this case). Otherwise, the shape of
             the output Tensor is squeezed in ``axis`` . Default is False.
+        interpolation (str, optional): The interpolation method to use
+            when the desired quantile falls between two data points. Must be one of linear, higher,
+            lower, midpoint and nearest. Default is linear.
         name (str, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         Tensor, results of quantile along ``axis`` of ``x``.
-        In order to obtain higher precision, data type of results will be float64.
 
     Examples:
         .. code-block:: python
@@ -646,58 +968,74 @@ def quantile(x, q, axis=None, keepdim=False):
 
             >>> y1 = paddle.quantile(y, q=0.5, axis=[0, 1])
             >>> print(y1)
-            Tensor(shape=[], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=True,
             3.50000000)
 
             >>> y2 = paddle.quantile(y, q=0.5, axis=1)
             >>> print(y2)
-            Tensor(shape=[4], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[4], dtype=float32, place=Place(cpu), stop_gradient=True,
             [0.50000000, 2.50000000, 4.50000000, 6.50000000])
 
             >>> y3 = paddle.quantile(y, q=[0.3, 0.5], axis=0)
             >>> print(y3)
-            Tensor(shape=[2, 2], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[2, 2], dtype=float32, place=Place(cpu), stop_gradient=True,
             [[1.80000000, 2.80000000],
              [3.        , 4.        ]])
 
             >>> y[0,0] = float("nan")
             >>> y4 = paddle.quantile(y, q=0.8, axis=1, keepdim=True)
             >>> print(y4)
-            Tensor(shape=[4, 1], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[4, 1], dtype=float32, place=Place(cpu), stop_gradient=True,
             [[nan       ],
              [2.80000000],
              [4.80000000],
              [6.80000000]])
 
     """
-    return _compute_quantile(x, q, axis=axis, keepdim=keepdim, ignore_nan=False)
+    return _compute_quantile(
+        x,
+        q,
+        axis=axis,
+        keepdim=keepdim,
+        interpolation=interpolation,
+        ignore_nan=False,
+    )
 
 
-def nanquantile(x, q, axis=None, keepdim=False):
+def nanquantile(
+    x: Tensor,
+    q: float | Sequence[float] | Tensor,
+    axis: list[int] | int | None = None,
+    keepdim: bool = False,
+    interpolation: _Interpolation = "linear",
+) -> Tensor:
     """
     Compute the quantile of the input as if NaN values in input did not exist.
     If all values in a reduced row are NaN, then the quantiles for that reduction will be NaN.
 
     Args:
         x (Tensor): The input Tensor, it's data type can be float32, float64, int32, int64.
-        q (int|float|list): The q for calculate quantile, which should be in range [0, 1]. If q is a list,
-            each q will be calculated and the first dimension of output is same to the number of ``q`` .
+        q (int|float|list|Tensor): The q for calculate quantile, which should be in range [0, 1]. If q is a list or
+            a 1-D Tensor, each element of q will be calculated and the first dimension of output is same to the number of ``q`` .
+            If q is a 0-D Tensor, it will be treated as an integer or float.
         axis (int|list, optional): The axis along which to calculate quantile. ``axis`` should be int or list of int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
-            If ``axis`` is a list, quantile is calculated over all elements of given axises.
+            If ``axis`` is a list, quantile is calculated over all elements of given axes.
             If ``axis`` is None, quantile is calculated over all elements of ``x``. Default is None.
         keepdim (bool, optional): Whether to reserve the reduced dimension(s)
             in the output Tensor. If ``keepdim`` is True, the dimensions of
             the output Tensor is the same as ``x`` except in the reduced
             dimensions(it is of size 1 in this case). Otherwise, the shape of
             the output Tensor is squeezed in ``axis`` . Default is False.
-        name (str, optional): Name for the operation (optional, default is None).
+        interpolation (str, optional): The interpolation method to use
+            when the desired quantile falls between two data points. Must be one of linear, higher,
+            lower, midpoint and nearest. Default is linear.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         Tensor, results of quantile along ``axis`` of ``x``.
-        In order to obtain higher precision, data type of results will be float64.
 
     Examples:
         .. code-block:: python
@@ -712,32 +1050,39 @@ def nanquantile(x, q, axis=None, keepdim=False):
 
             >>> y1 = paddle.nanquantile(x, q=0.5, axis=[0, 1])
             >>> print(y1)
-            Tensor(shape=[], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=True,
             5.)
 
             >>> y2 = paddle.nanquantile(x, q=0.5, axis=1)
             >>> print(y2)
-            Tensor(shape=[2], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[2], dtype=float32, place=Place(cpu), stop_gradient=True,
             [2.50000000, 7.        ])
 
             >>> y3 = paddle.nanquantile(x, q=[0.3, 0.5], axis=0)
             >>> print(y3)
-            Tensor(shape=[2, 5], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[2, 5], dtype=float32, place=Place(cpu), stop_gradient=True,
             [[5.        , 2.50000000, 3.50000000, 4.50000000, 5.50000000],
              [5.        , 3.50000000, 4.50000000, 5.50000000, 6.50000000]])
 
             >>> y4 = paddle.nanquantile(x, q=0.8, axis=1, keepdim=True)
             >>> print(y4)
-            Tensor(shape=[2, 1], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[2, 1], dtype=float32, place=Place(cpu), stop_gradient=True,
             [[3.40000000],
              [8.20000000]])
 
             >>> nan = paddle.full(shape=[2, 3], fill_value=float("nan"))
             >>> y5 = paddle.nanquantile(nan, q=0.8, axis=1, keepdim=True)
             >>> print(y5)
-            Tensor(shape=[2, 1], dtype=float64, place=Place(cpu), stop_gradient=True,
+            Tensor(shape=[2, 1], dtype=float32, place=Place(cpu), stop_gradient=True,
             [[nan],
              [nan]])
 
     """
-    return _compute_quantile(x, q, axis=axis, keepdim=keepdim, ignore_nan=True)
+    return _compute_quantile(
+        x,
+        q,
+        axis=axis,
+        keepdim=keepdim,
+        interpolation=interpolation,
+        ignore_nan=True,
+    )

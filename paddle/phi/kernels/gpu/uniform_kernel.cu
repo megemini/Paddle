@@ -16,10 +16,10 @@
 
 #include <thrust/random.h>
 
+#include "paddle/common/flags.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/distribution_helper.h"
 #include "paddle/phi/kernels/funcs/index_impl.cu.h"
-#include "paddle/utils/flags.h"
 
 namespace phi {
 
@@ -90,4 +90,5 @@ PD_REGISTER_KERNEL(uniform,
                    float,
                    double,
                    phi::dtype::float16,
-                   phi::dtype::bfloat16) {}
+                   phi::dtype::bfloat16,
+                   phi::dtype::float8_e4m3fn) {}

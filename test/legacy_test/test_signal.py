@@ -111,7 +111,7 @@ def normalize(S, norm=np.inf, axis=0, threshold=None, fill=None):
         return S
 
     else:
-        raise Exception(f"Unsupported norm: {repr(norm)}")
+        raise Exception(f"Unsupported norm: {norm!r}")
 
     # indices where norm is below the threshold
     small_idx = length < threshold
@@ -242,12 +242,12 @@ def frame(x, frame_length, hop_length, axis=-1):
     new_stride = np.prod(strides[strides > 0] // x.itemsize) * x.itemsize
 
     if axis == -1:
-        shape = list(x.shape)[:-1] + [frame_length, n_frames]
-        strides = list(strides) + [hop_length * new_stride]
+        shape = [*list(x.shape)[:-1], frame_length, n_frames]
+        strides = [*list(strides), hop_length * new_stride]
 
     elif axis == 0:
-        shape = [n_frames, frame_length] + list(x.shape)[1:]
-        strides = [hop_length * new_stride] + list(strides)
+        shape = [n_frames, frame_length, *list(x.shape)[1:]]
+        strides = [hop_length * new_stride, *list(strides)]
 
     else:
         raise Exception(f"Frame axis={axis} must be either 0 or -1")
@@ -488,12 +488,12 @@ def frame_for_api_test(x, frame_length, hop_length, axis=-1):
     strides = np.asarray(x.strides)
 
     if axis == -1:
-        shape = list(x.shape)[:-1] + [frame_length, n_frames]
-        strides = list(strides) + [hop_length * x.itemsize]
+        shape = [*list(x.shape)[:-1], frame_length, n_frames]
+        strides = [*list(strides), hop_length * x.itemsize]
 
     elif axis == 0:
-        shape = [n_frames, frame_length] + list(x.shape)[1:]
-        strides = [hop_length * x.itemsize] + list(strides)
+        shape = [n_frames, frame_length, *list(x.shape)[1:]]
+        strides = [hop_length * x.itemsize, *list(strides)]
 
     else:
         raise ValueError(f"Frame axis={axis} must be either 0 or -1")
@@ -525,10 +525,10 @@ def overlap_add_for_api_test(x, hop_length, axis=-1):
     if len(x.shape) > 3:
         reshape_output = True
         if axis == 0:
-            target_shape = [seq_length] + list(x.shape[2:])
+            target_shape = [seq_length, *list(x.shape[2:])]
             x = x.reshape(n_frames, frame_length, np.prod(x.shape[2:]))
         else:
-            target_shape = list(x.shape[:-2]) + [seq_length]
+            target_shape = [*list(x.shape[:-2]), seq_length]
             x = x.reshape(np.prod(x.shape[:-2]), frame_length, n_frames)
 
     if axis == 0:
@@ -574,7 +574,7 @@ def place(devices, key='place'):
 def setUpModule():
     global rtol
     global atol
-    # All test case will use float64 for compare percision, refs:
+    # All test case will use float64 for compare precision, refs:
     # https://github.com/PaddlePaddle/Paddle/wiki/Upgrade-OP-Precision-to-Float64
     rtol = {
         'float32': 1e-06,
@@ -694,6 +694,7 @@ class TestFrame(unittest.TestCase):
         ('test_3d_input2', rand_x(3, np.float64, shape=[4, 2, 150]), 50, 15, -1),
     ])  # fmt: skip
 class TestFrameStatic(unittest.TestCase):
+
     def test_frame_static(self):
         paddle.enable_static()
         mp, sp = paddle.static.Program(), paddle.static.Program()
@@ -776,6 +777,7 @@ class TestOverlapAdd(unittest.TestCase):
         ('test_4d_input2', rand_x(4, np.float64, shape=[3, 5, 12, 8]), 5, -1),
     ])  # fmt: skip
 class TestOverlapAddStatic(unittest.TestCase):
+
     def test_overlap_add_static(self):
         paddle.enable_static()
         mp, sp = paddle.static.Program(), paddle.static.Program()
@@ -1041,6 +1043,13 @@ class TestIstftException(unittest.TestCase):
                 self.length,
                 self.return_complex,
             ),
+
+
+class TestIstftException_ZeroSize(unittest.TestCase):
+    def test_istft(self):
+        self.x = np.random.random([5, 0])
+        with self.assertRaises(AssertionError):
+            paddle.signal.istft(paddle.to_tensor(self.x), 512)
 
 
 if __name__ == '__main__':

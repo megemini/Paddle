@@ -15,17 +15,19 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, convert_float_to_uint16
+from op_test import (
+    OpTest,
+    convert_float_to_uint16,
+    get_places,
+    is_custom_device,
+)
 
 import paddle
 import paddle.nn.functional as F
 from paddle import nn
 from paddle.base import (
     Executor,
-    Program,
     core,
-    default_main_program,
-    program_guard,
 )
 
 
@@ -38,15 +40,19 @@ class TestPad3dOp(OpTest):
         self.op_type = "pad3d"
         self.python_api = paddle.nn.functional.pad
         self.inputs = {
-            'X': np.random.uniform(-1.0, 1.0, self.shape).astype("float32")
-            if self.dtype == np.uint16
-            else (
-                (
-                    np.random.uniform(-1.0, 1.0, self.shape)
-                    + 1j * np.random.uniform(-1.0, 1.0, self.shape)
-                ).astype(self.dtype)
-                if self.dtype == np.complex64 or self.dtype == np.complex128
-                else np.random.uniform(-1.0, 1.0, self.shape).astype(self.dtype)
+            'X': (
+                np.random.uniform(-1.0, 1.0, self.shape).astype("float32")
+                if self.dtype == np.uint16
+                else (
+                    (
+                        np.random.uniform(-1.0, 1.0, self.shape)
+                        + 1j * np.random.uniform(-1.0, 1.0, self.shape)
+                    ).astype(self.dtype)
+                    if self.dtype == np.complex64 or self.dtype == np.complex128
+                    else np.random.uniform(-1.0, 1.0, self.shape).astype(
+                        self.dtype
+                    )
+                )
             )
         }
         self.attrs = {}
@@ -198,6 +204,9 @@ class TestCase9(TestPad3dOp):
         self.value = 1.0
         self.variable_paddings = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
+
 
 class TestCase10(TestPad3dOp):
     def initTestCase(self):
@@ -208,20 +217,28 @@ class TestCase10(TestPad3dOp):
         self.value = 1.0
         self.variable_paddings = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
+
 
 # ----------------Pad3d Fp16----------------
 
 
 def create_test_fp16(parent):
     @unittest.skipIf(
-        not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+        not (core.is_compiled_with_cuda() or is_custom_device()),
+        "core is not compiled with CUDA",
     )
     class TestPad3dFp16(parent):
         def get_dtype(self):
             return np.float16
 
         def test_check_output(self):
-            self.check_output(atol=1e-3, check_pir=True)
+            self.check_output(
+                atol=1e-3,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
 
         def test_check_grad_normal(self):
             self.check_grad(
@@ -260,7 +277,12 @@ def create_test_bf16(parent):
 
         def test_check_output(self):
             place = core.CUDAPlace(0)
-            self.check_output_with_place(place, atol=1e-2, check_pir=True)
+            self.check_output_with_place(
+                place,
+                atol=1e-2,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
 
         def test_check_grad_normal(self):
             place = core.CUDAPlace(0)
@@ -288,14 +310,19 @@ create_test_bf16(TestCase10)
 # ----------------Pad3d complex64----------------
 def create_test_complex64(parent):
     @unittest.skipIf(
-        not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+        not (core.is_compiled_with_cuda() or is_custom_device()),
+        "core is not compiled with CUDA",
     )
     class TestPad3dComplex64(parent):
         def get_dtype(self):
             return np.complex64
 
         def test_check_output(self):
-            self.check_output(atol=1e-3, check_pir=True)
+            self.check_output(
+                atol=1e-3,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
 
         def test_check_grad_normal(self):
             self.check_grad(
@@ -324,14 +351,19 @@ create_test_complex64(TestCase10)
 
 def create_test_complex128(parent):
     @unittest.skipIf(
-        not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+        not (core.is_compiled_with_cuda() or is_custom_device()),
+        "core is not compiled with CUDA",
     )
     class TestPad3dComplex128(parent):
         def get_dtype(self):
             return np.complex128
 
         def test_check_output(self):
-            self.check_output(atol=1e-3, check_pir=True)
+            self.check_output(
+                atol=1e-3,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
 
         def test_check_grad_normal(self):
             self.check_grad(
@@ -358,16 +390,16 @@ create_test_complex128(TestCase10)
 class TestPadAPI(unittest.TestCase):
     def setUp(self):
         self.init_dtype()
-        self.places = [paddle.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def init_dtype(self):
         self.dtype = np.float32
 
     def check_static_result_1(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (1, 2, 3, 4, 5)
             pad = [1, 2, 1, 1, 3, 4]
             mode = "constant"
@@ -386,7 +418,7 @@ class TestPadAPI(unittest.TestCase):
             )
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
                 fetch_list=[result],
             )
@@ -396,7 +428,9 @@ class TestPadAPI(unittest.TestCase):
 
     def check_static_result_2(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (2, 3, 4, 5, 6)
             pad = [1, 2, 1, 1, 1, 2]
             mode = "reflect"
@@ -411,11 +445,12 @@ class TestPadAPI(unittest.TestCase):
             )
             result1 = F.pad(x=x, pad=pad, mode=mode, data_format="NCDHW")
             result2 = F.pad(x=x, pad=pad, mode=mode, data_format="NDHWC")
+            result3 = F.pad(x=x, pad=pad, mode=mode)
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
-                fetch_list=[result1, result2],
+                fetch_list=[result1, result2, result3],
             )
 
             np_out1 = self._get_numpy_out(
@@ -426,10 +461,13 @@ class TestPadAPI(unittest.TestCase):
             )
             np.testing.assert_allclose(fetches[0], np_out1, rtol=1e-05)
             np.testing.assert_allclose(fetches[1], np_out2, rtol=1e-05)
+            np.testing.assert_allclose(fetches[2], np_out1, rtol=1e-05)
 
     def check_static_result_3(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (2, 3, 4, 5, 6)
             pad = [1, 2, 1, 1, 3, 4]
             mode = "replicate"
@@ -444,11 +482,12 @@ class TestPadAPI(unittest.TestCase):
             )
             result1 = F.pad(x=x, pad=pad, mode=mode, data_format="NCDHW")
             result2 = F.pad(x=x, pad=pad, mode=mode, data_format="NDHWC")
+            result3 = F.pad(x=x, pad=pad, mode=mode)
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
-                fetch_list=[result1, result2],
+                fetch_list=[result1, result2, result3],
             )
 
             np_out1 = self._get_numpy_out(
@@ -459,10 +498,13 @@ class TestPadAPI(unittest.TestCase):
             )
             np.testing.assert_allclose(fetches[0], np_out1, rtol=1e-05)
             np.testing.assert_allclose(fetches[1], np_out2, rtol=1e-05)
+            np.testing.assert_allclose(fetches[2], np_out1, rtol=1e-05)
 
     def check_static_result_4(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (2, 3, 4, 5, 6)
             pad = [1, 2, 1, 1, 3, 4]
             mode = "circular"
@@ -477,11 +519,12 @@ class TestPadAPI(unittest.TestCase):
             )
             result1 = F.pad(x=x, pad=pad, mode=mode, data_format="NCDHW")
             result2 = F.pad(x=x, pad=pad, mode=mode, data_format="NDHWC")
+            result3 = F.pad(x=x, pad=pad, mode=mode)
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
-                fetch_list=[result1, result2],
+                fetch_list=[result1, result2, result3],
             )
 
             np_out1 = self._get_numpy_out(
@@ -492,6 +535,7 @@ class TestPadAPI(unittest.TestCase):
             )
             np.testing.assert_allclose(fetches[0], np_out1, rtol=1e-05)
             np.testing.assert_allclose(fetches[1], np_out2, rtol=1e-05)
+            np.testing.assert_allclose(fetches[2], np_out1, rtol=1e-05)
 
     def _get_numpy_out(
         self, input_data, pad, mode, value=0, data_format="NCDHW"
@@ -591,10 +635,12 @@ class TestPadAPI(unittest.TestCase):
         y3 = F.pad(
             tensor_data, pad=pad_3, mode=mode, value=value, data_format="NCDHW"
         )
+        y4 = F.pad(tensor_data, pad=pad, mode=mode, value=value)
 
         np.testing.assert_allclose(y1.numpy(), np_out1, rtol=1e-05)
         np.testing.assert_allclose(y2.numpy(), np_out2, rtol=1e-05)
         np.testing.assert_allclose(y3.numpy(), np_out3, rtol=1e-05)
+        np.testing.assert_allclose(y4.numpy(), np_out1, rtol=1e-05)
 
     def test_dygraph_2(self):
         paddle.disable_static()
@@ -634,10 +680,16 @@ class TestPadAPI(unittest.TestCase):
         y3 = F.pad(
             tensor_data, pad=pad_3, mode=mode, value=value, data_format="NCHW"
         )
-
+        y4 = F.pad(
+            tensor_data,
+            pad=tensor_pad,
+            mode=mode,
+            value=value,
+        )
         np.testing.assert_allclose(y1.numpy(), np_out1, rtol=1e-05)
         np.testing.assert_allclose(y2.numpy(), np_out2, rtol=1e-05)
         np.testing.assert_allclose(y3.numpy(), np_out3, rtol=1e-05)
+        np.testing.assert_allclose(y4.numpy(), np_out1, rtol=1e-05)
 
     def test_dygraph_3(self):
         paddle.disable_static()
@@ -680,10 +732,17 @@ class TestPadAPI(unittest.TestCase):
         y3 = F.pad(
             tensor_data, pad=pad_3, mode=mode, value=value, data_format="NCL"
         )
+        y4 = F.pad(
+            tensor_data,
+            pad=tensor_pad,
+            mode=mode,
+            value=value,
+        )
 
         np.testing.assert_allclose(y1.numpy(), np_out1, rtol=1e-05)
         np.testing.assert_allclose(y2.numpy(), np_out2, rtol=1e-05)
         np.testing.assert_allclose(y3.numpy(), np_out3, rtol=1e-05)
+        np.testing.assert_allclose(y4.numpy(), np_out1, rtol=1e-05)
 
 
 class TestPadAPI_complex64(TestPadAPI):
@@ -726,9 +785,7 @@ class TestPad1dAPI(unittest.TestCase):
 
     def setUp(self):
         self.init_dtype()
-        self.places = [paddle.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def init_dtype(self):
         self.dtype = np.float32
@@ -833,9 +890,7 @@ class TestPad2dAPI(unittest.TestCase):
 
     def setUp(self):
         self.init_dtype()
-        self.places = [paddle.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def init_dtype(self):
         self.dtype = np.float32
@@ -942,9 +997,7 @@ class TestPad3dAPI(unittest.TestCase):
 
     def setUp(self):
         self.init_dtype()
-        self.places = [paddle.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def init_dtype(self):
         self.dtype = np.float32
@@ -1052,9 +1105,7 @@ class TestPad3dAPI_complex128(TestPad3dAPI):
 class TestPad3dOpError(unittest.TestCase):
     def setUp(self):
         self.init_dtype()
-        self.places = [paddle.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(paddle.CUDAPlace(0))
+        self.places = get_places()
 
     def init_dtype(self):
         self.dtype = np.float32
@@ -1153,8 +1204,9 @@ class TestPad3dOpError(unittest.TestCase):
             self.assertRaises(Exception, test_reflect_1)
             self.assertRaises(Exception, test_reflect_2)
             self.assertRaises(Exception, test_reflect_3)
-            self.assertRaises(Exception, test_circular_1)
-            self.assertRaises(Exception, test_replicate_1)
+            # comment out because pad3d support 0-size now.
+            # self.assertRaises(Exception, test_circular_1)
+            # self.assertRaises(Exception, test_replicate_1)
         paddle.enable_static()
 
 

@@ -18,7 +18,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-
+#include "paddle/common/enforce.h"
 namespace cinn {
 namespace common {
 
@@ -137,19 +137,39 @@ Type Type::ElementOf() const {
 }
 
 void Type::CheckTypeValid() const {
-  CHECK_NE(GetStorage().type_, type_t::Unk);
+  PADDLE_ENFORCE_NE(
+      GetStorage().type_,
+      type_t::Unk,
+      ::common::errors::InvalidArgument("The type is not initialized."));
+
   if (GetStorage().type_ == type_t::Float && GetStorage().bits_ == 16) {
-    CHECK(GetStorage().specific_type_ == specific_type_t::FP16 ||
-          GetStorage().specific_type_ == specific_type_t::BF16)
-        << "When creating a 16 bits Float, the specific_type_t must be FP16 or "
-           "BF16.";
+    PADDLE_ENFORCE_EQ((GetStorage().specific_type_ == specific_type_t::FP16 ||
+                       GetStorage().specific_type_ == specific_type_t::BF16),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "When creating a 16-bit Float, the 'specific_type_t' "
+                          "must be FP16 or BF16. "
+                          "Received: specific_type_t = %d.",
+                          static_cast<int>(GetStorage().specific_type_)));
+  }
+  if (GetStorage().type_ == type_t::Float && GetStorage().bits_ == 8) {
+    PADDLE_ENFORCE_EQ((GetStorage().specific_type_ == specific_type_t::F8E4M3),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "When creating a 8-bit Float, the 'specific_type_t' "
+                          "must be FP8e4m3. "
+                          "Received: specific_type_t = %d.",
+                          static_cast<int>(GetStorage().specific_type_)));
   }
 }
 
 Type Type::PointerOf() const {
   CheckTypeValid();
   auto x = *this;
-  CHECK(!x.is_cpp_handle2()) << "Not support three level of PointerOf";
+  PADDLE_ENFORCE_EQ(x.is_cpp_handle2(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Not support three levels of PointerOf."));
   if (x.is_cpp_handle())
     x.set_cpp_handle2();
   else
@@ -169,7 +189,7 @@ bool Type::is_supported() const {
          this->is_float(64) || this->is_bool() || this->is_int(8) ||
          this->is_int(16) || this->is_int(32) || this->is_int(64) ||
          this->is_uint(8) || this->is_uint(16) || this->is_uint(32) ||
-         this->is_uint(64);
+         this->is_uint(64) || this->is_float8e4m3();
 }
 
 Type Type::IgnoreConst() const {
@@ -180,7 +200,11 @@ Type Type::IgnoreConst() const {
 }
 
 Type Type::with_bits(int x) const {
-  CHECK(is_primitive());
+  PADDLE_ENFORCE_EQ(
+      is_primitive(),
+      true,
+      ::common::errors::InvalidArgument(
+          "The type must be primitive to set the number of bits."));
   Type type = *this;
   type.GetStorage().bits_ = x;
   return type;
@@ -193,7 +217,10 @@ Type Type::with_type(Type::type_t x) const {
 }
 
 Type Type::with_lanes(int x) const {
-  CHECK(valid());
+  PADDLE_ENFORCE_EQ(valid(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The type must be valid to set the number of lanes."));
   Type type = *this;
   type.GetStorage().lanes_ = x;
   return type;
@@ -231,6 +258,9 @@ bool Type::valid() const {
     return (GetStorage().specific_type_ == specific_type_t::FP16 ||
             GetStorage().specific_type_ == specific_type_t::BF16);
   }
+  if (is_float8e4m3() && GetStorage().bits_ == 8) {
+    return (GetStorage().specific_type_ == specific_type_t::F8E4M3);
+  }
   if (is_primitive()) {
     return bits() != 0;
   }
@@ -241,9 +271,23 @@ bool Type::valid() const {
 Type::Type(Type::type_t t, int b, int w, specific_type_t st)
     : storage_(new Storage(t, b, w, st)) {
   if (t == Type::type_t::Float && b == 16) {
-    CHECK(st == specific_type_t::FP16 || st == specific_type_t::BF16)
-        << "When creating a 16 bits Float, the specific_type_t must be FP16 or "
-           "BF16.";
+    PADDLE_ENFORCE_EQ(
+        (st == specific_type_t::FP16 || st == specific_type_t::BF16),
+        true,
+        ::common::errors::InvalidArgument(
+            "When creating a 16-bit Float, the "
+            "'specific_type_t' must be FP16 or BF16. "
+            "Received: specific_type_t = %d.",
+            static_cast<int>(st)));
+  }
+  if (t == Type::type_t::Float && b == 8) {
+    PADDLE_ENFORCE_EQ(
+        (st == specific_type_t::F8E4M3),
+        true,
+        ::common::errors::InvalidArgument("When creating a 8-bit Float, the "
+                                          "'specific_type_t' must be F8E4M3. "
+                                          "Received: specific_type_t = %d.",
+                                          static_cast<int>(st)));
   }
 }
 bool Type::is_primitive() const {
@@ -261,13 +305,30 @@ bool Type::is_scalar() const { return lanes() == 1; }
 // distinguish FP16/BF16, or use is_float16()/is_bfloat16() for short
 bool Type::is_float(int bits, specific_type_t st) const {
   if (type() == type_t::Float && bits == 16) {
-    CHECK(st != specific_type_t::None)
-        << "when calling is_float(16), 'st' can't be specific_type_t::None to "
-           "distinguish FP16/BF16, or use is_float16()/is_bfloat16() for short";
+    PADDLE_ENFORCE_NE(
+        st,
+        specific_type_t::None,
+        ::common::errors::InvalidArgument(
+            "When calling is_float(16), 'st' can't be specific_type_t::None to "
+            "distinguish FP16/BF16. Use is_float16() or is_bfloat16() for "
+            "short."));
+    return st == this->specific_type();
+  } else if (type() == type_t::Float && bits == 8) {
+    PADDLE_ENFORCE_NE(
+        st,
+        specific_type_t::None,
+        ::common::errors::InvalidArgument(
+            "When calling is_float(8), 'st' can't be specific_type_t::None to "
+            "distinguish F8E4M3/F8E5M2. Use is_float8e4m3() or is_float8e5m2() "
+            "for short."));
     return st == this->specific_type();
   } else {
     return type() == type_t::Float && (bits < 0 || bits == this->bits());
   }
+}
+
+bool Type::is_float8e4m3() const {
+  return is_float(8, specific_type_t::F8E4M3);
 }
 bool Type::is_float16() const { return is_float(16, specific_type_t::FP16); }
 bool Type::is_bfloat16() const { return is_float(16, specific_type_t::BF16); }
@@ -330,16 +391,26 @@ Type &Type::operator=(const Type &other) {
 }
 
 Type::Storage &Type::GetStorage() {
-  CHECK(storage_) << "The type not initializated! Please check.";
+  PADDLE_ENFORCE_NOT_NULL(storage_,
+                          ::common::errors::InvalidArgument(
+                              "The type is not initialized! Please check."));
   return *storage_;
 }
+
 const Type::Storage &Type::GetStorage() const {
-  CHECK(storage_) << "The type not initializated! Please check.";
+  PADDLE_ENFORCE_NOT_NULL(storage_,
+                          ::common::errors::InvalidArgument(
+                              "The type is not initialized! Please check."));
   return *storage_;
 }
 
 Type::Type() : storage_(new Storage) {}
 Type::Type(Type &&other) : storage_(std::move(other.storage_)) {}
+
+const Type &F8E4M3() {
+  static auto t = Float(8, 1, Type::specific_type_t::F8E4M3);
+  return t;
+}
 
 const Type &BF16() {
   static auto t = Float(16, 1, Type::specific_type_t::BF16);
@@ -429,6 +500,7 @@ int Type::bytes() const {
       GET_TYPE_SIZE_PAIR(bfloat16),
       GET_TYPE_SIZE_PAIR(float16),
       GET_TYPE_SIZE_PAIR(float),
+      GET_TYPE_SIZE_PAIR(float8e4m3),
       GET_TYPE_SIZE_PAIR(double),
 
       GET_TYPE_SIZE_PAIR(char),
@@ -536,6 +608,9 @@ Type Str2Type(const std::string &type) {
       {"float16_p", type_of<float16 *>()},
       {"half_p", type_of<float16 *>()},
 
+      {"float8e4m3*", type_of<float8e4m3 *>()},
+      {"float8e4m3_p", type_of<float8e4m3 *>()},
+
       {"float*", type_of<float *>()},
       {"float32*", type_of<float *>()},
       {"float_p", type_of<float *>()},
@@ -557,9 +632,11 @@ Type Str2Type(const std::string &type) {
       {"cinn_pod_value*", type_of<cinn_pod_value_t *>()},
       {"cinn_pod_value_p", type_of<cinn_pod_value_t *>()},
   };
-
-  CHECK(str2type_map.find(type) != str2type_map.end())
-      << "Not support type [" << type << "] ! Please Check.\n";
+  PADDLE_ENFORCE_NE(
+      str2type_map.find(type),
+      str2type_map.end(),
+      ::common::errors::InvalidArgument(
+          "Not supported type [%s]! Please check.", type.c_str()));
   return str2type_map.at(type);
 }
 
@@ -583,6 +660,8 @@ std::string Type2Str(const Type &type) {
           return "bfloat16";
         case Type::specific_type_t::FP16:
           return "float16";
+        case Type::specific_type_t::F8E4M3:
+          return "float8e4m3";
         default:
           break;
       }
@@ -600,7 +679,9 @@ std::string Type2Str(const Type &type) {
       return "unk";
 
     default:
-      LOG(FATAL) << "Not support type [" << type << "] ! Please Check.\n";
+      std::stringstream ss;
+      ss << "Not support type [" << type << "] ! Please Check.\n";
+      PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
   return "unk";
 }

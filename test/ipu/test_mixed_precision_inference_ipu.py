@@ -124,7 +124,7 @@ class TestBase(IPUOpTest):
         self.check()
 
 
-class TestPipline(TestBase):
+class TestPipeline(TestBase):
     @IPUOpTest.static_graph
     def build_model(self, exec_mode):
         feed_shape = list(self.feed_shape[0])
@@ -139,14 +139,14 @@ class TestPipline(TestBase):
             x = paddle.static.nn.batch_norm(x, act='relu')
             x = F.max_pool2d(x, kernel_size=2, stride=2)
 
-        with paddle.static.ipu_shard_guard(index=1, stage=1):
+        with (
+            paddle.static.ipu_shard_guard(index=1, stage=1),
             # using fp16
-            with paddle.static.amp.fp16_guard():
-                x = paddle.static.nn.conv2d(
-                    input=x, num_filters=6, filter_size=3
-                )
-                x = paddle.static.nn.batch_norm(x, act='relu')
-                x = F.max_pool2d(x, kernel_size=2, stride=2)
+            paddle.static.amp.fp16_guard(),
+        ):
+            x = paddle.static.nn.conv2d(input=x, num_filters=6, filter_size=3)
+            x = paddle.static.nn.batch_norm(x, act='relu')
+            x = F.max_pool2d(x, kernel_size=2, stride=2)
 
         with paddle.static.ipu_shard_guard(index=2, stage=2):
             # using fp32

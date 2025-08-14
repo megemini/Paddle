@@ -21,12 +21,13 @@ limitations under the License. */
 #include <vector>
 
 #include "paddle/fluid/framework/data_layout.h"
+#include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/op_version_registry.h"
-#include "paddle/fluid/operators/common_infer_shape_functions.h"
-#include "paddle/fluid/operators/elementwise/elementwise_op_function.h"
+#include "paddle/phi/kernels/funcs/common_shape.h"
+#include "paddle/phi/kernels/funcs/elementwise/elementwise_op_function.h"
 
 #ifdef PADDLE_WITH_DNNL
-#include "paddle/fluid/platform/mkldnn_helper.h"
+#include "paddle/fluid/platform/onednn_helper.h"
 #endif
 
 namespace paddle {
@@ -43,8 +44,8 @@ class ElementwiseOp : public framework::OperatorWithKernel {
 
     PADDLE_ENFORCE_EQ(
         ctx->GetInputsVarType("Y").front(),
-        framework::proto::VarType::LOD_TENSOR,
-        platform::errors::InvalidArgument(
+        framework::proto::VarType::DENSE_TENSOR,
+        common::errors::InvalidArgument(
             "The input var's type should be phi::DenseTensor, but the "
             "received is %s [%s].",
             ctx->GetInputsVarType("Y").front(),
@@ -55,24 +56,24 @@ class ElementwiseOp : public framework::OperatorWithKernel {
       PADDLE_ENFORCE_EQ(
           ctx->GetInputDim("Y").size(),
           1u,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "For elementwise_op, if X is Sparse(VarType.SELECTED_ROWS"
               "), Y must be scalar, the size of Y should be 1. "
-              "But reveived the size of Y = %s.",
+              "But received the size of Y = %s.",
               ctx->GetInputDim("Y").size()));
       PADDLE_ENFORCE_EQ(
           ctx->GetInputDim("Y")[0],
           1,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "For elementwise_op, if X is Sparse(VarType.SELECTED_ROWS"
               "), Y must be scalar, the first dimension of Y should be 1. "
-              "But reveived the first dimension of Y = %s.",
+              "But received the first dimension of Y = %s.",
               ctx->GetInputDim("Y")[0]));
     } else if (ctx->GetInputsVarType("X").front() !=
-               framework::proto::VarType::LOD_TENSOR) {
-      PADDLE_THROW(platform::errors::InvalidArgument(
+               framework::proto::VarType::DENSE_TENSOR) {
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Input X's type[%s] is not supported by elementwise_op. Please set "
-          "its type to LOD_TENSOR.",
+          "its type to DENSE_TENSOR.",
           ctx->GetInputsVarType("X").front()));
     }
 
@@ -87,7 +88,7 @@ class ElementwiseOp : public framework::OperatorWithKernel {
       if (x_dims.size() == y_dims.size()) {
         PADDLE_ENFORCE_EQ((axis == -1) || (axis == 0),
                           true,
-                          platform::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "axis should be -1 or 0 while the dimension of "
                               "tensor X (%s) is equal to the dimension of "
                               "tensor Y (%s), but received axis: %s",
@@ -97,7 +98,7 @@ class ElementwiseOp : public framework::OperatorWithKernel {
       }
       PADDLE_ENFORCE_EQ((axis >= (-1 * max_dim)) && (axis < max_dim),
                         true,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "The axis range must be [%s, %s), but axis is %s. "
                             "Please set the axis again.",
                             -1 * max_dim,
@@ -105,22 +106,22 @@ class ElementwiseOp : public framework::OperatorWithKernel {
                             axis));
       axis = (axis < 0 ? (std::abs(x_dims.size() - y_dims.size()) + axis + 1)
                        : axis);
-      std::vector<int> x_dims_array(max_dim);
-      std::vector<int> y_dims_array(max_dim);
-      std::vector<int> out_dims_array(max_dim);
+      std::vector<int64_t> x_dims_array(max_dim);
+      std::vector<int64_t> y_dims_array(max_dim);
+      std::vector<int64_t> out_dims_array(max_dim);
 #ifdef PADDLE_WITH_DNNL
       // Broadcasting of dims has to be done on Paddle shapes (NHWC)
       // if model is using NHWC and any of shapes in at least 3D
       bool should_rotate =
-          ctx->IsRunMKLDNNKernel() &&
+          ctx->IsRunONEDNNKernel() &&
           (phi::OneDNNContext::tls().get_cur_paddle_data_layout() ==
            phi::DataLayout::kNHWC) &&
           (x_dims.size() >= 3 || y_dims.size() >= 3);
       if (should_rotate) {
         // Pick bigger shape and rotate this one
         bool x_over_y = (x_dims.size() > y_dims.size());
-        auto vdims = x_over_y ? common::vectorize<int>(x_dims)
-                              : common::vectorize<int>(y_dims);
+        auto vdims = x_over_y ? common::vectorize<int64_t>(x_dims)
+                              : common::vectorize<int64_t>(y_dims);
         std::rotate(vdims.begin() + 1, vdims.begin() + 2, vdims.end());
         if (x_over_y) {
           x_dims = common::make_ddim(vdims);
@@ -130,13 +131,13 @@ class ElementwiseOp : public framework::OperatorWithKernel {
       }
 #endif
 
-      GetBroadcastDimsArrays(x_dims,
-                             y_dims,
-                             x_dims_array.data(),
-                             y_dims_array.data(),
-                             out_dims_array.data(),
-                             max_dim,
-                             axis);
+      phi::funcs::GetBroadcastDimsArrays(x_dims,
+                                         y_dims,
+                                         x_dims_array.data(),
+                                         y_dims_array.data(),
+                                         out_dims_array.data(),
+                                         max_dim,
+                                         axis);
 #ifdef PADDLE_WITH_DNNL
       // Now rotate shape back if needed (NHWC -> NCHW)
       if (should_rotate) {
@@ -163,7 +164,7 @@ class ElementwiseOp : public framework::OperatorWithKernel {
       const phi::DenseTensor &tensor,
       const phi::KernelKey &expected_kernel_type) const override {
     if (framework::IsComplexType(expected_kernel_type.dtype())) {
-      // only promote inputs’s types when contains complex input
+      // only promote inputs's types when contains complex input
       return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
     } else {
 #ifdef PADDLE_WITH_DNNL
@@ -309,7 +310,7 @@ class ElementwiseOpGrad : public framework::OperatorWithKernel {
       const phi::DenseTensor &tensor,
       const phi::KernelKey &expected_kernel_type) const override {
     if (framework::IsComplexType(expected_kernel_type.dtype())) {
-      // only promote inputs’s types when contains complex input
+      // only promote inputs's types when contains complex input
       return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
     } else {
       return phi::KernelKey(
@@ -350,7 +351,7 @@ class ElementwiseOpDoubleGrad : public framework::OperatorWithKernel {
       const phi::DenseTensor &tensor,
       const phi::KernelKey &expected_kernel_type) const override {
     if (framework::IsComplexType(expected_kernel_type.dtype())) {
-      // only promote inputs’s types when contains complex input
+      // only promote inputs's types when contains complex input
       return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
     } else {
       return phi::KernelKey(
@@ -398,7 +399,7 @@ class ElementwiseOpDoubleGradWithoutDXDY
       const phi::DenseTensor &tensor,
       const phi::KernelKey &expected_kernel_type) const override {
     if (framework::IsComplexType(expected_kernel_type.dtype())) {
-      // only promote inputs’s types when contains complex input
+      // only promote inputs's types when contains complex input
       return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
     } else {
       return phi::KernelKey(
@@ -446,7 +447,7 @@ class ElementwiseOpTripleGrad : public framework::OperatorWithKernel {
       const phi::DenseTensor &tensor,
       const phi::KernelKey &expected_kernel_type) const override {
     if (framework::IsComplexType(expected_kernel_type.dtype())) {
-      // only promote inputs’s types when contains complex input
+      // only promote inputs's types when contains complex input
       return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
     } else {
       return phi::KernelKey(

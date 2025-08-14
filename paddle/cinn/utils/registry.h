@@ -144,8 +144,8 @@ class Registry {
  *      .set_body([]() { return new BinaryTree(); });
  * \endcode
  *
- * @tparam EntryType The type of subclass that inheritate the base.
- * @tparam FunctionType The function type this registry is registerd.
+ * @tparam EntryType The type of subclass that inherit the base.
+ * @tparam FunctionType The function type this registry is registered.
  */
 template <typename EntryType, typename FunctionType>
 class FunctionRegEntryBase {

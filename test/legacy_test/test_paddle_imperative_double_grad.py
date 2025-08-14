@@ -39,7 +39,7 @@ dygraph_guard = wrap_decorator(_dygraph_guard_)
 
 def random_var(size, low=-1, high=1, dtype='float32'):
     x_np = np.random.uniform(low=low, high=high, size=size).astype(dtype)
-    return base.dygraph.to_variable(x_np)
+    return paddle.to_tensor(x_np)
 
 
 class TestDygraphDoubleGrad(TestCase):
@@ -152,7 +152,7 @@ class TestDygraphDoubleGrad(TestCase):
         )
         np.random.shuffle(x_np)
 
-        x = base.dygraph.to_variable(x_np)
+        x = paddle.to_tensor(x_np)
         x.stop_gradient = False
 
         alpha = 0.2
@@ -232,7 +232,7 @@ class TestDygraphDoubleGrad(TestCase):
 
         self.assertFalse(dx_actual.stop_gradient)
 
-        # Theoritical result based on math calculation
+        # Theoretical result based on math calculation
         dx_expected = (
             1.0 / float(numel) * (np.maximum(x_np, 0) + 1) * (x_np > 0) * 2
         ).astype('float32')

@@ -14,7 +14,11 @@
 
 import unittest
 
-from dygraph_to_static_utils import Dy2StTestBase, test_ast_only, test_sot_only
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+    test_ast_only,
+    test_sot_only,
+)
 
 import paddle
 

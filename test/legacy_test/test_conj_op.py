@@ -21,12 +21,11 @@ import paddle
 
 sys.path.append("..")
 from numpy.random import random as rand
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_places
 
 import paddle.base.dygraph as dg
 from paddle import static
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -51,7 +50,7 @@ class TestConjOp(OpTest):
         self.outputs = {'Out': out}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
         self.check_grad(
@@ -61,12 +60,41 @@ class TestConjOp(OpTest):
         )
 
 
+class TestConjOpZeroSize1(TestConjOp):
+    def init_input_output(self):
+        x = (np.random.random((0, 14)) + 1j * np.random.random((0, 14))).astype(
+            self.dtype
+        )
+        out = np.conj(x)
+
+        self.inputs = {'X': OpTest.np_dtype_to_base_dtype(x)}
+        self.outputs = {'Out': out}
+
+
+class TestConjOpZeroSize2(TestConjOp):
+    def init_input_output(self):
+        x = (
+            np.random.random((2, 0, 14)) + 1j * np.random.random((2, 0, 14))
+        ).astype(self.dtype)
+        out = np.conj(x)
+
+        self.inputs = {'X': OpTest.np_dtype_to_base_dtype(x)}
+        self.outputs = {'Out': out}
+
+
+class TestConjOpZeroSize3(TestConjOp):
+    def init_input_output(self):
+        x = (np.random.random(0) + 1j * np.random.random(0)).astype(self.dtype)
+        out = np.conj(x)
+
+        self.inputs = {'X': OpTest.np_dtype_to_base_dtype(x)}
+        self.outputs = {'Out': out}
+
+
 class TestComplexConjOp(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [paddle.CPUPlace()]
-        if paddle.is_compiled_with_cuda():
-            self._places.append(paddle.CUDAPlace(0))
+        self._places = get_places()
 
     def test_conj_api(self):
         for dtype in self._dtypes:
@@ -92,7 +120,6 @@ class TestComplexConjOp(unittest.TestCase):
                     target = np.conj(input)
                     np.testing.assert_array_equal(result, target)
 
-    @test_with_pir_api
     def test_conj_static_mode(self):
         def init_input_output(dtype):
             input = rand([2, 20, 2, 3]).astype(dtype) + 1j * rand(
@@ -128,7 +155,7 @@ class TestComplexConjOp(unittest.TestCase):
 
 
 class Testfp16ConjOp(unittest.TestCase):
-    @test_with_pir_api
+
     def testfp16(self):
         if paddle.is_compiled_with_cuda():
             input_x = (
@@ -152,7 +179,7 @@ class TestConjFP16OP(TestConjOp):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestConjBF16(OpTest):
     def setUp(self):
@@ -175,7 +202,9 @@ class TestConjBF16(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(
+            place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)

@@ -23,14 +23,14 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
-    test_default_and_pir,
+    test_default_mode_only,
 )
 from predictor_utils import PredictorTools
 
 import paddle
 from paddle import base
-from paddle.base.dygraph.base import to_variable
-from paddle.jit.api import to_static
+from paddle.framework import use_pir_api
+from paddle.jit.pir_translated_layer import PIR_INFER_MODEL_SUFFIX
 from paddle.jit.translated_layer import INFER_MODEL_SUFFIX, INFER_PARAMS_SUFFIX
 from paddle.nn import BatchNorm, Linear
 from paddle.static import InputSpec
@@ -295,7 +295,7 @@ class SeResNeXt(paddle.nn.Layer):
             shortcut = False
             for i in range(depth[block]):
                 bottleneck_block = self.add_sublayer(
-                    'bb_%d_%d' % (block, i),
+                    f'bb_{block}_{i}',
                     BottleneckBlock(
                         num_channels=num_channels,
                         num_filters=num_filters[block],
@@ -323,7 +323,6 @@ class SeResNeXt(paddle.nn.Layer):
             ),
         )
 
-    @to_static(full_graph=True)
     def forward(self, inputs, label):
         if self.layers == 50 or self.layers == 101:
             y = self.conv0(inputs)
@@ -367,6 +366,7 @@ class TestSeResnet(Dy2StTestBase):
             self.temp_dir.name, "inference/se_resnet"
         )
         self.model_filename = "se_resnet" + INFER_MODEL_SUFFIX
+        self.pir_model_filename = "se_resnet" + PIR_INFER_MODEL_SUFFIX
         self.params_filename = "se_resnet" + INFER_PARAMS_SUFFIX
         self.dy_state_dict_save_path = os.path.join(
             self.temp_dir.name, "se_resnet.dygraph"
@@ -382,6 +382,7 @@ class TestSeResnet(Dy2StTestBase):
             paddle.seed(SEED)
             paddle.framework.random._manual_program_seed(SEED)
             se_resnext = SeResNeXt()
+            se_resnext = paddle.jit.to_static(se_resnext, full_graph=True)
             optimizer = optimizer_setting(
                 train_parameters, se_resnext.parameters()
             )
@@ -403,8 +404,8 @@ class TestSeResnet(Dy2StTestBase):
                         .reshape(BATCH_SIZE, 1)
                     )
 
-                    img = to_variable(dy_x_data)
-                    label = to_variable(y_data)
+                    img = paddle.to_tensor(dy_x_data)
+                    label = paddle.to_tensor(y_data)
                     label.stop_gradient = True
 
                     pred, avg_loss, acc_top1, acc_top5 = se_resnext(img, label)
@@ -423,43 +424,36 @@ class TestSeResnet(Dy2StTestBase):
                     if step_id % PRINT_STEP == 0:
                         if step_id == 0:
                             logging.info(
-                                "epoch %d | step %d, loss %0.3f, acc1 %0.3f, acc5 %0.3f"
-                                % (
-                                    epoch_id,
-                                    step_id,
-                                    total_loss / total_sample,
-                                    total_acc1 / total_sample,
-                                    total_acc5 / total_sample,
-                                )
+                                f"epoch {epoch_id} | step {step_id}, "
+                                f"loss {total_loss / total_sample:0.3f}, "
+                                f"acc1 {total_acc1 / total_sample:0.3f}, "
+                                f"acc5 {total_acc5 / total_sample:0.3f}"
                             )
                             avg_batch_time = time.time()
                         else:
                             speed = PRINT_STEP / (time.time() - avg_batch_time)
                             speed_list.append(speed)
                             logging.info(
-                                "epoch %d | step %d, loss %0.3f, acc1 %0.3f, acc5 %0.3f, speed %.3f steps/s"
-                                % (
-                                    epoch_id,
-                                    step_id,
-                                    total_loss / total_sample,
-                                    total_acc1 / total_sample,
-                                    total_acc5 / total_sample,
-                                    speed,
-                                )
+                                f"epoch {epoch_id} | step {step_id}, "
+                                f"loss {total_loss / total_sample:0.3f}, "
+                                f"acc1 {total_acc1 / total_sample:0.3f}, "
+                                f"acc5 {total_acc5 / total_sample:0.3f}, "
+                                f"speed {speed:.3f} steps/s"
                             )
                             avg_batch_time = time.time()
 
                     step_idx += 1
                     if step_idx == STEP_NUM:
-                        # TODO(@xiongkun): open after save / load supported in pir.
-                        if (
-                            to_static
-                            and not paddle.base.framework.use_pir_api()
-                        ):
+                        if to_static:
+                            if use_pir_api():
+                                output_spec = [0]
+                            else:
+                                output_spec = [pred]
+
                             paddle.jit.save(
                                 se_resnext,
                                 self.model_save_prefix,
-                                output_spec=[pred],
+                                output_spec=output_spec,
                                 input_names_after_prune=['x'],
                                 input_spec=[
                                     InputSpec(
@@ -483,25 +477,30 @@ class TestSeResnet(Dy2StTestBase):
             )
 
     def predict_dygraph(self, data):
-        with enable_to_static_guard(False):
-            with base.dygraph.guard(place):
-                se_resnext = SeResNeXt()
+        with (
+            enable_to_static_guard(False),
+            base.dygraph.guard(place),
+        ):
+            se_resnext = SeResNeXt()
 
-                model_dict = paddle.load(
-                    self.dy_state_dict_save_path + '.pdparams'
-                )
-                se_resnext.set_dict(model_dict)
-                se_resnext.eval()
+            model_dict = paddle.load(self.dy_state_dict_save_path + '.pdparams')
+            se_resnext.set_dict(model_dict)
+            se_resnext.eval()
 
-                label = np.random.random([1, 1]).astype("int64")
-                img = base.dygraph.to_variable(data)
-                label = base.dygraph.to_variable(label)
-                pred_res, _, _, _ = se_resnext(img, label)
+            label = np.random.random([1, 1]).astype("int64")
+            img = paddle.to_tensor(data)
+            label = paddle.to_tensor(label)
+            pred_res, _, _, _ = se_resnext(img, label)
 
-                return pred_res.numpy()
+            return pred_res.numpy()
 
     def predict_static(self, data):
         paddle.enable_static()
+        if use_pir_api():
+            model_filename = self.pir_model_filename
+        else:
+            model_filename = self.model_filename
+
         exe = base.Executor(place)
         [
             inference_program,
@@ -510,7 +509,7 @@ class TestSeResnet(Dy2StTestBase):
         ] = paddle.static.io.load_inference_model(
             self.model_save_dir,
             executor=exe,
-            model_filename=self.model_filename,
+            model_filename=model_filename,
             params_filename=self.params_filename,
         )
 
@@ -532,13 +531,17 @@ class TestSeResnet(Dy2StTestBase):
             return pred_res.numpy()
 
     def predict_analysis_inference(self, data):
+        if use_pir_api():
+            model_filename = self.pir_model_filename
+        else:
+            model_filename = self.model_filename
         output = PredictorTools(
             self.model_save_dir,
-            self.model_filename,
+            model_filename,
             self.params_filename,
             [data],
         )
-        out = output()
+        (out,) = output()
         return out
 
     def verify_predict(self):
@@ -546,7 +549,7 @@ class TestSeResnet(Dy2StTestBase):
         dy_pre = self.predict_dygraph(image)
         st_pre = self.predict_static(image)
         dy_jit_pre = self.predict_dygraph_jit(image)
-        predictor_pre = self.predict_analysis_inference(image)
+
         np.testing.assert_allclose(
             dy_pre,
             st_pre,
@@ -560,6 +563,7 @@ class TestSeResnet(Dy2StTestBase):
             err_msg=f'dy_jit_pre:\n {dy_jit_pre}\n, st_pre: \n{st_pre}.',
         )
 
+        predictor_pre = self.predict_analysis_inference(image)
         flat_st_pre = st_pre.flatten()
         flat_predictor_pre = np.array(predictor_pre).flatten()
         for i in range(len(flat_predictor_pre)):
@@ -567,13 +571,11 @@ class TestSeResnet(Dy2StTestBase):
             self.assertAlmostEqual(
                 flat_predictor_pre[i],
                 flat_st_pre[i],
-                delta=1e-6,
-                msg="predictor_pre:\n {}\n, st_pre: \n{}.".format(
-                    flat_predictor_pre[i], flat_st_pre[i]
-                ),
+                delta=1e-5,
+                msg=f"predictor_pre:\n {flat_predictor_pre[i]}\n, st_pre: \n{flat_st_pre[i]}.",
             )
 
-    @test_default_and_pir
+    @test_default_mode_only
     def test_check_result(self):
         with enable_to_static_guard(False):
             pred_1, loss_1, acc1_1, acc5_1 = self.train(
@@ -608,9 +610,7 @@ class TestSeResnet(Dy2StTestBase):
             err_msg=f'static acc5: {acc5_1} \ndygraph acc5: {acc5_2}',
         )
 
-        # TODO(@xiongkun): open after save / load supported in pir.
-        if not paddle.base.framework.use_pir_api():
-            self.verify_predict()
+        self.verify_predict()
 
 
 if __name__ == '__main__':

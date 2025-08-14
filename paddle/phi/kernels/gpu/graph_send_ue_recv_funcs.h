@@ -17,9 +17,9 @@
 #include <thrust/device_vector.h>
 #include <thrust/fill.h>
 
+#include "paddle/common/hostdevice.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_primitives.h"
-#include "paddle/phi/core/hostdevice.h"
 #include "paddle/phi/kernels/impl/graph_message_passing_impl.h"
 
 namespace phi {
@@ -57,7 +57,7 @@ inline void CopyBCastOff(const BroadCastInfo& bcast_info,
 inline int FindNumThreads(int dim, int max_num_threads) {
   PADDLE_ENFORCE_GE(dim,
                     0,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "Required dim >= 0, but received dim = %d", dim));
   int res = max_num_threads;
   if (dim == 0) res = 1;
@@ -82,7 +82,7 @@ inline int FindNumBlocks(char axis, int nblocks, int max_num_blocks = -1) {
       break;
     default:
       PADDLE_THROW(
-          phi::errors::InvalidArgument("%c axis is not recognized", axis));
+          common::errors::InvalidArgument("%c axis is not recognized", axis));
   }
   if (max_num_blocks == -1) {
     max_num_blocks = default_max_num_blocks;
@@ -90,9 +90,9 @@ inline int FindNumBlocks(char axis, int nblocks, int max_num_blocks = -1) {
   PADDLE_ENFORCE_GT(
       max_num_blocks,
       0,
-      phi::errors::InvalidArgument("max_num_blocks should be larger than 0, "
-                                   "but received %d",
-                                   max_num_blocks));
+      common::errors::InvalidArgument("max_num_blocks should be larger than 0, "
+                                      "but received %d",
+                                      max_num_blocks));
   if (nblocks < max_num_blocks) {
     return nblocks;
   }
@@ -138,14 +138,14 @@ __global__ void GraphSendUERecvCUDAKernel(const T* x_data,
                                           bool use_bcast,
                                           ComputeFunctor cfunctor,
                                           ReduceFunctor rfunctor) {
-  IndexT ty = blockIdx.y * blockDim.y + threadIdx.y;
-  const IndexT stride_y = blockDim.y * gridDim.y;
+  IndexT ty = static_cast<IndexT>(blockIdx.y) * blockDim.y + threadIdx.y;
+  const IndexT stride_y = static_cast<IndexT>(blockDim.y) * gridDim.y;
 
   while (ty < index_size) {
     IndexT src = src_indices[ty];
     IndexT dst = dst_indices[ty];
-    int64_t tx = blockIdx.x * blockDim.x + threadIdx.x;
-    int64_t stride_x = blockDim.x * gridDim.x;
+    int64_t tx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t stride_x = blockDim.x * static_cast<int64_t>(gridDim.x);
 
     const T* x_off = x_data + src * x_len;
     const T* e_off = e_data + ty * e_len;

@@ -11,7 +11,7 @@ function(windows_symbolic TARGET)
     if(NOT EXISTS ${final_path}/${src}.cc OR NOT EXISTS ${final_path}/${src}.cu)
       message(
         FATAL
-        " ${src}.cc and ${src}.cu must exsits, and ${src}.cu must be symbolic file."
+        " ${src}.cc and ${src}.cu must exists, and ${src}.cu must be symbolic file."
       )
     endif()
 
@@ -81,12 +81,6 @@ add_subdirectory(details)
 add_subdirectory(fleet)
 add_subdirectory(io)
 add_subdirectory(new_executor)
-if(WITH_CINN)
-  add_subdirectory(paddle2cinn)
-endif()
-#ddim lib
-proto_library(framework_proto SRCS framework.proto)
-proto_library(pass_desc_proto SRCS pass_desc.proto DEPS framework_proto)
 
 proto_library(op_def_proto SRCS op_def.proto DEPS framework_proto)
 cc_library(
@@ -107,71 +101,35 @@ foreach(OP_DEF_FILE ${OP_DEF_FILES})
 endforeach()
 file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/op_def.pbtxt "{\"\",\"\"}};\n}")
 
-proto_library(heter_service_proto SRCS heter_service.proto)
-proto_library(data_feed_proto SRCS data_feed.proto)
-proto_library(trainer_desc_proto SRCS trainer_desc.proto DEPS framework_proto
-              data_feed_proto)
-
-cc_library(
-  string_array
-  SRCS string_array.cc
-  DEPS utf8proc phi common)
-
 cc_library(
   data_type
   SRCS data_type.cc
-  DEPS framework_proto)
+  DEPS phi)
 
 cc_library(
   tensor
   SRCS tensor_util.cc
-  DEPS place fluid_memory data_type device_context phi common)
+  DEPS data_type device_context phi common)
 
 cc_library(
   lod_tensor
   SRCS lod_tensor.cc
-  DEPS phi common place tensor framework_proto version)
+  DEPS phi common tensor version)
 
 cc_library(
   garbage_collector
   SRCS garbage_collector.cc
-  DEPS device_context allocator phi common glog)
-
-cc_library(
-  reader
-  SRCS reader.cc
-  DEPS lod_tensor phi common)
+  DEPS device_context phi common glog)
 
 cc_library(
   var_type_traits
   SRCS var_type_traits.cc
-  DEPS framework_proto scope phi common)
-if(WITH_GPU)
-  target_link_libraries(var_type_traits dynload_cuda)
-endif()
-if(WITH_XPU)
-  target_link_libraries(var_type_traits dynload_xpti)
-endif()
+  DEPS scope phi common)
 
-# every source file that includes "dnnl.h" must depends on mkldnn
-# or, the first one should depends on mkldnn
-if(WITH_MKLDNN)
-  add_dependencies(var_type_traits mkldnn)
-endif()
-
-set(BRPC_DEPS "")
-if(WITH_PSCORE)
-  set(BRPC_DEPS ${EXTERNAL_BRPC_DEPS})
-endif()
-if(WITH_PSLIB)
-  if(WITH_PSLIB_BRPC)
-    set(BRPC_DEPS pslib_brpc)
-  elseif(NOT WITH_HETERPS)
-    set(BRPC_DEPS ${EXTERNAL_BRPC_DEPS})
-  endif()
-  if(WITH_ARM_BRPC)
-    set(BRPC_DEPS arm_brpc)
-  endif()
+# every source file that includes "dnnl.h" must depends on onednn
+# or, the first one should depends on onednn
+if(WITH_ONEDNN)
+  add_dependencies(var_type_traits onednn)
 endif()
 
 cc_library(
@@ -181,7 +139,7 @@ cc_library(
 cc_library(
   device_worker
   SRCS device_worker.cc
-  DEPS trainer_desc_proto lod_tensor scope ${BRPC_DEPS})
+  DEPS lod_tensor scope)
 cc_library(
   scope_pool
   SRCS scope_pool.cc
@@ -234,7 +192,6 @@ cc_library(
   data_transform
   SRCS data_transform.cc
   DEPS tensor
-       framework_proto
        selected_rows_utils
        data_device_transform
        data_type_transform
@@ -245,21 +202,21 @@ cc_library(
 cc_library(
   attribute
   SRCS attribute.cc
-  DEPS framework_proto enforce common)
+  DEPS phi common)
 cc_library(
   op_version_proto
   SRCS op_version_proto.cc
-  DEPS framework_proto)
+  DEPS phi)
 
 cc_library(
   op_version_registry
   SRCS op_version_registry.cc
-  DEPS op_version_proto framework_proto)
+  DEPS op_version_proto phi)
 
 cc_library(
   op_proto_maker
   SRCS op_proto_maker.cc
-  DEPS framework_proto attribute ops_extra_info glog auto_parallel_proto)
+  DEPS phi attribute ops_extra_info glog auto_parallel_proto)
 cc_library(
   no_need_buffer_vars_inference
   SRCS no_need_buffer_vars_inference.cc
@@ -267,114 +224,65 @@ cc_library(
 cc_library(
   op_info
   SRCS op_info.cc
-  DEPS attribute framework_proto no_need_buffer_vars_inference)
+  DEPS attribute phi no_need_buffer_vars_inference)
 cc_library(
   shape_inference
   SRCS shape_inference.cc
   DEPS phi common attribute selected_rows_utils)
 
-# every source file that includes "dnnl.h" must depends on mkldnn
-# or, the first one should depends on mkldnn
-if(WITH_MKLDNN)
-  add_dependencies(shape_inference mkldnn)
+# every source file that includes "dnnl.h" must depends on onednn
+# or, the first one should depends on onednn
+if(WITH_ONEDNN)
+  add_dependencies(shape_inference onednn)
 endif()
-
-cc_library(
-  transfer_scope_cache
-  SRCS transfer_scope_cache.cc
-  DEPS scope framework_proto device_context)
-
-cc_library(
-  unused_var_check
-  SRCS unused_var_check.cc
-  DEPS glog no_need_buffer_vars_inference)
 
 cc_library(
   op_kernel_type
   SRCS op_kernel_type.cc
-  DEPS device_context place)
+  DEPS device_context phi common)
 
 if(WITH_XPU)
   cc_library(
     phi_utils
     SRCS phi_utils.cc
-    DEPS lod_tensor
-         selected_rows_utils
-         place
-         phi
-         common
-         var_type_traits
-         op_info
-         xpu_op_list)
+    DEPS lod_tensor selected_rows_utils phi common var_type_traits op_info)
 else()
   cc_library(
     phi_utils
     SRCS phi_utils.cc
-    DEPS lod_tensor
-         selected_rows_utils
-         place
-         phi
-         common
-         var_type_traits
-         op_info)
+    DEPS lod_tensor selected_rows_utils phi common var_type_traits op_info)
 endif()
 
-if(WITH_XPU)
-  cc_library(
-    operator
-    SRCS operator.cc
-    DEPS xpu_op_list
-         op_info
-         proto_desc
-         device_context
-         tensor
-         scope
-         glog
-         trainer_desc_proto
-         data_feed_proto
-         shape_inference
-         data_transform
-         lod_tensor
-         profiler
-         transfer_scope_cache
-         op_kernel_type
-         op_call_stack
-         unused_var_check
-         nan_inf_utils
-         phi_utils
-         infershape_utils
-         phi
-         common
-         op_compat_infos
-         type_info)
-else()
-  cc_library(
-    operator
-    SRCS operator.cc
-    DEPS op_info
-         proto_desc
-         device_context
-         tensor
-         scope
-         glog
-         trainer_desc_proto
-         data_feed_proto
-         shape_inference
-         data_transform
-         lod_tensor
-         profiler
-         transfer_scope_cache
-         op_kernel_type
-         op_call_stack
-         unused_var_check
-         nan_inf_utils
-         phi_utils
-         infershape_utils
-         phi
-         common
-         op_compat_infos
-         type_info)
+set(OPERETER_DEPS
+    op_info
+    proto_desc
+    tensor
+    scope
+    glog
+    shape_inference
+    data_transform
+    lod_tensor
+    op_kernel_type
+    op_call_stack
+    detail_op_handle
+    phi_utils
+    phi
+    common
+    op_compat_infos
+    type_info
+    supplement_tracing)
+
+if(WITH_NCCL OR WITH_RCCL)
+  set(OPERETER_DEPS ${OPERETER_DEPS} process_group_nccl)
+elseif(WITH_CUSTOM_DEVICE)
+  set(OPERETER_DEPS ${OPERETER_DEPS} process_group_custom)
 endif()
+
+cc_library(
+  operator
+  SRCS operator.cc transfer_scope_cache.cc unused_var_check.cc
+       infershape_utils.cc
+  DEPS ${OPERETER_DEPS})
 
 cc_library(version SRCS version.cc)
 
@@ -417,7 +325,7 @@ cc_library(
 cc_library(
   op_call_stack
   SRCS op_call_stack.cc
-  DEPS op_proto_maker enforce common)
+  DEPS op_proto_maker phi common)
 
 cc_library(
   program_utils
@@ -461,18 +369,6 @@ if(WITH_PYTHON)
               ${PADDLE_BINARY_DIR}/python/paddle/distributed/fleet/proto
       COMMENT "Copy generated python proto into directory paddle/fluid/proto."
       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-    if(NOT WITH_ROCM)
-      add_custom_target(
-        fleet_executor_proto_init ALL
-        DEPENDS fleet_proto_init fleet_executor_desc_py_proto
-        COMMAND
-          cp
-          ${PADDLE_BINARY_DIR}/paddle/fluid/distributed/fleet_executor/fleet_executor_*.py
-          ${PADDLE_BINARY_DIR}/python/paddle/distributed/fleet/proto
-        COMMENT
-          "Copy generated python proto into directory paddle/distributed/fleet/proto."
-      )
-    endif()
   else()
     string(REPLACE "/" "\\" proto_dstpath
                    "${PADDLE_BINARY_DIR}/python/paddle/base/proto/")
@@ -493,28 +389,16 @@ if(WITH_PYTHON)
   endif()
 endif()
 
-if(WITH_PSCORE)
-  add_custom_target(
-    index_dataset_proto_init ALL
-    DEPENDS fleet_proto_init index_dataset_py_proto
-    COMMAND
-      cp
-      ${PADDLE_BINARY_DIR}/paddle/fluid/distributed/index_dataset/index_dataset_*.py
-      ${PADDLE_BINARY_DIR}/python/paddle/distributed/fleet/proto
-    COMMENT
-      "Copy generated python proto into directory paddle/distributed/fleet/proto."
-  )
-endif()
-
-cc_library(
-  lod_rank_table
-  SRCS lod_rank_table.cc
-  DEPS lod_tensor)
-
 cc_library(
   feed_fetch_method
   SRCS feed_fetch_method.cc
   DEPS lod_tensor scope glog)
+
+cc_library(
+  feed_hook
+  SRCS feed_hook.cc
+  DEPS lod_tensor scope glog pir)
+
 cc_library(
   variable_helper
   SRCS variable_helper.cc
@@ -522,22 +406,21 @@ cc_library(
 
 set(NAIVE_EXECUTOR_DEPS
     op_registry
-    denormal
-    device_context
     scope
-    framework_proto
+    phi
     glog
-    lod_rank_table
     feed_fetch_method
+    feed_hook
     graph_to_program_pass
+    standalone_executor
     variable_helper)
 
 if(TENSORRT_FOUND)
   set(NAIVE_EXECUTOR_DEPS ${NAIVE_EXECUTOR_DEPS} tensorrt_engine_op)
 endif()
 
-if(WITH_NVTX AND NOT WIN32)
-  set(NAIVE_EXECUTOR_DEPS ${NAIVE_EXECUTOR_DEPS} cuda_profiler)
+if(WITH_OPENVINO)
+  set(NAIVE_EXECUTOR_DEPS ${NAIVE_EXECUTOR_DEPS} openvino_engine_op)
 endif()
 
 cc_library(
@@ -549,7 +432,6 @@ cc_library(
   executor_gc_helper
   SRCS executor_gc_helper.cc
   DEPS while_op_helper
-       recurrent_op_helper
        conditional_block_op_helper
        pylayer_op_helper
        scope
@@ -558,220 +440,6 @@ cc_library(
        garbage_collector
        op_registry)
 if(WITH_DISTRIBUTE)
-  if(WITH_PSLIB)
-    cc_library(
-      executor
-      SRCS executor.cc
-           multi_trainer.cc
-           pipeline_trainer.cc
-           dataset_factory.cc
-           dist_multi_trainer.cc
-           trainer_factory.cc
-           trainer.cc
-           data_feed_factory.cc
-           heterxpu_trainer.cc
-           data_feed.cc
-           device_worker.cc
-           hogwild_worker.cc
-           hetercpu_worker.cc
-           ps_gpu_worker.cc
-           ps_gpu_trainer.cc
-           downpour_worker.cc
-           downpour_worker_opt.cc
-           data_feed.cu
-           pull_dense_worker.cc
-           section_worker.cc
-           device_worker_factory.cc
-           data_set.cc
-      DEPS fleet_wrapper
-           recurrent_op_helper
-           op_registry
-           device_context
-           scope
-           framework_proto
-           trainer_desc_proto
-           glog
-           framework_io
-           heter_wrapper
-           ps_gpu_wrapper
-           box_wrapper
-           metrics
-           lodtensor_printer
-           lod_rank_table
-           feed_fetch_method
-           collective_helper
-           ${GLOB_DISTRIBUTE_DEPS}
-           graph_to_program_pass
-           variable_helper
-           data_feed_proto
-           timer
-           monitor
-           heter_service_proto
-           ${BRPC_DEP})
-    set(DISTRIBUTE_COMPILE_FLAGS "")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0)
-      set(DISTRIBUTE_COMPILE_FLAGS "${DISTRIBUTE_COMPILE_FLAGS} -faligned-new")
-    endif()
-    set_source_files_properties(
-      executor.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      device_worker.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      hetercpu_worker.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      heterxpu_trainer.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-  elseif(WITH_PSCORE)
-    # cc_library(executor SRCS executor.cc multi_trainer.cc pipeline_trainer.cc dataset_factory.cc
-    #         dist_multi_trainer.cc trainer_factory.cc trainer.cc data_feed_factory.cc
-    #         heterxpu_trainer.cc heter_pipeline_trainer.cc
-    #         data_feed.cc device_worker.cc hogwild_worker.cc hetercpu_worker.cc
-    #         downpour_worker.cc downpour_lite_worker.cc downpour_worker_opt.cc data_feed.cu
-    #         pull_dense_worker.cc section_worker.cc heter_section_worker.cc device_worker_factory.cc data_set.cc DEPS op_registry
-    #         device_context scope framework_proto data_feed_proto heter_service_proto trainer_desc_proto glog
-    #         index_sampler index_wrapper sampler index_dataset_proto
-    #         lod_rank_table framework_io fleet_wrapper heter_wrapper box_wrapper metrics lodtensor_printer feed_fetch_method
-    #         graph_to_program_pass variable_helper timer monitor
-    #         heter_service_proto fleet heter_server brpc fleet_executor
-    #         graph_gpu_wrapper)
-
-    cc_library(
-      executor
-      SRCS executor.cc
-           multi_trainer.cc
-           pipeline_trainer.cc
-           dataset_factory.cc
-           dist_multi_trainer.cc
-           trainer_factory.cc
-           trainer.cc
-           data_feed_factory.cc
-           heterxpu_trainer.cc
-           heter_pipeline_trainer.cc
-           data_feed.cc
-           device_worker.cc
-           hogwild_worker.cc
-           hetercpu_worker.cc
-           downpour_worker.cc
-           downpour_lite_worker.cc
-           downpour_worker_opt.cc
-           data_feed.cu
-           pull_dense_worker.cc
-           section_worker.cc
-           heter_section_worker.cc
-           device_worker_factory.cc
-           data_set.cc
-      DEPS recurrent_op_helper
-           op_registry
-           device_context
-           scope
-           framework_proto
-           data_feed_proto
-           heter_service_proto
-           trainer_desc_proto
-           glog
-           index_sampler
-           index_wrapper
-           sampler
-           index_dataset_proto
-           lod_rank_table
-           framework_io
-           fleet_wrapper
-           heter_wrapper
-           box_wrapper
-           metrics
-           lodtensor_printer
-           feed_fetch_method
-           graph_to_program_pass
-           variable_helper
-           timer
-           monitor
-           heter_service_proto
-           fleet
-           heter_server
-           ${${EXTERNAL_BRPC_DEPS}}
-           phi
-           common)
-    set(DISTRIBUTE_COMPILE_FLAGS "")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0)
-      set(DISTRIBUTE_COMPILE_FLAGS "${DISTRIBUTE_COMPILE_FLAGS} -faligned-new")
-    endif()
-    set_source_files_properties(
-      executor.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      device_worker.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      multi_trainer.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      hogwild_worker.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      downpour_lite_worker.cc PROPERTIES COMPILE_FLAGS
-                                         ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      heter_section_worker.cc PROPERTIES COMPILE_FLAGS
-                                         ${DISTRIBUTE_COMPILE_FLAGS})
-    set_source_files_properties(
-      heter_pipeline_trainer.cc PROPERTIES COMPILE_FLAGS
-                                           ${DISTRIBUTE_COMPILE_FLAGS})
-  else()
-    cc_library(
-      executor
-      SRCS executor.cc
-           multi_trainer.cc
-           pipeline_trainer.cc
-           dataset_factory.cc
-           dist_multi_trainer.cc
-           trainer_factory.cc
-           trainer.cc
-           data_feed_factory.cc
-           heterxpu_trainer.cc
-           data_feed.cc
-           device_worker.cc
-           hogwild_worker.cc
-           hetercpu_worker.cc
-           ps_gpu_worker.cc
-           ps_gpu_trainer.cc
-           downpour_worker.cc
-           downpour_worker_opt.cc
-           data_feed.cu
-           pull_dense_worker.cc
-           section_worker.cc
-           device_worker_factory.cc
-           data_set.cc
-      DEPS recurrent_op_helper
-           op_registry
-           device_context
-           scope
-           framework_proto
-           data_feed_proto
-           heter_service_proto
-           trainer_desc_proto
-           glog
-           lod_rank_table
-           framework_io
-           fleet_wrapper
-           heter_wrapper
-           ps_gpu_wrapper
-           box_wrapper
-           metrics
-           lodtensor_printer
-           feed_fetch_method
-           graph_to_program_pass
-           variable_helper
-           timer
-           monitor)
-  endif()
-elseif(WITH_PSLIB)
-  set(DISTRIBUTE_COMPILE_FLAGS "")
-  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0)
-    set(DISTRIBUTE_COMPILE_FLAGS "${DISTRIBUTE_COMPILE_FLAGS} -faligned-new")
-  endif()
-  set_source_files_properties(
-    executor.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-  set_source_files_properties(
-    device_worker.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-  set_source_files_properties(
-    hetercpu_worker.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
-  set_source_files_properties(
-    heterxpu_trainer.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
   cc_library(
     executor
     SRCS executor.cc
@@ -796,28 +464,20 @@ elseif(WITH_PSLIB)
          section_worker.cc
          device_worker_factory.cc
          data_set.cc
-    DEPS recurrent_op_helper
-         op_registry
-         device_context
+    DEPS op_registry
          scope
-         framework_proto
-         data_feed_proto
-         heter_service_proto
-         trainer_desc_proto
          glog
-         lod_rank_table
          framework_io
          fleet_wrapper
          heter_wrapper
          ps_gpu_wrapper
          box_wrapper
-         lodtensor_printer
+         metrics
+         densetensor_printer
          feed_fetch_method
+         feed_hook
          graph_to_program_pass
-         variable_helper
-         timer
-         monitor
-         ${BRPC_DEP})
+         variable_helper)
 else()
   cc_library(
     executor
@@ -843,59 +503,48 @@ else()
          section_worker.cc
          device_worker_factory.cc
          data_set.cc
-    DEPS recurrent_op_helper
-         op_registry
-         device_context
+    DEPS op_registry
          scope
-         framework_proto
-         data_feed_proto
-         heter_service_proto
-         trainer_desc_proto
          glog
-         lod_rank_table
          framework_io
          fleet_wrapper
          heter_wrapper
          ps_gpu_wrapper
          box_wrapper
-         lodtensor_printer
+         densetensor_printer
          feed_fetch_method
+         feed_hook
          graph_to_program_pass
-         variable_helper
-         timer
-         monitor)
+         variable_helper)
 endif()
 
 target_link_libraries(
-  executor while_op_helper executor_gc_helper recurrent_op_helper
-  conditional_block_op_helper pylayer_op_helper)
+  executor
+  while_op_helper
+  executor_gc_helper
+  static_prim_api
+  static_utils
+  get_expected_kernel_func
+  conditional_block_op_helper
+  pylayer_op_helper)
 
 cc_library(
-  parallel_executor
-  SRCS parallel_executor.cc
-  DEPS threaded_ssa_graph_executor
-       scope_buffered_ssa_graph_executor
-       parallel_ssa_graph_executor
-       async_ssa_graph_executor
-       graph
-       build_strategy
-       bind_threaded_ssa_graph_executor
-       collective_helper
-       fast_threaded_ssa_graph_executor
-       variable_helper)
+  compiled_program
+  SRCS compiled_program.cc
+  DEPS graph build_strategy eager_deletion_pass)
 
 cc_library(
   executor_cache
   SRCS executor_cache.cc
-  DEPS parallel_executor pir_transforms pir)
+  DEPS pir_transforms pir)
 cc_library(
   prune
   SRCS prune.cc
-  DEPS framework_proto auto_parallel_proto proto_desc)
+  DEPS phi auto_parallel_proto proto_desc)
 cc_library(
   selected_rows_utils
   SRCS selected_rows_utils.cc
-  DEPS phi common device_context)
+  DEPS phi)
 
 cc_library(
   dlpack_tensor
@@ -906,20 +555,6 @@ cc_library(
   op_compatible_info
   SRCS op_compatible_info.cc
   DEPS string_helper proto_desc)
-
-cc_library(
-  infershape_utils
-  SRCS infershape_utils.cc
-  DEPS lod_tensor
-       selected_rows_utils
-       attribute
-       place
-       var_type_traits
-       phi
-       common
-       phi_utils
-       op_info
-       shape_inference)
 
 # Get the current working branch
 execute_process(
@@ -945,30 +580,32 @@ cc_library(
   SRCS custom_operator.cc
   DEPS tensor
        attribute
-       framework_proto
        op_registry
        operator
-       dynamic_loader
        string_helper
        phi
        common
        imperative_flag
-       layer)
+       layer
+       op_dialect_vjp)
 
-cc_library(type_info SRCS type_info.cc)
+cc_library(
+  type_info
+  SRCS type_info.cc type_defs.cc
+  DEPS common)
 target_link_libraries(type_info pir op_dialect)
 add_dependencies(type_info framework_proto auto_parallel_proto xxhash)
-if(WITH_MKLDNN)
-  add_dependencies(type_info mkldnn)
+if(WITH_ONEDNN)
+  add_dependencies(type_info onednn)
 endif()
 
 set(FLUID_FRAMEWORK_MODULES
     proto_desc
     lod_tensor
     executor
-    data_feed_proto
     layer
-    dynamic_loader
+    phi
+    common
     custom_operator)
 
 cc_library(paddle_framework DEPS ${FLUID_FRAMEWORK_MODULES})

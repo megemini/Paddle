@@ -14,11 +14,51 @@
 
 #pragma once
 #include <optional>
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/ir/ir.h"
+#include "paddle/cinn/ir/ir_printer.h"
+#include "paddle/cinn/optim/ir_simplify.h"
 
 namespace cinn {
 namespace common {
+
+/**
+ * Interval of a _Var_.
+ */
+struct CasInterval {
+  template <typename T>
+  CasInterval(T l, T r) : l(l), r(r) {
+    PADDLE_ENFORCE_LE(l,
+                      r,
+                      ::common::errors::InvalidArgument(
+                          "left should not be larger than right"));
+  }
+
+  /**
+   * @brief When iterator's upper_bound is an ir::Min of a constant value and a
+   * inconstant value, choose the constant value. When iterator's lower_bound is
+   * an ir::Max of a constant value and a inconstant value, choose the constant
+   * value. E.g: expr_l = max(x, 1) and expr_r = min(y,5): max(x, 1) <=
+   * iterator_i <= min(y,5)
+   *
+   * the bounds will be simplified to e_l = 1 and e_r = 5:
+   * 1 <= iterator_i <= 5
+   */
+  CasInterval(ir::Expr expr_l, ir::Expr expr_r);
+
+  ir::Expr ReplaceMinToConstant(ir::Expr expr);
+  ir::Expr ReplaceMaxToConstant(ir::Expr expr);
+
+  int l, r;
+  // Note: not verify l <= r and (e_l, e_r) has higher priority than (l, r)
+  ir::Expr e_l, e_r;
+
+  friend std::ostream& operator<<(std::ostream& os, const CasInterval& i);
+};
+
+using cas_intervals_t = paddle::flat_hash_map<std::string, CasInterval>;
+
+cas_intervals_t CollectVarIntervalsOfExprs(const std::vector<ir::Expr>& exprs,
+                                           bool is_lower_bound_zero = true);
 
 // A naive implementation of Symbolic Expression Analyzer
 class SymbolicExprAnalyzer {
@@ -41,6 +81,8 @@ class SymbolicExprAnalyzer {
   std::optional<bool> ProveLE(const ir::Expr& lhs, const ir::Expr& rhs) const;
   std::optional<bool> ProveGT(const ir::Expr& lhs, const ir::Expr& rhs) const;
   std::optional<bool> ProveLT(const ir::Expr& lhs, const ir::Expr& rhs) const;
+  std::optional<bool> ProveDivisible(const ir::Expr& lhs,
+                                     const ir::Expr& rhs) const;
 
   ir::Expr LowerBound(const ir::Expr& expr) const;
   ir::Expr UpperBound(const ir::Expr& expr) const;
@@ -58,9 +100,10 @@ struct SymbolicExprLimit {
 // The set consisting of all integers in the interval from min to max
 class SingleIntervalIntSet {
  public:
-  explicit SingleIntervalIntSet(const ir::Expr& min,
-                                const ir::Expr& max,
-                                cas_intervals_t var_intervals = {});
+  explicit SingleIntervalIntSet(
+      const ir::Expr& min = SymbolicExprLimit::positive_inf,
+      const ir::Expr& max = SymbolicExprLimit::negative_inf,
+      cas_intervals_t var_intervals = {});
   SingleIntervalIntSet(const SingleIntervalIntSet& set) = default;
   SingleIntervalIntSet(SingleIntervalIntSet&& set) = default;
   SingleIntervalIntSet& operator=(const SingleIntervalIntSet& set) = default;
@@ -91,6 +134,19 @@ class SingleIntervalIntSet {
   ir::Expr max_ = SymbolicExprLimit::negative_inf;
   cas_intervals_t var_intervals_;
 };
+
+std::optional<bool> ProveEQ(const SingleIntervalIntSet& lhs,
+                            const SingleIntervalIntSet& rhs);
+std::optional<SingleIntervalIntSet> ProvedUnion(const SingleIntervalIntSet& a,
+                                                const SingleIntervalIntSet& b);
+std::optional<SingleIntervalIntSet> ProvedIntersect(
+    const SingleIntervalIntSet& a, const SingleIntervalIntSet& b);
+cas_intervals_t MergeVarIntervals(const SingleIntervalIntSet& a,
+                                  const SingleIntervalIntSet& b);
+
+ir::Expr EnhancedSimplifyModExpr(
+    ir::Expr e,
+    const paddle::flat_hash_map<std::string, CasInterval>& var_intervals);
 
 }  // namespace common
 }  // namespace cinn

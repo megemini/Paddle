@@ -16,14 +16,20 @@ import unittest
 
 import numpy as np
 from op import Operator
-from op_test import OpTest
+from op_test import OpTest, get_places
 
+import paddle
 from paddle.base import core
+
+
+def api_wrapper(x):
+    return paddle._C_ops.share_data(x)
 
 
 class TestShareDataOp(OpTest):
     def setUp(self):
         self.op_type = "share_data"
+        self.python_api = api_wrapper
         input = np.random.rand(2, 3, 5).astype("float32")
         self.inputs = {'X': input}
         self.outputs = {'Out': input}
@@ -33,12 +39,6 @@ class TestShareDataOp(OpTest):
 
 
 class TestShareDataOpOnDifferentPlaces(unittest.TestCase):
-    def get_places(self):
-        places = [core.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(core.CUDAPlace(0))
-        return places
-
     def check_with_tensor(self, place):
         scope = core.Scope()
         np_array = np.random.rand(2, 3, 5).astype("float32")
@@ -80,7 +80,7 @@ class TestShareDataOpOnDifferentPlaces(unittest.TestCase):
         self.assertEqual(x_rows, out_rows)
 
     def test_check_output(self):
-        for place in self.get_places():
+        for place in get_places():
             self.check_with_selected_rows(place)
             self.check_with_tensor(place)
 

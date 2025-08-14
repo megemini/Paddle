@@ -17,12 +17,11 @@ import unittest
 import gradient_checker
 import numpy as np
 from decorator_helper import prog_scope
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_places
 
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 # Situation 1: repeat_times is a list (without tensor)
@@ -48,7 +47,9 @@ class TestTileOpRank1(OpTest):
         self.repeat_times = [2]
 
     def test_check_output(self):
-        self.check_output(check_cinn=self.check_cinn, check_pir=True)
+        self.check_output(
+            check_cinn=self.check_cinn, check_pir=True, check_prim_pir=True
+        )
 
     def test_check_grad(self):
         self.check_grad(
@@ -88,6 +89,40 @@ class TestTileOpRank_ZeroDim3(TestTileOpRank1):
     def if_enable_cinn(self):
         self.check_cinn = False
         self.enable_cinn = False
+
+
+class TestTileOpRank_ZeroSize(TestTileOpRank1):
+    def setUp(self):
+        self.op_type = "tile"
+        self.python_api = paddle.tile
+        self.public_python_api = paddle.tile
+        self.init_data()
+
+        self.inputs = {'X': np.random.random(self.ori_shape).astype("float64")}
+        self.attrs = {'repeat_times': self.repeat_times}
+        output = np.tile(self.inputs['X'], self.repeat_times)
+        self.outputs = {'Out': output}
+
+    def init_data(self):
+        self.ori_shape = [2, 0]
+        self.repeat_times = [1]
+
+    def test_check_output(self):
+        self.check_output(check_pir=True)
+
+    def test_check_grad(self):
+        self.check_grad(
+            ['X'],
+            'Out',
+            user_defined_grads=[np.zeros(self.ori_shape)],
+            check_pir=True,
+        )
+
+
+class TestTileOpRank_ZeroSize2(TestTileOpRank_ZeroSize):
+    def init_data(self):
+        self.ori_shape = [2, 100]
+        self.repeat_times = [0]
 
 
 # with dimension expanding
@@ -144,6 +179,36 @@ class TestTileOpRank4(TestTileOpRank1):
     def if_enable_cinn(self):
         self.check_cinn = True
 
+    def test_check_output(self):
+        # todo: enable check_prim_pir
+        self.check_output(check_cinn=self.check_cinn, check_pir=True)
+
+    def test_check_grad(self):
+        self.check_grad(
+            ['X'],
+            'Out',
+            check_prim=True,
+            check_pir=True,
+        )
+
+
+class TestTileOpRank5(TestTileOpRank1):
+    def init_data(self):
+        self.ori_shape = (4, 2, 2, 2, 6)
+        self.repeat_times = (2, 3, 4, 5, 7)
+
+    def if_enable_cinn(self):
+        self.check_cinn = True
+
+
+class TestTileOpRank6(TestTileOpRank1):
+    def init_data(self):
+        self.ori_shape = (2, 2, 2, 2, 2, 6)
+        self.repeat_times = (2, 2, 3, 4, 5, 7)
+
+    def if_enable_cinn(self):
+        self.check_cinn = True
+
 
 # Situation 2: repeat_times is a list (with tensor)
 # CINN not support repeat_times is a tensor now
@@ -172,7 +237,7 @@ class TestTileOpRank1_tensor_attr(OpTest):
         self.infer_repeat_times = [-1]
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(['X'], 'Out')
@@ -213,7 +278,7 @@ class TestTileOpRank1_tensor(OpTest):
         self.repeat_times = [2]
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(['X'], 'Out')
@@ -269,7 +334,9 @@ class TestTileFP16OP(OpTest):
         self.repeat_times = [2, 1, 4]
 
     def test_check_output(self):
-        self.check_output(check_cinn=self.check_cinn, check_pir=True)
+        self.check_output(
+            check_cinn=self.check_cinn, check_pir=True, check_prim_pir=True
+        )
 
     def test_check_grad(self):
         self.check_grad(
@@ -284,7 +351,7 @@ class TestTileFP16OP(OpTest):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestTileBF16OP(OpTest):
     def setUp(self):
@@ -307,7 +374,10 @@ class TestTileBF16OP(OpTest):
     def test_check_output(self):
         place = core.CUDAPlace(0)
         self.check_output_with_place(
-            place, check_cinn=self.check_cinn, check_pir=True
+            place,
+            check_cinn=self.check_cinn,
+            check_pir=True,
+            check_prim_pir=True,
         )
 
     def init_data(self):
@@ -366,7 +436,7 @@ class TestTileOpInt64_t(OpTest):
 
 
 class TestTileError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -384,7 +454,7 @@ class TestTileError(unittest.TestCase):
 
 
 class TestTileAPIStatic(unittest.TestCase):
-    @test_with_pir_api
+
     def test_api(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -392,10 +462,16 @@ class TestTileAPIStatic(unittest.TestCase):
             repeat_times = [2, 2]
             x1 = paddle.static.data(name='x1', shape=[-1, 4], dtype="int32")
             out = paddle.tile(x1, repeat_times)
-            positive_2 = paddle.tensor.fill_constant(
+
+            # Test repeat_times contains Tensor
+            positive_2 = paddle.tensor.fill_constant([], dtype="int32", value=2)
+            out2 = paddle.tile(x1, repeat_times=[positive_2, 2])
+
+            # Test repeat_times contains 1D Tensor
+            positive_2_1d = paddle.tensor.fill_constant(
                 [1], dtype="int32", value=2
             )
-            out2 = paddle.tile(x1, repeat_times=[positive_2, 2])
+            out3 = paddle.tile(x1, repeat_times=[positive_2_1d, 2])
 
 
 # Test python API
@@ -420,14 +496,45 @@ class TestTileAPI(unittest.TestCase):
             np.testing.assert_array_equal(out_3.numpy(), np.tile(np_x, (2, 3)))
 
 
+class TestTileAPI7D(unittest.TestCase):
+    def init_data(self):
+        self.ori_shape = [1, 2, 3, 4, 5]
+        self.repeat_times = [1, 1, 1, 2, 1, 2, 1]
+
+    def _test_api(self, place):
+        with base.dygraph.guard():
+            np_x = np.random.random(self.ori_shape).astype("float32")
+            x = paddle.to_tensor(np_x, place=place)
+            x.stop_gradient = False
+            repeat_times = self.repeat_times
+            out = paddle.tile(x, repeat_times)
+            np.testing.assert_array_equal(
+                out.numpy(), np.tile(np_x, repeat_times)
+            )
+            loss = out.sum()
+            loss.backward()
+            np.testing.assert_array_equal(x.grad.shape, x.shape)
+
+    def test_tile7d(self):
+        places = get_places()
+        for place in places:
+            self.init_data()
+            self._test_api(place)
+
+
+class TestTileAPI7Dcase2(TestTileAPI7D):
+    def init_data(self):
+        self.ori_shape = [1, 2, 3, 4, 5, 1, 2]
+        self.repeat_times = [3, 2, 2, 1, 1, 2, 1]
+
+
 class TestTileDoubleGradCheck(unittest.TestCase):
     def tile_wrapper(self, x):
         return paddle.tile(x[0], [2, 1])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
-        # the shape of input variable should be clearly specified, not inlcude -1.
+        # the shape of input variable should be clearly specified, not include -1.
         eps = 0.005
         dtype = np.float32
 
@@ -445,10 +552,7 @@ class TestTileDoubleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for p in places:
+        for p in get_places():
             self.func(p)
 
 
@@ -456,10 +560,9 @@ class TestTileTripleGradCheck(unittest.TestCase):
     def tile_wrapper(self, x):
         return paddle.tile(x[0], [2, 1])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
-        # the shape of input variable should be clearly specified, not inlcude -1.
+        # the shape of input variable should be clearly specified, not include -1.
         eps = 0.005
         dtype = np.float32
 
@@ -477,10 +580,7 @@ class TestTileTripleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
-        for p in places:
+        for p in get_places():
             self.func(p)
 
 
@@ -516,7 +616,7 @@ class TestTileAPI_ZeroDim(unittest.TestCase):
 
 
 class Testfp16TileOp(unittest.TestCase):
-    @test_with_pir_api
+
     def testfp16(self):
         if not paddle.is_compiled_with_cuda():
             return

@@ -14,6 +14,7 @@
 
 from paddle import _legacy_C_ops
 from paddle.common_ops_import import check_variable_and_dtype
+from paddle.distributed import fleet
 from paddle.framework import LayerHelper, in_dynamic_mode
 
 
@@ -29,7 +30,7 @@ def global_scatter(
     The global_count of the rank 0 is [2, 0, , ], rank 1 is [2, 0, ,](Due to the limited space, only the data calculated on rank 0 is shown here).
     In the global_scatter operator, local_count[i] represents sending local_count[i] data to the (i % n_expert)th expert of the (i // n_expert)th card,
     global_count[i] represents receiving global_count[i] data from the (i // n_expert)th card to the (i % n_expert)th expert of this card. The rank in the
-    figure respresent the rank of the current card in all cards.
+    figure represent the rank of the current card in all cards.
 
     The process of global_scatter sending data is as follows:
 
@@ -61,7 +62,7 @@ def global_scatter(
         global_count (Tensor): Tensor which have n_expert * world_size elements that indicates
             how many data needed to be received. The tensor data type should be int64.
         group (Group, optional): The group instance return by new_group or None for global default group. Default: None.
-        use_calc_stream (bool, optional): Wether to use calculation stream (True) or communication stream. Default: True.
+        use_calc_stream (bool, optional): Whether to use calculation stream (True) or communication stream. Default: True.
 
     Returns:
         out (Tensor): The data received from all experts.
@@ -72,7 +73,7 @@ def global_scatter(
             >>> # doctest: +REQUIRES(env:DISTRIBUTED)
             >>> import paddle
             >>> from paddle.distributed import init_parallel_env
-            >>> from paddle.distributed.utils imoprt moe_utils
+            >>> from paddle.distributed.utils import moe_utils
             >>> init_parallel_env()
             >>> n_expert = 2
             >>> world_size = 2
@@ -124,7 +125,7 @@ def global_scatter(
         check_variable_and_dtype(
             x,
             'x',
-            ['float16', 'float32', 'float64', 'int32', 'int64'],
+            ['float16', 'float32', 'float64', 'int32', 'int64', 'uint16'],
             'global_scatter',
         )
         check_variable_and_dtype(
@@ -161,7 +162,7 @@ def global_gather(
     The global_count of the rank 0 is [2, 0, , ], rank 1 is [2, 0, ,](Due to the limited space, only the data calculated on rank 0 is shown here).
     In the global_gather operator, the meaning of the global_count and local_count is opposed to global_scatter, global_count[i] represents sending global_count[i] data to the (i % n_expert)th expert of the (i // n_expert)th card,
     local_count[i] represents receiving local_count[i] data from the (i // n_expert)th card to the (i % n_expert)th expert of this card. The data sent will be arranged according to the experts of each card.
-    The rank in the figure respresent the rank of the current card in all cards.
+    The rank in the figure represent the rank of the current card in all cards.
 
     The process of global_gather sending data is as follows:
 
@@ -186,7 +187,7 @@ def global_gather(
         global_count (Tensor): Tensor which have n_expert * world_size elements that indicates
             how many data needed to be sent. Tensor data type should be int64.
         group (Group, optional): The group instance return by new_group or None for global default group. Default: None.
-        use_calc_stream (bool, optional): Wether to use calculation stream (True) or communication stream. Default: True.
+        use_calc_stream (bool, optional): Whether to use calculation stream (True) or communication stream. Default: True.
 
     Returns:
         out (Tensor): The data received from all experts.
@@ -197,7 +198,7 @@ def global_gather(
             >>> # doctest: +REQUIRES(env:DISTRIBUTED)
             >>> import paddle
             >>> from paddle.distributed import init_parallel_env
-            >>> from paddle.distributed.utils imoprt moe_utils
+            >>> from paddle.distributed.utils import moe_utils
             >>> init_parallel_env()
             >>> n_expert = 2
             >>> world_size = 2
@@ -249,7 +250,7 @@ def global_gather(
         check_variable_and_dtype(
             x,
             'x',
-            ['float16', 'float32', 'float64', 'int32', 'int64'],
+            ['float16', 'float32', 'float64', 'int32', 'int64', 'uint16'],
             'global_gather',
         )
 
@@ -277,3 +278,30 @@ def global_gather(
             },
         )
         return out
+
+
+def get_complete_pp_mesh(mesh):
+    """
+    Get complete pp mesh with given mesh.
+
+    Args:
+        mesh (Mesh): Mesh object.
+
+    Returns:
+        Mesh: Complete mesh.
+
+    """
+    process_id = mesh.process_ids[0]
+    global_mesh = fleet.auto.get_mesh()
+
+    if global_mesh and "pp" in global_mesh.dim_names:
+        pp_degree = global_mesh.get_dim_size("pp")
+        for i in range(pp_degree):
+            pp_mesh = global_mesh.get_mesh_with_dim("pp", i)
+            if process_id in pp_mesh.process_ids:
+                return pp_mesh
+        AssertionError(
+            f"Current mesh: {mesh} not found in global mesh {global_mesh}"
+        )
+    else:
+        return mesh

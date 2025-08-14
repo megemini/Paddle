@@ -23,12 +23,13 @@ from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
     static_guard,
-    test_default_and_pir,
+    test_default_mode_only,
 )
 from predictor_utils import PredictorTools
 
 import paddle
 from paddle.base import core
+from paddle.framework import use_pir_api
 
 SEED = 2020
 IMAGENET1000 = 1281167
@@ -176,11 +177,13 @@ class ResNet(paddle.nn.Layer):
             shortcut = False
             for i in range(depth[block]):
                 bottleneck_block = self.add_sublayer(
-                    'bb_%d_%d' % (block, i),
+                    f'bb_{block}_{i}',
                     BottleneckBlock(
-                        num_channels=num_channels[block]
-                        if i == 0
-                        else num_filters[block] * 4,
+                        num_channels=(
+                            num_channels[block]
+                            if i == 0
+                            else num_filters[block] * 4
+                        ),
                         num_filters=num_filters[block],
                         stride=2 if i == 0 and block != 0 else 1,
                         shortcut=shortcut,
@@ -260,6 +263,9 @@ class ResNetHelper:
         self.model_filename = (
             "resnet" + paddle.jit.translated_layer.INFER_MODEL_SUFFIX
         )
+        self.pir_model_filename = (
+            "resnet" + paddle.jit.pir_translated_layer.PIR_INFER_MODEL_SUFFIX
+        )
         self.params_filename = (
             "resnet" + paddle.jit.translated_layer.INFER_PARAMS_SUFFIX
         )
@@ -327,24 +333,15 @@ class ResNetHelper:
                 end_time = time.time()
                 if batch_id % 2 == 0:
                     print(
-                        "epoch %d | batch step %d, loss %0.3f, acc1 %0.3f, acc5 %0.3f, time %f"
-                        % (
-                            epoch,
-                            batch_id,
-                            total_loss.numpy() / total_sample,
-                            total_acc1.numpy() / total_sample,
-                            total_acc5.numpy() / total_sample,
-                            end_time - start_time,
-                        )
+                        f"epoch {epoch} | batch step {batch_id}, "
+                        f"loss {total_loss.numpy() / total_sample:0.3f}, "
+                        f"acc1 {total_acc1.numpy() / total_sample:0.3f}, "
+                        f"acc5 {total_acc5.numpy() / total_sample:0.3f}, "
+                        f"time {end_time - start_time:f}"
                     )
                 if batch_id == 10:
                     if to_static:
-                        # TODO(@xiongkun): open after save / load supported in pir.
-                        if (
-                            to_static
-                            and not paddle.base.framework.use_pir_api()
-                        ):
-                            paddle.jit.save(resnet, self.model_save_prefix)
+                        paddle.jit.save(resnet, self.model_save_prefix)
                     else:
                         paddle.save(
                             resnet.state_dict(),
@@ -374,6 +371,11 @@ class ResNetHelper:
     def predict_static(self, data):
         with static_guard():
             exe = paddle.static.Executor(place)
+            if use_pir_api():
+                model_filename = self.pir_model_filename
+            else:
+                model_filename = self.model_filename
+
             [
                 inference_program,
                 feed_target_names,
@@ -381,7 +383,7 @@ class ResNetHelper:
             ] = paddle.static.load_inference_model(
                 self.model_save_dir,
                 executor=exe,
-                model_filename=self.model_filename,
+                model_filename=model_filename,
                 params_filename=self.params_filename,
             )
 
@@ -403,9 +405,13 @@ class ResNetHelper:
         return ret
 
     def predict_analysis_inference(self, data):
+        if use_pir_api():
+            model_filename = self.pir_model_filename
+        else:
+            model_filename = self.model_filename
         output = PredictorTools(
             self.model_save_dir,
-            self.model_filename,
+            model_filename,
             self.params_filename,
             [data],
         )
@@ -443,10 +449,11 @@ class TestResnet(Dy2StTestBase):
             predictor_pre,
             st_pre,
             rtol=1e-05,
+            atol=1e-7,
             err_msg=f'predictor_pre:\n {predictor_pre}\n, st_pre: \n{st_pre}.',
         )
 
-    @test_default_and_pir
+    @test_default_mode_only
     def test_resnet(self):
         static_loss = self.train(to_static=True)
         dygraph_loss = self.train(to_static=False)
@@ -456,11 +463,9 @@ class TestResnet(Dy2StTestBase):
             rtol=1e-05,
             err_msg=f'static_loss: {static_loss} \n dygraph_loss: {dygraph_loss}',
         )
-        # TODO(@xiongkun): open after save / load supported in pir.
-        if not paddle.framework.use_pir_api():
-            self.verify_predict()
+        self.verify_predict()
 
-    @test_default_and_pir
+    @test_default_mode_only
     def test_resnet_composite(self):
         core._set_prim_backward_enabled(True)
         core._add_skip_comp_ops("batch_norm")
@@ -474,14 +479,14 @@ class TestResnet(Dy2StTestBase):
             err_msg=f'static_loss: {static_loss} \n dygraph_loss: {dygraph_loss}',
         )
 
-    @test_default_and_pir
+    @test_default_mode_only
     def test_in_static_mode_mkldnn(self):
-        paddle.set_flags({'FLAGS_use_mkldnn': True})
+        paddle.set_flags({'FLAGS_use_onednn': True})
         try:
             if paddle.base.core.is_compiled_with_mkldnn():
                 self.train(to_static=True)
         finally:
-            paddle.set_flags({'FLAGS_use_mkldnn': False})
+            paddle.set_flags({'FLAGS_use_onednn': False})
 
 
 if __name__ == '__main__':

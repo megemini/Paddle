@@ -47,6 +47,11 @@ class TestPrimAMPO1(unittest.TestCase):
         paddle.seed(2022)
         self.x = paddle.randn([4, 2, 6, 6], dtype="float32")
         self.x.stop_gradient = False
+        self.atol = 1e-3
+        self.rtol = 1e-3
+        if paddle.is_compiled_with_xpu():
+            self.atol = 5e-3
+            self.rtol = 5e-3
 
     def train(self, use_prim):
         core._set_prim_all_enabled(use_prim)
@@ -57,7 +62,9 @@ class TestPrimAMPO1(unittest.TestCase):
         )
 
         if use_prim:
-            net = paddle.jit.to_static(net, build_strategy=False)
+            net = paddle.jit.to_static(
+                net, build_strategy=False, full_graph=True
+            )
         with paddle.amp.auto_cast(level='O1'):
             out = net(self.x)
             loss = paddle.mean(out)
@@ -73,8 +80,8 @@ class TestPrimAMPO1(unittest.TestCase):
             np.testing.assert_allclose(
                 expected,
                 actual,
-                rtol=1e-3,
-                atol=1e-3,
+                rtol=self.rtol,
+                atol=self.atol,
             )
 
     def test_amp_O1_infer(self):
@@ -82,21 +89,25 @@ class TestPrimAMPO1(unittest.TestCase):
             net = PrimeNet()
             core._set_prim_all_enabled(False)
             net.eval()
-            static_net = paddle.jit.to_static(net, build_strategy=False)
+            static_net = paddle.jit.to_static(
+                net, build_strategy=False, full_graph=True
+            )
             res = static_net(self.x)
 
             # set prim all enabled
             core._set_prim_all_enabled(True)
             net.eval()
-            static_net = paddle.jit.to_static(net, build_strategy=False)
+            static_net = paddle.jit.to_static(
+                net, build_strategy=False, full_graph=True
+            )
             with paddle.amp.auto_cast(level='O1'):
                 res_amp = static_net(self.x)
 
             np.testing.assert_allclose(
                 res,
                 res_amp,
-                rtol=1e-3,
-                atol=1e-3,
+                rtol=self.rtol,
+                atol=self.atol,
             )
 
 

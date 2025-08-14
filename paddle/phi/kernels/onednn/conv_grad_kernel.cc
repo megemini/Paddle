@@ -51,10 +51,6 @@ void ConvGradKernel(const Context& dev_ctx,
                     const std::string& data_format,
                     DenseTensor* input_grad,
                     DenseTensor* filter_grad) {
-  PADDLE_ENFORCE_EQ(dev_ctx.GetPlace().GetType(),
-                    AllocationType::CPU,
-                    phi::errors::PreconditionNotMet(
-                        "Operator oneDNN ConvGrad must use CPUPlace"));
   const auto& onednn_engine = dev_ctx.GetEngine();
 
   bool is_test = dev_ctx.HasDnnAttr("is_test")
@@ -86,7 +82,7 @@ void ConvGradKernel(const Context& dev_ctx,
                                                          input_grad,
                                                          unique_name);
 
-        // create mkldnn memory from input tensors (data/weights)
+        // create onednn memory from input tensors (data/weights)
         auto& astream = OneDNNContext::tls().get_stream();
 
         if (filter_grad) {
@@ -96,7 +92,7 @@ void ConvGradKernel(const Context& dev_ctx,
               handler.AcquireDiffDstMemoryWithReorderFromWeightsPrimitive(
                   &out_grad);
 
-          // For convoluition with groups write filter grad into
+          // For convolution with groups write filter grad into
           // oneDNN buffer and then we reorder it into filter_grad tensor
           int g = std::max(groups, 1);
           auto diff_weights_memory_p =

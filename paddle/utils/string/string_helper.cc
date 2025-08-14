@@ -14,14 +14,13 @@
 
 #include "paddle/utils/string/string_helper.h"
 
-#include <ctype.h>
-#include <stdio.h>
+#include <cctype>
+#include <cstdio>
 
 #include <cstring>
 #include <string>
 
-namespace paddle {
-namespace string {
+namespace paddle::string {
 
 // remove leading and tailing spaces
 std::string trim_spaces(const std::string& str) {
@@ -85,5 +84,4 @@ char* LineFileReader::getdelim(FILE* f, char delim) {
 #endif
 }
 
-}  // end namespace string
-}  // end namespace paddle
+}  // namespace paddle::string

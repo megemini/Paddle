@@ -130,12 +130,12 @@ class TestShuffleChannelMKLDNNDetectPass(PassAutoScanTest):
         return program_config
 
     def sample_predictor_configs(self, program_config):
-        config = self.create_inference_config(use_mkldnn=True)
+        config = self.create_inference_config(use_onednn=True)
         yield config, ["shuffle_channel"], (1e-5, 1e-5)
 
     def test(self):
         self.run_and_statis(
-            quant=False, passes=["shuffle_channel_mkldnn_detect_pass"]
+            quant=False, passes=["shuffle_channel_onednn_detect_pass"]
         )
 
 

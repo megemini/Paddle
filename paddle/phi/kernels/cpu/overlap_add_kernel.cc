@@ -37,7 +37,7 @@ void OverlapAddKernel(const Context& dev_ctx,
       (axis == 0) ? out->dims()[0]
                   : out->dims()[static_cast<int>(out_rank) - 1]);
 
-  // auto& dev_ctx = ctx.device_context<Context>();
+  // auto& dev_ctx = dev_ctx.device_context<Context>();
 
   DenseTensor x_(x.type());
   x_ = x;
@@ -127,6 +127,7 @@ void OverlapAddKernel(const Context& dev_ctx,
   // Restore output dims when the number of dims is larger than 2.
   if (out_rank > 2) {
     std::vector<int64_t> restored_out_shape;
+    restored_out_shape.reserve(preserved_dims.size());
     for (int i = 0; i < preserved_dims.size(); i++) {
       restored_out_shape.push_back(preserved_dims[i]);
     }

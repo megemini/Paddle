@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/types/any.h>
-#include <glog/logging.h>
 
+#include <glog/logging.h>
+#include <any>
 #include <vector>
 
 #include "paddle/cinn/common/common.h"
@@ -23,19 +23,16 @@
 #include "paddle/cinn/common/object.h"
 #include "paddle/cinn/common/type.h"
 #include "paddle/cinn/runtime/cinn_runtime.h"
-
+#include "paddle/common/enforce.h"
 struct cinn_buffer_t;
 
 namespace cinn {
-
-namespace poly {
-struct StageMap;
-}  // namespace poly
 
 namespace ir {
 
 class Expr;
 class Var;
+class LoweredFunc;
 
 }  // namespace ir
 
@@ -97,12 +94,18 @@ struct CINNValuePack : public Shared<_CINNValuePack_> {
   bool empty() const { return (*operator->()).empty(); }
 
   CINNValue& back() {
-    CHECK_GT((*operator->()).size(), 0);
+    PADDLE_ENFORCE_GT((*operator->()).size(),
+                      0,
+                      ::common::errors::InvalidArgument(
+                          "The size of the array should greater than 0."));
     return (*operator->())[size() - 1];
   }
 
   const CINNValue& back() const {
-    CHECK_GT((*operator->()).size(), 0);
+    PADDLE_ENFORCE_GT((*operator->()).size(),
+                      0,
+                      ::common::errors::InvalidArgument(
+                          "The size of the array should greater than 0."));
     return (*operator->())[size() - 1];
   }
 
@@ -134,6 +137,9 @@ class CINNValue : public cinn_pod_value_t {
   explicit CINNValue(float value) : cinn_pod_value_t(value) {
     type_code_ = ::cinn_type_code<float>();
   }
+  explicit CINNValue(float8e4m3 value) : cinn_pod_value_t(value) {
+    type_code_ = ::cinn_type_code<float8e4m3>();
+  }
   explicit CINNValue(bfloat16 value) : cinn_pod_value_t(value) {
     type_code_ = ::cinn_type_code<bfloat16>();
   }
@@ -150,8 +156,8 @@ class CINNValue : public cinn_pod_value_t {
   explicit CINNValue(const std::string&);
   explicit CINNValue(const ir::Var& value);
   explicit CINNValue(const ir::Expr& value);
+  explicit CINNValue(const ir::LoweredFunc& value);
   explicit CINNValue(const CINNValuePack& value);
-  explicit CINNValue(const poly::StageMap& value);
 
   bool defined() const { return type_code_ != kNull; }
 
@@ -160,6 +166,7 @@ class CINNValue : public cinn_pod_value_t {
   using cinn_pod_value_t::operator double;
   using cinn_pod_value_t::operator float;
   using cinn_pod_value_t::operator cinn::common::bfloat16;
+  using cinn_pod_value_t::operator cinn::common::float8e4m3;
   using cinn_pod_value_t::operator cinn::common::float16;
   using cinn_pod_value_t::operator bool;
   using cinn_pod_value_t::operator int32_t;
@@ -171,13 +178,11 @@ class CINNValue : public cinn_pod_value_t {
   operator ir::Var() const;
   operator ir::Expr() const;
   operator CINNValuePack() const;
-  operator poly::StageMap() const;
   // @}
 
   bool is_string() const;
   bool is_var() const;
   bool is_expr() const;
-  bool is_stagemap() const;
   bool is_tensor() const;
 
   //! Assign operators
@@ -188,6 +193,7 @@ class CINNValue : public cinn_pod_value_t {
   CINNValue& operator=(float value);
   CINNValue& operator=(double value);
   CINNValue& operator=(bfloat16 value);
+  CINNValue& operator=(float8e4m3 value);
   CINNValue& operator=(float16 value);
   CINNValue& operator=(char* value);
   CINNValue& operator=(const std::string& value);
@@ -197,7 +203,6 @@ class CINNValue : public cinn_pod_value_t {
   CINNValue& operator=(void* value);
   CINNValue& operator=(const CINNValuePack& value);
   CINNValue& operator=(const char* value);
-  CINNValue& operator=(const poly::StageMap& value);
   // @}
 
   //  //! Set the value.
@@ -234,7 +239,7 @@ class CINNValue : public cinn_pod_value_t {
   static int TypeCode();
 
  protected:
-  absl::any shared_;
+  std::any shared_;
 };
 
 }  // namespace common

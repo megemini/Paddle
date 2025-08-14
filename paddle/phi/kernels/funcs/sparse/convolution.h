@@ -15,8 +15,13 @@ limitations under the License. */
 #pragma once
 
 #include "paddle/common/ddim.h"
+#include "paddle/phi/core/kmap_cache.h"
 #include "paddle/phi/core/tensor_utils.h"
-#include "paddle/phi/kernels/funcs/blas/blas.h"
+#include "paddle/phi/kernels/empty_kernel.h"
+
+#if !defined(PADDLE_WITH_CUDA) || !defined(PADDLE_WITH_CUSTOM_DEVICE)
+#include "paddle/phi/kernels/funcs/sparse/convolution_blas.h"
+#endif
 
 namespace phi {
 namespace funcs {
@@ -43,8 +48,8 @@ inline HOSTDEVICE bool Check(const IntT& x,
                              const int kdim,
                              const int xdim) {
   const IntT lower = x - dilation * kx + pad;
-  const IntT uper = x + (kdim - kx - 1) * dilation - pad;
-  return (lower >= 0 && lower % stride == 0 && uper < xdim);
+  const IntT upper = x + (kdim - kx - 1) * dilation - pad;
+  return (lower >= 0 && lower % stride == 0 && upper < xdim);
 }
 
 // Check whether the current position(x, y, z) is legal:
@@ -103,13 +108,13 @@ inline void GetOutShape(const DDim& x_dims,
                         DDim* out_dims) {
   const bool is2D = out_dims->size() == 4 ? true : false;
   if (is2D) {
-    PADDLE_ENFORCE_EQ(
-        x_dims.size(),
-        4,
-        phi::errors::InvalidArgument("the shape of x should be (N, H, W, C)"));
+    PADDLE_ENFORCE_EQ(x_dims.size(),
+                      4,
+                      common::errors::InvalidArgument(
+                          "the shape of x should be (N, H, W, C)"));
     PADDLE_ENFORCE_EQ(kernel_sizes.size(),
                       4,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "the shape of kernel should be (H, W, C, OC)"));
 
     // infer out shape
@@ -124,11 +129,11 @@ inline void GetOutShape(const DDim& x_dims,
   } else {
     PADDLE_ENFORCE_EQ(x_dims.size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "the shape of x should be (N, D, H, W, C)"));
     PADDLE_ENFORCE_EQ(kernel_sizes.size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "the shape of kernel should be (D, H, W, C, OC)"));
 
     // infer out shape
@@ -150,47 +155,6 @@ inline void ResetSubmKernelSizeAndStrides(const DDim& kernel_dims,
     (*paddings)[i] = kernel_dims[i] / 2;
     (*strides)[i] = 1;
   }
-}
-
-template <typename T, typename Context>
-inline void SubmPreProcess(const Context& dev_ctx,
-                           const SparseCooTensor& x,
-                           const DenseTensor& kernel,
-                           const DenseTensor& out_grad,
-                           const int in_channels,
-                           const int out_channels,
-                           const int half_kernel_size,
-                           DenseTensor* kernel_grad,
-                           DenseTensor* x_grad) {
-  auto blas = phi::funcs::GetBlas<Context, T>(dev_ctx);
-  const bool is_params_freezing = kernel_grad == nullptr;
-  if (!is_params_freezing) {
-    T* d_kernel_ptr = kernel_grad->data<T>();
-    blas.GEMM(CblasTrans,
-              CblasNoTrans,
-              x.non_zero_elements().dims()[1],
-              out_grad.dims()[1],
-              x.non_zero_elements().dims()[0],
-              static_cast<T>(1),
-              x.non_zero_elements().data<T>(),
-              out_grad.data<T>(),
-              static_cast<T>(0),
-              d_kernel_ptr + half_kernel_size * in_channels * out_channels);
-  }
-
-  // call gemm: d_x = out_grad * transpose(kernel)
-  // (n, out_channels) * (out_channels, in_channels)
-  T* x_grad_ptr = x_grad->data<T>();
-  blas.GEMM(CblasNoTrans,
-            CblasTrans,
-            out_grad.dims()[0],
-            in_channels,
-            out_grad.dims()[1],
-            static_cast<T>(1),
-            out_grad.data<T>(),
-            kernel.data<T>() + half_kernel_size * in_channels * out_channels,
-            static_cast<T>(0),
-            x_grad_ptr);
 }
 
 inline const std::vector<int> PoolResetKernel(

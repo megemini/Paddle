@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/types/any.h>
-#include <isl/cpp.h>
 
+#include <isl/cpp.h>
+#include <any>
 #include <mutex>
 #include <set>
 #include <string>
@@ -24,11 +24,9 @@
 #include "paddle/cinn/common/debug_manager.h"
 #include "paddle/cinn/common/info_registry.h"
 #include "paddle/cinn/common/target.h"
-#include "paddle/utils/flags.h"
+#include "paddle/common/flags.h"
 
 namespace cinn {
-
-PD_DECLARE_bool(cinn_runtime_display_debug_info);
 
 namespace ir {
 class Expr;
@@ -48,7 +46,7 @@ struct NameGenerator {
   }
 
  private:
-  absl::flat_hash_map<std::string, uint32_t> name_hint_idx_;
+  paddle::flat_hash_map<std::string, uint32_t> name_hint_idx_;
   mutable std::mutex mutex_;
 };
 
@@ -64,7 +62,7 @@ struct PrettyNamer {
   NameGenerator& GetNameGenerator() { return name_generator_; }
 
  private:
-  absl::flat_hash_map<size_t, std::string> pretty_names_;
+  paddle::flat_hash_map<size_t, std::string> pretty_names_;
   NameGenerator name_generator_;
 };
 

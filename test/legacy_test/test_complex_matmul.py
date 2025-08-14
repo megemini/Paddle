@@ -15,53 +15,43 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 import paddle.base.dygraph as dg
-from paddle import base
 
 
 class TestComplexMatMulLayer(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [base.CPUPlace()]
-        if base.core.is_compiled_with_cuda():
-            self._places.append(base.CUDAPlace(0))
+        self._places = get_places()
 
     def compare_by_basic_api(self, x, y, np_result):
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x)
-                y_var = dg.to_variable(y)
+                x_var = paddle.to_tensor(x)
+                y_var = paddle.to_tensor(y)
                 result = paddle.matmul(x_var, y_var)
                 pd_result = result.numpy()
                 np.testing.assert_allclose(
                     pd_result,
                     np_result,
                     rtol=1e-05,
-                    err_msg='\nplace: {}\npaddle diff result:\n {}\nnumpy diff result:\n {}\n'.format(
-                        place,
-                        pd_result[~np.isclose(pd_result, np_result)],
-                        np_result[~np.isclose(pd_result, np_result)],
-                    ),
+                    err_msg=f'\nplace: {place}\npaddle diff result:\n {pd_result[~np.isclose(pd_result, np_result)]}\nnumpy diff result:\n {np_result[~np.isclose(pd_result, np_result)]}\n',
                 )
 
     def compare_op_by_basic_api(self, x, y, np_result):
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x)
-                y_var = dg.to_variable(y)
+                x_var = paddle.to_tensor(x)
+                y_var = paddle.to_tensor(y)
                 result = x_var.matmul(y_var)
                 pd_result = result.numpy()
                 np.testing.assert_allclose(
                     pd_result,
                     np_result,
                     rtol=1e-05,
-                    err_msg='\nplace: {}\npaddle diff result:\n {}\nnumpy diff result:\n {}\n'.format(
-                        place,
-                        pd_result[~np.isclose(pd_result, np_result)],
-                        np_result[~np.isclose(pd_result, np_result)],
-                    ),
+                    err_msg=f'\nplace: {place}\npaddle diff result:\n {pd_result[~np.isclose(pd_result, np_result)]}\nnumpy diff result:\n {np_result[~np.isclose(pd_result, np_result)]}\n',
                 )
 
     def test_complex_xy(self):

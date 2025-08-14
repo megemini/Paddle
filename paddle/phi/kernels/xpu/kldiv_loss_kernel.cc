@@ -15,8 +15,8 @@ limitations under the License. */
 #include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/softmax_kernel.h"
-
 namespace phi {
 
 template <typename T, typename Context>
@@ -24,22 +24,49 @@ void KLDivLossKernel(const Context& dev_ctx,
                      const DenseTensor& x,
                      const DenseTensor& label,
                      const std::string& reduction,
+                     bool log_target,
                      DenseTensor* out) {
   using XPUType = typename XPUTypeTrait<T>::Type;
   dev_ctx.template Alloc<T>(out);
   if (out->numel() == 0) {
     return;
   }
+  if (x.numel() == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(out->dims())), NAN, out);
+    return;
+  }
 
-  int r = XPU_SUCCESS;
-  r = xpu::kldiv_loss(dev_ctx.x_context(),
-                      reinterpret_cast<const XPUType*>(x.data<T>()),
-                      reinterpret_cast<const XPUType*>(label.data<T>()),
-                      reinterpret_cast<XPUType*>(out->data<T>()),
-                      out->numel());
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "kldiv_loss");
+  int r = 0;
+
+  if (log_target) {
+    xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
+    XPUType* label_exp = RAII_GUARD.alloc_l3_or_gm<XPUType>(label.numel());
+    PADDLE_ENFORCE_XDNN_NOT_NULL(label_exp);
+
+    r = xpu::exp(dev_ctx.x_context(),
+                 reinterpret_cast<const XPUType*>(label.data<T>()),
+                 label_exp,
+                 label.numel());
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "exp");
+
+    r = xpu::kldiv_loss(dev_ctx.x_context(),
+                        reinterpret_cast<const XPUType*>(x.data<T>()),
+                        reinterpret_cast<const XPUType*>(label_exp),
+                        reinterpret_cast<XPUType*>(out->data<T>()),
+                        out->numel());
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "kldiv_loss");
+  } else {
+    r = xpu::kldiv_loss(dev_ctx.x_context(),
+                        reinterpret_cast<const XPUType*>(x.data<T>()),
+                        reinterpret_cast<const XPUType*>(label.data<T>()),
+                        reinterpret_cast<XPUType*>(out->data<T>()),
+                        out->numel());
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "kldiv_loss");
+  }
+
   if ("none" != reduction) {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Not supported reduction [%s] in kldiv_loss", reduction));
   }
 }

@@ -18,8 +18,8 @@ limitations under the License. */
 #include <string>
 #include <unordered_map>
 
+#include "paddle/common/enforce.h"
 #include "paddle/common/macros.h"
-#include "paddle/phi/api/include/dll_decl.h"
 #include "paddle/utils/test_macros.h"
 
 namespace paddle {
@@ -34,6 +34,7 @@ enum class AllocationType : int8_t {
   GPU = 2,
   GPUPINNED = 3,
   XPU = 4,
+  XPUPINNED = 5,
   IPU = 7,
   CUSTOM = 9,
 };
@@ -98,7 +99,7 @@ class TEST_API Place {
   struct TEST_API Hash {
     // Note: Now the number of bits we need does not exceed 32 bits, so there is
     // no need to use 64 bits. If needed in the future, it can be expanded,
-    // but now we don’t over-design.
+    // but now we don't over-design.
     uint32_t operator()(const Place& place) const;
   };
 
@@ -137,7 +138,6 @@ class GPUPlace : public Place {
   GPUPlace() : Place(AllocationType::GPU, 0) {}
   explicit GPUPlace(int device_id) : Place(AllocationType::GPU, device_id) {}
 
-  GPUPlace(const GPUPlace&) = default;
   GPUPlace(const Place& place)  // NOLINT
       : Place(AllocationType::GPU, place.GetDeviceId()) {}
 };
@@ -159,6 +159,20 @@ class XPUPlace : public Place {
   XPUPlace(const XPUPlace&) = default;
   XPUPlace(const Place& place)  // NOLINT
       : Place(AllocationType::XPU, place.GetDeviceId()) {}
+};
+
+class XPUPinnedPlace : public Place {
+ public:
+  // Default constructor: no device id is needed, as with XPU pinned memory.
+  XPUPinnedPlace() : Place(AllocationType::XPUPINNED) {}
+
+  // Use the default copy-constructor.
+  XPUPinnedPlace(const XPUPinnedPlace&) = default;
+
+  // Allow construction from a generic Place.
+  // (Typically the passed Place should be an XPUPlace.)
+  XPUPinnedPlace(const Place& place)         // NOLINT
+      : Place(AllocationType::XPUPINNED) {}  // NOLINT
 };
 
 class IPUPlace : public Place {
@@ -192,6 +206,28 @@ TEST_API std::ostream& operator<<(std::ostream&, const Place&);
 
 Place GetPinnedPlace(const Place& place);
 
+using PlaceList = std::vector<Place>;
+
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+class PlaceHelper {
+ public:
+  static std::string GetDeviceType(const Place& place);
+  static size_t GetDeviceId(const Place& place);
+  static Place CreatePlace(const std::string& dev_type, size_t dev_id = 0);
+};
+#endif
+
+TEST_API bool is_gpu_place(const Place&);
+bool is_xpu_place(const Place&);
+bool is_ipu_place(const Place&);
+TEST_API bool is_cpu_place(const Place&);
+bool is_cuda_pinned_place(const Place&);
+bool is_xpu_pinned_place(const Place&);
+bool is_custom_place(const Place& p);
+bool is_accelerat_place(const Place& p);
+bool places_are_same_class(const Place&, const Place&);
+bool is_same_place(const Place&, const Place&);
+bool is_accelerat_allocation_type(AllocationType type);
 }  // namespace phi
 
 namespace paddle {
@@ -199,6 +235,7 @@ namespace experimental {
 using AllocationType = phi::AllocationType;
 using GPUPinnedPlace = phi::GPUPinnedPlace;
 using XPUPlace = phi::XPUPlace;
+using XPUPinnedPlace = phi::XPUPinnedPlace;
 }  // namespace experimental
 
 using AllocationType = phi::AllocationType;
@@ -240,5 +277,9 @@ PADDLE_API bool operator==(const Place& place, PlaceType place_type);
 PADDLE_API bool operator==(PlaceType place_type, const Place& place);
 
 PADDLE_API GPUPlace DefaultGPUPlace();
+
+PADDLE_API phi::XPUPlace DefaultXPUPlace();
+
+PADDLE_API phi::CustomPlace DefaultCustomPlace();
 
 }  // namespace paddle

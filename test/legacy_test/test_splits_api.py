@@ -19,7 +19,6 @@ import numpy as np
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 RTOL = 1e-5
 ATOL = 1e-8
@@ -34,7 +33,7 @@ DTYPE_ALL_CPU = {
     'int64',
 }
 
-# add `bfloat16` if core is complied with CUDA and support the bfloat16
+# add `bfloat16` if core is compiled with CUDA and support the bfloat16
 DTYPE_ALL_GPU = DTYPE_ALL_CPU | (
     {'bfloat16'}
     if core.is_compiled_with_cuda()
@@ -72,7 +71,6 @@ def generate_data(shape, dtype='int64'):
 class BaseTest(unittest.TestCase):
     """Test in each `PLACES` and in `static/dygraph`"""
 
-    @test_with_pir_api
     def _test_static_api(
         self,
         func_paddle,

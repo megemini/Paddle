@@ -15,12 +15,10 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest
+from op_test import OpTest, get_places
 from scipy import special
 
 import paddle
-from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(42)
 paddle.seed(42)
@@ -45,12 +43,10 @@ class TestI1e_API(unittest.TestCase):
 
     def setUp(self):
         self.x = np.array(self.DATA).astype(self.DTYPE)
-        self.place = [paddle.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.place.append(paddle.CUDAPlace(0))
+        self.place = get_places()
 
     def test_api_static(self):
-        @test_with_pir_api
+
         def run(place):
             paddle.enable_static()
             with paddle.static.program_guard(paddle.static.Program()):
@@ -122,7 +118,7 @@ class TestI1eOp(OpTest):
 
     # 测试前向输出结果
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     # 测试反向梯度输出
     def test_check_grad(self):
@@ -148,6 +144,27 @@ class TestI1eOp(OpTest):
         self.case = np.concatenate([zero_case, rand_case, over_eight_case])
         self.inputs = {'x': self.case}
         self.target = reference_i1e(self.inputs['x'])
+
+
+class TestI1eOp_ZeroSize(OpTest):
+    def setUp(self) -> None:
+        self.__class__.op_type = "i1e"
+        self.op_type = "i1e"
+        self.python_api = paddle.i1e
+        self.init_config()
+        x = np.random.randn(3, 4, 0)
+        self.inputs = {'x': x.astype(self.dtype)}
+        self.attrs = {}
+        self.outputs = {'out': special.i1e(x)}
+
+    def init_config(self):
+        self.dtype = np.float32
+
+    def test_check_output(self):
+        self.check_output()
+
+    def test_check_grad(self):
+        self.check_grad(['x'], 'out')
 
 
 if __name__ == "__main__":

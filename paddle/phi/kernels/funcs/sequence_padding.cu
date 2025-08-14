@@ -57,9 +57,9 @@ __global__ void SequencePaddingKernel(T* dst,
 }
 
 template <typename T>
-class PaddingLoDTensorFunctor<phi::GPUContext, T> {
+class PaddingDenseTensorFunctor<phi::GPUContext, T> {
  public:
-  void operator()(const phi::GPUContext& context,
+  void operator()(const phi::GPUContext& dev_ctx,
                   const phi::DenseTensor& seq_tensor,
                   phi::DenseTensor* pad_tensor,
                   const phi::DenseTensor& pad_value,
@@ -78,7 +78,7 @@ class PaddingLoDTensorFunctor<phi::GPUContext, T> {
     PADDLE_ENFORCE_GE(
         pad_seq_len,
         max_seq_len,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The pad_seq_len must be equal to or greater than the "
             "original max sequence length. Expected %ld >= %ld, but got %ld < "
             "%ld. Please check the input value.",
@@ -98,7 +98,7 @@ class PaddingLoDTensorFunctor<phi::GPUContext, T> {
     PADDLE_ENFORCE_EQ(
         pad_value.numel() == 1 || pad_value.numel() == step_width,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The numel of 'pad_value' can only be 1 or be equal to "
             "the 'step_width', but got %ld != 1 and %ld. Please check the "
             "input value.",
@@ -124,12 +124,12 @@ class PaddingLoDTensorFunctor<phi::GPUContext, T> {
     const T* pad_value_data = pad_value.data<T>();
 
     phi::MixVector<size_t> mix_vector_seq_offsets(&seq_offsets);
-    SequencePaddingKernel<T, kSeqToPad><<<grid, threads, 0, context.stream()>>>(
+    SequencePaddingKernel<T, kSeqToPad><<<grid, threads, 0, dev_ctx.stream()>>>(
         pad_data,
         seq_data,
         pad_value_data,
         pad_value.numel() == 1,
-        mix_vector_seq_offsets.CUDAData(context.GetPlace()),
+        mix_vector_seq_offsets.CUDAData(dev_ctx.GetPlace()),
         seq_num,
         pad_seq_len,
         step_width,
@@ -139,9 +139,9 @@ class PaddingLoDTensorFunctor<phi::GPUContext, T> {
 };
 
 template <typename T>
-class UnpaddingLoDTensorFunctor<phi::GPUContext, T> {
+class UnpaddingDenseTensorFunctor<phi::GPUContext, T> {
  public:
-  void operator()(const phi::GPUContext& context,
+  void operator()(const phi::GPUContext& dev_ctx,
                   const phi::DenseTensor& pad_tensor,
                   phi::DenseTensor* seq_tensor,
                   int pad_seq_len = -1,
@@ -164,14 +164,6 @@ class UnpaddingLoDTensorFunctor<phi::GPUContext, T> {
               pad_seq_len,
               step_width,
               layout);
-    /*
-    if (!norm_by_times && seq_num == 1UL && pad_seq_len == max_seq_len) {
-      paddle::framework::TensorCopy(pad_tensor, context.GetPlace(), context,
-    seq_tensor);
-      seq_tensor->Resize(seq_tensor_dims);
-      return;
-    }
-    */
 
     const int kBlockSize = 512;
 
@@ -191,12 +183,12 @@ class UnpaddingLoDTensorFunctor<phi::GPUContext, T> {
     T* seq_data = seq_tensor->data<T>();
 
     phi::MixVector<size_t> mixv_seq_offsets(&seq_offsets);
-    SequencePaddingKernel<T, kPadToSeq><<<grid, threads, 0, context.stream()>>>(
+    SequencePaddingKernel<T, kPadToSeq><<<grid, threads, 0, dev_ctx.stream()>>>(
         seq_data,
         pad_data,
         nullptr,
         false,
-        mixv_seq_offsets.CUDAData(context.GetPlace()),
+        mixv_seq_offsets.CUDAData(dev_ctx.GetPlace()),
         seq_num,
         pad_seq_len,
         step_width,
@@ -205,15 +197,15 @@ class UnpaddingLoDTensorFunctor<phi::GPUContext, T> {
   }
 };
 
-template class PaddingLoDTensorFunctor<phi::GPUContext, int>;
-template class PaddingLoDTensorFunctor<phi::GPUContext, int64_t>;
-template class PaddingLoDTensorFunctor<phi::GPUContext, float>;
-template class PaddingLoDTensorFunctor<phi::GPUContext, double>;
+template class PaddingDenseTensorFunctor<phi::GPUContext, int>;
+template class PaddingDenseTensorFunctor<phi::GPUContext, int64_t>;
+template class PaddingDenseTensorFunctor<phi::GPUContext, float>;
+template class PaddingDenseTensorFunctor<phi::GPUContext, double>;
 
-template class UnpaddingLoDTensorFunctor<phi::GPUContext, int>;
-template class UnpaddingLoDTensorFunctor<phi::GPUContext, int64_t>;
-template class UnpaddingLoDTensorFunctor<phi::GPUContext, float>;
-template class UnpaddingLoDTensorFunctor<phi::GPUContext, double>;
+template class UnpaddingDenseTensorFunctor<phi::GPUContext, int>;
+template class UnpaddingDenseTensorFunctor<phi::GPUContext, int64_t>;
+template class UnpaddingDenseTensorFunctor<phi::GPUContext, float>;
+template class UnpaddingDenseTensorFunctor<phi::GPUContext, double>;
 
 }  // namespace funcs
 }  // namespace phi

@@ -18,10 +18,8 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/infermeta/fusion.h"
-#include "paddle/phi/kernels/funcs/fused_gemm_epilogue.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class FusedGemmEpilogueOp : public framework::OperatorWithKernel {
  public:
@@ -54,15 +52,15 @@ class FusedGemmEpilogueOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<bool>(
         "trans_x",
         R"DOC((bool, default false), Whether to transpose input tensor X
-    or not. The input tensor X coulbe be more than two dimension. When
-    set trans_x=true, it would fully reverse X. For instant: X with shpae
+    or not. The input tensor X could be more than two dimension. When
+    set trans_x=true, it would fully reverse X. For instant: X with shape
     [d0, d1, d2, d3] -> [d3, d2, d1, d0].)DOC")
         .SetDefault(false);
     AddAttr<bool>(
         "trans_y",
         R"DOC((bool, default false), Whether to transpose input tensor Y
     or not. The input tensor Y should be two dimension. When
-    set trans_y=true, it would transpose Y. For instant: Y with shpae
+    set trans_y=true, it would transpose Y. For instant: Y with shape
     [d0, d1] -> [d1, d0].)DOC")
         .SetDefault(false);
 
@@ -75,7 +73,7 @@ class FusedGemmEpilogueOpMaker : public framework::OpProtoAndCheckerMaker {
 
     AddComment(R"DOC(
 FusedGemmEpilogue Operator
-This operator is used to perform Activeation(Elementwise_add(Matmul(X, Y), bias)).
+This operator is used to perform Activation(Elementwise_add(Matmul(X, Y), bias)).
 It is equal to paddle.nn.Linear + Activation (None, ReLU or GeLU).
 
 Note:
@@ -121,15 +119,15 @@ class FusedGemmEpilogueGradOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<bool>(
         "trans_x",
         R"DOC((bool, default false), Whether to transpose input tensor X
-    or not. The input tensor X coulbe be more than two dimension. When
-    set trans_x=true, it would fully reverse X. For instant: X with shpae
+    or not. The input tensor X could be more than two dimension. When
+    set trans_x=true, it would fully reverse X. For instant: X with shape
     [d0, d1, d2, d3] -> [d3, d2, d1, d0].)DOC")
         .SetDefault(false);
     AddAttr<bool>(
         "trans_y",
         R"DOC((bool, default false), Whether to transpose input tensor Y
     or not. The input tensor Y should be two dimension. When
-    set trans_y=true, it would transpose Y. For instant: Y with shpae
+    set trans_y=true, it would transpose Y. For instant: Y with shape
     [d0, d1] -> [d1, d0].)DOC")
         .SetDefault(false);
 
@@ -142,7 +140,7 @@ class FusedGemmEpilogueGradOpMaker : public framework::OpProtoAndCheckerMaker {
 
     AddComment(R"DOC(
 FusedGemmEpilogueGrad Operator
-This operator is used to perform backward of Elementwise_add(Matmul(Activeation(X), Y), bias).
+This operator is used to perform backward of Elementwise_add(Matmul(Activation(X), Y), bias).
 It is equal to Activation (None, ReLU or GeLU) + paddle.nn.Linear.
 
 Note:
@@ -177,8 +175,7 @@ class FusedGemmEpilogueOpGradMaker : public framework::SingleGradOpMaker<T> {
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 DECLARE_INFER_SHAPE_FUNCTOR(fused_gemm_epilogue,

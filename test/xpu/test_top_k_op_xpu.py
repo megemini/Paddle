@@ -1,4 +1,4 @@
-#   Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
+#   Copyright (c) 2025 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,37 +27,26 @@ import paddle
 paddle.enable_static()
 
 
-def random_unique_float(row, k, dtype):
-    # create a random float array with 10x length
-    arr = np.random.uniform(-10.0, 10.0, int(row * k * 10)).astype(dtype)
-    arr = np.unique(arr)
-    assert (
-        arr.shape[0] >= row * k
-    ), "failed to create enough unique values: %d vs %d" % (
-        arr.shape[0],
-        row * k,
-    )
-    arr = arr[: row * k]
-    np.random.shuffle(arr)
-    arr = arr.reshape(row, k)
-    return arr
+def api_wrapper(x, k):
+    return paddle._legacy_C_ops.top_k(x, "k", k)
 
 
-class XPUTestTopkOP(XPUOpTestWrapper):
+class XPUTestTopKOp(XPUOpTestWrapper):
     def __init__(self):
         self.op_name = 'top_k'
         self.use_dynamic_create_class = False
 
-    class TestXPUTopkOP(XPUOpTest):
+    class TestTopkOp(XPUOpTest):
         def setUp(self):
             self.place = paddle.XPUPlace(0)
+            self.variable_k = False
+            self.op_type = "top_k"
+            self.python_api = api_wrapper
+            self.init_args()
             self.init_dtype()
-            self.op_type = 'top_k'
-            self.set_case()
 
-            # generate UNIQUE float values as input, in order to prevent the following potential problem: x[i] and x[j] are IDENTICAL float values, the result of cpu index is [i, j] while the xpu result is [j, i]. Both of them are correct but diff in numpy compare.
             k = self.top_k
-            input = random_unique_float(self.row, k, self.dtype)
+            input = np.random.random((self.row, k)).astype(self.dtype)
             output = np.ndarray((self.row, k))
             indices = np.ndarray((self.row, k)).astype("int64")
             self.inputs = {'X': input}
@@ -77,45 +66,20 @@ class XPUTestTopkOP(XPUOpTestWrapper):
         def init_dtype(self):
             self.dtype = self.in_type
 
-        def set_case(self):
-            self.variable_k = False
-            self.row = 16
-            self.top_k = 8
-
         def test_check_output(self):
             self.check_output_with_place(self.place)
 
         def test_check_grad(self):
             self.check_grad_with_place(self.place, ['X'], 'Out')
 
-    class TestTopk1(TestXPUTopkOP):
-        def set_case(self):
-            self.variable_k = True
+        def init_args(self):
             self.row = 100
             self.top_k = 1
-
-    class TestTopk2(TestXPUTopkOP):
-        def set_case(self):
-            self.variable_k = False
-            self.row = 16
-            self.top_k = 256
-
-    class TestTopk3(TestXPUTopkOP):
-        def set_case(self):
-            self.variable_k = True
-            self.row = 10
-            self.top_k = 512
-
-    class TestTopk4(TestXPUTopkOP):
-        def set_case(self):
-            self.variable_k = False
-            self.row = 5
-            self.top_k = 511
 
 
 support_types = get_xpu_op_support_types('top_k')
 for stype in support_types:
-    create_test_class(globals(), XPUTestTopkOP, stype)
+    create_test_class(globals(), XPUTestTopKOp, stype)
 
 if __name__ == "__main__":
     unittest.main()

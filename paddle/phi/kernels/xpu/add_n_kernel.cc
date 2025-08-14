@@ -28,6 +28,7 @@ void AddNKernel(const Context& dev_ctx,
   using XPUType = typename XPUTypeTrait<T>::Type;
   size_t in_num = x.size();
   dev_ctx.template Alloc<T>(out);
+  if (out && out->numel() == 0) return;
 
   bool in_place = false;
   if (x.size() > 0 && x[0]->initialized() && DenseTensor::classof(x[0])) {
@@ -62,10 +63,10 @@ void AddNKernel(const Context& dev_ctx,
       auto& in_t = *(static_cast<const SelectedRows*>(x[i]));
       functor(dev_ctx, in_t, out);
     } else {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Expected type of Input(X) of %d-th must be Tensor, "
           "SelectedRows. But got "
-          "unsupport type: %s.",
+          "unsupported type: %s.",
           x[i]->type_info().name()));
     }
   }
@@ -75,8 +76,8 @@ void AddNKernel(const Context& dev_ctx,
   } else if (ptrs.size() < x.size()) {
     xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
     XPUType* out_t = RAII_GUARD.alloc_l3_or_gm<XPUType>(out->numel());
-    int r = xpu::sum(dev_ctx.x_context(), ptrs, out_t, out->numel());
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "sum");
+    int r = xpu::add_n(dev_ctx.x_context(), ptrs, out_t, out->numel());
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "add_n");
 
     r = xpu::add(dev_ctx.x_context(),
                  reinterpret_cast<const XPUType*>(out->data<T>()),
@@ -85,12 +86,12 @@ void AddNKernel(const Context& dev_ctx,
                  out->numel());
     PADDLE_ENFORCE_XDNN_SUCCESS(r, "add");
   } else {
-    int r = xpu::sum(dev_ctx.x_context(),
-                     ptrs,
-                     reinterpret_cast<XPUType*>(out->data<T>()),
-                     out->numel());
+    int r = xpu::add_n(dev_ctx.x_context(),
+                       ptrs,
+                       reinterpret_cast<XPUType*>(out->data<T>()),
+                       out->numel());
 
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "sum");
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "add_n");
   }
 }
 
@@ -134,7 +135,7 @@ void AddNArrayKernel(const Context& dev_ctx,
           PADDLE_ENFORCE_EQ(
               out->at(j).lod(),
               in_array->at(j).lod(),
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "The lod message between inputs[%d] and"
                   " outputs[%d] must be same, but now is not same.",
                   j,
@@ -146,12 +147,12 @@ void AddNArrayKernel(const Context& dev_ctx,
           ptrs.push_back(
               reinterpret_cast<const XPUType*>(out->at(j).data<T>()));
 
-          // int sum(Context* ctx, const std::vector<const T*>& x_list, T*
-          // y, int len);
-          int r = xpu::sum(dev_ctx.x_context(),
-                           ptrs,
-                           reinterpret_cast<XPUType*>(out->at(j).data<T>()),
-                           out->at(j).numel());
+          // int sum(Context* xpu_ctx, const std::vector<const T*>& x_list, T*
+          // y, int64_t len);
+          int r = xpu::add_n(dev_ctx.x_context(),
+                             ptrs,
+                             reinterpret_cast<XPUType*>(out->at(j).data<T>()),
+                             out->at(j).numel());
           PADDLE_ENFORCE_XDNN_SUCCESS(r, "sum");
         }
       }
@@ -160,11 +161,17 @@ void AddNArrayKernel(const Context& dev_ctx,
 }
 }  // namespace phi
 
-PD_REGISTER_KERNEL(
-    add_n, XPU, ALL_LAYOUT, phi::AddNKernel, float, phi::dtype::float16) {}
+PD_REGISTER_KERNEL(add_n,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::AddNKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
 PD_REGISTER_KERNEL(add_n_array,
                    XPU,
                    ALL_LAYOUT,
                    phi::AddNArrayKernel,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}

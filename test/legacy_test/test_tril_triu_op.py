@@ -14,12 +14,11 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16, get_device_place
 
 import paddle
 from paddle import base, tensor
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TrilTriuOpDefaultTest(OpTest):
@@ -39,13 +38,15 @@ class TrilTriuOpDefaultTest(OpTest):
             'lower': True if self.real_op_type == 'tril' else False,
         }
         self.outputs = {
-            'Out': self.real_np_op(self.X, self.diagonal)
-            if self.diagonal
-            else self.real_np_op(self.X)
+            'Out': (
+                self.real_np_op(self.X, self.diagonal)
+                if self.diagonal
+                else self.real_np_op(self.X)
+            )
         }
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
         self.check_grad(['X'], 'Out', check_pir=True)
@@ -116,7 +117,7 @@ class TrilTriuOpDefaultTestBF16(TrilTriuOpDefaultTest):
 def case_generator(op_type, Xshape, diagonal, expected, dtype):
     """
     Generate testcases with the params shape of X, diagonal and op_type.
-    If arg`expercted` is 'success', it will register an Optest case and expect to pass.
+    If arg `expected` is 'success', it will register an OpTest case and expect to pass.
     Otherwise, it will register an API case and check the expect failure.
     """
     cls_name = (
@@ -241,7 +242,6 @@ for dtype in ["float64", "float16", "bfloat16", "complex64", "complex128"]:
 class TestTrilTriuOpAPI(unittest.TestCase):
     """test case by using API and has -1 dimension"""
 
-    @test_with_pir_api
     def test_api(self):
         paddle.enable_static()
 
@@ -261,11 +261,7 @@ class TestTrilTriuOpAPI(unittest.TestCase):
                     ).astype(dtype)
                 tril_out, triu_out = tensor.tril(x), tensor.triu(x)
 
-                place = (
-                    base.CUDAPlace(0)
-                    if base.core.is_compiled_with_cuda()
-                    else base.CPUPlace()
-                )
+                place = get_device_place()
                 exe = base.Executor(place)
                 tril_out, triu_out = exe.run(
                     prog,
@@ -287,7 +283,7 @@ class TestTrilTriuOpAPI(unittest.TestCase):
                         np.random.uniform(-1, 1, [1, 9, 9, 4])
                         + 1j * np.random.uniform(-1, 1, [1, 9, 9, 4])
                     ).astype(dtype)
-                x = base.dygraph.to_variable(data)
+                x = paddle.to_tensor(data)
                 tril_out, triu_out = (
                     tensor.tril(x).numpy(),
                     tensor.triu(x).numpy(),
@@ -295,7 +291,6 @@ class TestTrilTriuOpAPI(unittest.TestCase):
                 np.testing.assert_allclose(tril_out, np.tril(data), rtol=1e-05)
                 np.testing.assert_allclose(triu_out, np.triu(data), rtol=1e-05)
 
-    @test_with_pir_api
     def test_base_api(self):
         paddle.enable_static()
 
@@ -315,17 +310,68 @@ class TestTrilTriuOpAPI(unittest.TestCase):
                     ).astype(dtype)
                 triu_out = paddle.triu(x)
 
-                place = (
-                    base.CUDAPlace(0)
-                    if base.core.is_compiled_with_cuda()
-                    else base.CPUPlace()
-                )
+                place = get_device_place()
                 exe = base.Executor(place)
                 triu_out = exe.run(
                     prog,
                     feed={"x": data},
                     fetch_list=[triu_out],
                 )
+
+
+class TestTrilZeroSizeShape(TrilTriuOpDefaultTest):
+    def initTestCase(self):
+        self.real_op_type = 'tril'
+        self.diagonal = 0
+        self.X = np.random.rand(0, 3, 9, 4).astype(np.float64)
+
+
+class TestTriuZeroSizeShape(TrilTriuOpDefaultTest):
+    def initTestCase(self):
+        self.real_op_type = 'triu'
+        self.diagonal = 0
+        self.X = np.random.rand(0, 3, 9, 4).astype(np.float64)
+
+
+class TestTrilTriu_ZeroDimGrad(OpTest):
+    def setUp(self):
+        self.op_type = 'tril_triu'
+        self.real_op_type = 'tril'
+        self.diagonal = 0
+        self.inputs = {'X': np.random.randn(0, 3, 9, 4).astype('float64')}
+        self.attrs = {
+            'diagonal': self.diagonal,
+            'lower': True if self.real_op_type == 'tril' else False,
+        }
+        self.outputs = {
+            'Out': getattr(np, self.real_op_type)(
+                self.inputs['X'], self.diagonal
+            )
+        }
+        self.python_api = (
+            paddle.tril if self.real_op_type == 'tril' else paddle.triu
+        )
+
+    def test_check_grad(self):
+        self.check_grad(['X'], 'Out', check_pir=True)
+
+
+class TestTrilTriu_ZeroDimGrad_Triu(OpTest):
+    def setUp(self):
+        self.op_type = 'tril_triu'
+        self.real_op_type = 'triu'
+        self.diagonal = 0
+        self.inputs = {'X': np.random.randn(0, 3, 9, 4).astype('float64')}
+        self.attrs = {'diagonal': self.diagonal, 'lower': False}
+        self.outputs = {
+            'Out': getattr(np, self.real_op_type)(
+                self.inputs['X'], self.diagonal
+            )
+        }
+        self.python_api = paddle.triu
+
+    def test_check_grad(self):
+        self.check_grad(['X'], 'Out', check_pir=True)
 
 
 if __name__ == '__main__':

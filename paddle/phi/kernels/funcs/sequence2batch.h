@@ -36,7 +36,7 @@ class CopyMatrixRowsFunctor {
   // If is_src_index is false,
   // copy the input src to the indexed rows of output dst.
   // The indexed rows are based on the input index.
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& src,
                   phi::Vector<size_t> index_lod,
                   phi::DenseTensor* dst,
@@ -44,7 +44,7 @@ class CopyMatrixRowsFunctor {
 };
 
 template <typename DeviceContext, typename T>
-class LoDTensor2BatchFunctor {
+class DenseTensor2BatchFunctor {
   // Calculate the length of each sequence and
   // sort sequence index by the length.
   // example:  sequences = {s0, s1, s2}
@@ -60,7 +60,7 @@ class LoDTensor2BatchFunctor {
   };
 
  public:
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& lod_tensor,
                   phi::DenseTensor* batch,
                   bool is_cal_batch_lod,
@@ -70,28 +70,28 @@ class LoDTensor2BatchFunctor {
       PADDLE_ENFORCE_GT(
           lods.size(),
           2UL,
-          phi::errors::InvalidArgument(
-              "The LoD of LoDTensor should inlcude at least 2-level "
+          common::errors::InvalidArgument(
+              "The LoD of DenseTensor should include at least 2-level "
               "sequence information, but got the LoD level is %lu. Please "
               "check the input value.",
               lods.size()));
       PADDLE_ENFORCE_EQ(
           lods[1].size(),
           static_cast<size_t>(lod_tensor.dims()[0]),
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The LoD information should be consistent with the dims, but got "
               "%lu != %lu. Please check the input value.",
               lods[1].size(),
               static_cast<size_t>(lod_tensor.dims()[0])));
       CopyMatrixRowsFunctor<DeviceContext, T> to_batch;
-      to_batch(context, lod_tensor, lods[1], batch, true);
+      to_batch(dev_ctx, lod_tensor, lods[1], batch, true);
       return;
     }
 
     auto lods = lod_tensor.lod();
     PADDLE_ENFORCE_EQ(lods.size(),
                       1UL,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Only support one level sequence now, but got the "
                           "LoD level is %lu. Please check the input value.",
                           lods.size()));
@@ -129,19 +129,19 @@ class LoDTensor2BatchFunctor {
     //                     0 is the first sequence,
     //                     2 is the third sequence.
     // The max_seqlen represents batch size after rearranging the
-    // input LodTensor. It is also the maximum length of input sequence.
+    // input DenseTensor. It is also the maximum length of input sequence.
 
-    phi::LoD batch_lods;
+    phi::LegacyLoD batch_lods;
     batch_lods.emplace_back(std::vector<size_t>{0});
     batch_lods.emplace_back(std::vector<size_t>{0});
     batch_lods.emplace_back(std::vector<size_t>{0});
 
-    // batch_lods[0] is the start positions for batch LoDTensor
+    // batch_lods[0] is the start positions for batch DenseTensor
     size_t max_seqlen = seq_info[0].length;
     batch_lods[0].resize(max_seqlen + 1);
-    // batch_lods[1] is the raw index in the input LoDTensor
+    // batch_lods[1] is the raw index in the input DenseTensor
     batch_lods[1].resize(static_cast<size_t>(lod_tensor.dims()[0]));
-    // batch_lods[2] is the sort order for the input LoDTensor.
+    // batch_lods[2] is the sort order for the input DenseTensor.
     batch_lods[2].resize(seq_info.size());
 
     size_t* batch_starts = batch_lods[0].data();
@@ -169,35 +169,35 @@ class LoDTensor2BatchFunctor {
     batch->set_lod(batch_lods);
 
     CopyMatrixRowsFunctor<DeviceContext, T> to_batch;
-    to_batch(context, lod_tensor, batch_lods[1], batch, true);
+    to_batch(dev_ctx, lod_tensor, batch_lods[1], batch, true);
   }
 };
 
 template <typename DeviceContext, typename T>
-class Batch2LoDTensorFunctor {
+class Batch2DenseTensorFunctor {
  public:
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& batch,
                   phi::DenseTensor* lod_tensor) const {
     auto in_lod = batch.lod();
     PADDLE_ENFORCE_GT(
         in_lod.size(),
         2UL,
-        phi::errors::InvalidArgument(
-            "The LoD of LoDTensor should inlcude at least 2-level "
+        common::errors::InvalidArgument(
+            "The LoD of DenseTensor should include at least 2-level "
             "sequence information, but got the LoD level is %lu. Please check "
             "the input value.",
             in_lod.size()));
     PADDLE_ENFORCE_EQ(
         in_lod[1].size(),
         static_cast<size_t>(lod_tensor->dims()[0]),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The LoD information should be consistent with the dims, but got "
             "%lu != %lu. Please check the input value.",
             in_lod[1].size(),
             static_cast<size_t>(lod_tensor->dims()[0])));
     CopyMatrixRowsFunctor<DeviceContext, T> to_seq;
-    to_seq(context, batch, in_lod[1], lod_tensor, false);
+    to_seq(dev_ctx, batch, in_lod[1], lod_tensor, false);
   }
 };
 

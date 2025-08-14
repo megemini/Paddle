@@ -13,6 +13,7 @@
 
 import os
 
+import paddle
 from paddle import static
 from paddle.base import core
 from paddle.framework.ir import apply_build_strategy
@@ -101,9 +102,9 @@ class RawProgramOptimizer(MetaOptimizerBase):
                 continue
 
             block.append_op(
-                type='c_broadcast',
-                inputs={'X': param},
-                outputs={'Out': param},
+                type='broadcast',
+                inputs={'x': param},
+                outputs={'out': param},
                 attrs={
                     'ring_id': ring_id,
                     'root': 0,
@@ -257,11 +258,12 @@ class RawProgramOptimizer(MetaOptimizerBase):
         for i, (p, g) in enumerate(zip(param_vars, grad_vars)):
             gm_block._insert_op(
                 first_optimize_op_idx + insert_op_num,
-                type="c_allreduce_sum",
-                inputs={'X': g},
-                outputs={'Out': g},
+                type="all_reduce",
+                inputs={'x': g},
+                outputs={'out': g},
                 attrs={
                     'ring_id': ring_id,
+                    'reduce_type': paddle.distributed.ReduceOp.SUM,
                     OP_ROLE_KEY: OpRole.Backward,
                 },
             )
@@ -333,11 +335,12 @@ class RawProgramOptimizer(MetaOptimizerBase):
 
                     block._insert_op(
                         idx + offset,
-                        type='c_allreduce_sum',
-                        inputs={'X': grad},
-                        outputs={'Out': grad},
+                        type='all_reduce',
+                        inputs={'x': grad},
+                        outputs={'out': grad},
                         attrs={
                             'ring_id': ring_id,
+                            'reduce_type': paddle.distributed.ReduceOp.SUM,
                             OP_ROLE_KEY: OpRole.Backward,
                         },
                     )
@@ -379,7 +382,7 @@ class RawProgramOptimizer(MetaOptimizerBase):
                         continue
                     param_grads.append((param, grad))
 
-        outputs_name_to_idx = self.__get_ouputs_name_to_idx(
+        outputs_name_to_idx = self.__get_outputs_name_to_idx(
             first_backward_idx, block
         )
 
@@ -440,12 +443,12 @@ class RawProgramOptimizer(MetaOptimizerBase):
             )
             block._insert_op_without_sync(
                 after_idx + 1,
-                type='c_allreduce_sum',
-                inputs={'X': fused_var},
-                outputs={'Out': fused_var},
+                type='all_reduce',
+                inputs={'x': fused_var},
+                outputs={'out': fused_var},
                 attrs={
                     'ring_id': ring_id,
-                    'use_calc_stream': self.calc_comm_same_stream,
+                    'reduce_type': paddle.distributed.ReduceOp.SUM,
                     OP_ROLE_KEY: OpRole.Backward,
                 },
             )
@@ -462,8 +465,14 @@ class RawProgramOptimizer(MetaOptimizerBase):
             for i in range(len(grad_param_segments)):
                 while (
                     block.ops[idx].type != 'c_allreduce_sum'
-                    or fused_vars[i].name not in block.ops[idx].input_arg_names
-                ):
+                    and (
+                        not (
+                            block.ops[idx].type == 'all_reduce'
+                            and block.ops[idx].attr('reduce_type')
+                            == paddle.distributed.ReduceOp.SUM
+                        )
+                    )
+                ) or fused_vars[i].name not in block.ops[idx].input_arg_names:
                     idx += 1
                 grad_segment, param_segment = grad_param_segments[i]
                 for grad in grad_segment:
@@ -476,7 +485,7 @@ class RawProgramOptimizer(MetaOptimizerBase):
                     idx += 1
 
         # update the outputs_name_to_idx after insertion of sync/allreduce ops
-        outputs_name_to_idx = self.__get_ouputs_name_to_idx(
+        outputs_name_to_idx = self.__get_outputs_name_to_idx(
             first_backward_idx, block
         )
         # the before_idx is not guaranteed sorted, therefore we have to find the
@@ -530,7 +539,7 @@ class RawProgramOptimizer(MetaOptimizerBase):
                 break
         block._sync_with_cpp()
 
-    def __get_ouputs_name_to_idx(self, first_backward_idx, block):
+    def __get_outputs_name_to_idx(self, first_backward_idx, block):
         # Each item of outputs_name_to_idx is a pair of idx.
         # The first entry of this pair is the idx of the first op generates the grad,
         # which is used to indicate the position to insert coalesce op.

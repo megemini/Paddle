@@ -15,12 +15,9 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest
+from op_test import OpTest, get_device_place
 
 import paddle
-from paddle import base
-from paddle.base import core
-from paddle.static import Program, program_guard
 
 paddle.enable_static()
 
@@ -54,8 +51,11 @@ class TestRandintOp(OpTest):
 
 
 class TestRandintOpError(unittest.TestCase):
+
     def test_errors(self):
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             self.assertRaises(TypeError, paddle.randint, 5, shape=np.array([2]))
             self.assertRaises(TypeError, paddle.randint, 5, dtype='float32')
             self.assertRaises(ValueError, paddle.randint, 5, 5)
@@ -66,14 +66,6 @@ class TestRandintOpError(unittest.TestCase):
             self.assertRaises(
                 TypeError, paddle.randint, 5, shape=[shape_tensor]
             )
-
-    def test_pir_error(self):
-        with paddle.pir_utils.IrGuard():
-            self.assertRaises(TypeError, paddle.randint, 5, shape=np.array([2]))
-            self.assertRaises(TypeError, paddle.randint, 5, dtype='float32')
-            self.assertRaises(ValueError, paddle.randint, 5, 5)
-            self.assertRaises(ValueError, paddle.randint, -5)
-            self.assertRaises(ValueError, paddle.randint, 5, shape=['2'])
 
 
 class TestRandintOp_attr_tensorlist(OpTest):
@@ -125,7 +117,9 @@ class TestRandint_attr_tensor(OpTest):
 # Test python API
 class TestRandintAPI(unittest.TestCase):
     def test_api(self):
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             # results are from [0, 5).
             out1 = paddle.randint(5)
             # shape is a list and dtype is 'int32'
@@ -150,11 +144,7 @@ class TestRandintAPI(unittest.TestCase):
                 low=1, high=1000, shape=var_shape, dtype='int64'
             )
 
-            place = (
-                paddle.CUDAPlace(0)
-                if core.is_compiled_with_cuda()
-                else paddle.CPUPlace()
-            )
+            place = get_device_place()
             exe = paddle.static.Executor(place)
             outs = exe.run(
                 feed={'var_shape': np.array([100, 100]).astype('int64')},
@@ -230,16 +220,18 @@ class TestRandintAPI_ZeroDim(unittest.TestCase):
         paddle.enable_static()
 
     def test_static(self):
-        with base.program_guard(base.Program(), base.Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             x = paddle.randint(-10, 10, [])
 
             # Test compile shape
-            self.assertEqual(x.shape, ())
+            self.assertEqual(tuple(x.shape), ())
 
             # Test runtime shape
-            exe = base.Executor()
+            exe = paddle.static.Executor()
             result = exe.run(fetch_list=[x])
-            self.assertEqual(result[0].shape, ())
+            self.assertEqual(tuple(result[0].shape), ())
 
         paddle.enable_static()
 

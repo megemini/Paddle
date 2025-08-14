@@ -25,8 +25,7 @@
 #include "paddle/phi/kernels/elementwise_divide_kernel.h"
 #include "paddle/phi/kernels/full_kernel.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 bool PToRReshardFunction::IsSuitable(const DistTensor& in,
                                      const TensorDistAttr& out_dist_attr) {
@@ -47,10 +46,15 @@ void PToRReshardFunction::Eval(DeviceContext* dev_ctx,
                                const DistTensor& in,
                                const TensorDistAttr& out_dist_attr,
                                DistTensor* out) {
-  VLOG(3) << "Call PToRReshardFunction Eval";
+  VLOG(3) << "Call " << Name();
   const auto& in_dist_attr = in.dist_attr();
   const auto& in_process_mesh = in_dist_attr.process_mesh();
   const auto& in_process_ids = in_process_mesh.process_ids();
+  if (in_process_ids.size() == 1) {
+    SetValue(out, in.value());
+    SetDistProps(out, in.dims(), out_dist_attr);
+    return;
+  }
   const auto& in_partial_status = in_dist_attr.partial_status();
   auto in_reduce_type = in_partial_status.at(0);
   bool reduce_mean = false;
@@ -116,7 +120,7 @@ void PToRReshardFunctionCrossMesh::Eval(phi::DeviceContext* dev_ctx,
                                         const DistTensor& in,
                                         const TensorDistAttr& out_dist_attr,
                                         DistTensor* out) {
-  VLOG(3) << "Call PToRReshardFunctionCrossMesh Eval";
+  VLOG(3) << "Call " << Name();
   const auto& out_process_mesh = out_dist_attr.process_mesh();
 
   DistTensor tmp_result;
@@ -131,7 +135,7 @@ void PToRReshardFunctionCrossMesh::Eval(phi::DeviceContext* dev_ctx,
     PToRReshardFunction p_to_r_func;
     PADDLE_ENFORCE(
         p_to_r_func.IsSuitable(tmp_result, out_dist_attr),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Invoke the p to r reshard function is not valid from %s to %s.",
             tmp_result.dist_attr(),
             out_dist_attr));
@@ -142,5 +146,4 @@ void PToRReshardFunctionCrossMesh::Eval(phi::DeviceContext* dev_ctx,
   }
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

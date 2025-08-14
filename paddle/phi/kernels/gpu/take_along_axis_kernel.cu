@@ -18,6 +18,7 @@
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/utils/data_type.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/gather_scatter_functor.h"
 
 namespace phi {
@@ -28,8 +29,22 @@ void TakeAlongAxisKernel(const Context& dev_ctx,
                          const DenseTensor& index,
                          int axis,
                          DenseTensor* out) {
+  if (index.numel() == 0) {
+    dev_ctx.template Alloc<T>(out);
+    return;
+  }
+  if (x.numel() == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, common::vectorize(out->dims()), static_cast<T>(0), out);
+    return;
+  }
+
   out->Resize(index.dims());
   dev_ctx.template Alloc<T>(out);
+
+  if (out->numel() == 0) {
+    return;
+  }
 
   const auto& index_type = index.dtype();
   if (index_type == DataType::INT32) {
@@ -39,10 +54,10 @@ void TakeAlongAxisKernel(const Context& dev_ctx,
     phi::funcs::gpu_gather_kernel<T, int64_t>(
         x, axis, index, *out, true, dev_ctx);
   } else {
-    PADDLE_THROW(
-        phi::errors::InvalidArgument("The data type of input index is expected "
-                                     "to be int32 or int64, but recieved %s.",
-                                     phi::DataTypeToString(index_type)));
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "The data type of input index is expected "
+        "to be int32 or int64, but received %s.",
+        phi::DataTypeToString(index_type)));
   }
 }
 

@@ -190,7 +190,7 @@ def two_value(x):
     return x * 2, x + 1
 
 
-def diff_return_hepler(x):
+def diff_return_helper(x):
     if False:
         y = x + 1
         z = x - 1
@@ -201,7 +201,7 @@ def diff_return_hepler(x):
 
 def test_diff_return(x):
     x = paddle.to_tensor(x)
-    y, z = diff_return_hepler(x)
+    y, z = diff_return_helper(x)
     if y.shape[0] > 1:
         y = y + 1
     return y, z
@@ -261,6 +261,7 @@ class TestReturnBase(Dy2StTestBase):
         return res
 
     def _test_value_impl(self):
+        paddle.disable_static()
         with enable_to_static_guard(False):
             dygraph_res = self._run()
         static_res = self._run()
@@ -307,6 +308,7 @@ class TestReturnIf(Dy2StTestBase):
         return res
 
     def _test_value_impl(self):
+        paddle.disable_static()
         with enable_to_static_guard(False):
             dygraph_res = self._run()
         static_res = self._run()
@@ -322,8 +324,6 @@ class TestReturnIf(Dy2StTestBase):
         else:
             self.assertEqual(dygraph_res, static_res)
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different dtype
-    @test_legacy_only
     @test_ast_only
     def test_transformed_static_result(self):
         self.init_dygraph_func()
@@ -360,6 +360,7 @@ class TestReturnInWhile(Dy2StTestBase):
         return res
 
     def _test_value_impl(self):
+        paddle.disable_static()
         with enable_to_static_guard(False):
             dygraph_res = self._run()
         static_res = self._run()
@@ -408,6 +409,7 @@ class TestReturnIfElse(Dy2StTestBase):
         return res
 
     def _test_value_impl(self):
+        paddle.disable_static()
         with enable_to_static_guard(False):
             dygraph_res = self._run()
         static_res = self._run()
@@ -423,8 +425,6 @@ class TestReturnIfElse(Dy2StTestBase):
         else:
             self.assertEqual(dygraph_res, static_res)
 
-    # Why add test_legacy_only? : PIR not support if true and false branch output with different dtype
-    @test_legacy_only
     @test_ast_only
     def test_transformed_static_result(self):
         self.init_dygraph_func()

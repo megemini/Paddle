@@ -31,8 +31,8 @@ def depthwiseconv2dtranspose_forward_naive(input_, filter_, attrs):
     padding_algorithm = attrs['padding_algorithm']
     if padding_algorithm not in ["SAME", "VALID", "EXPLICIT"]:
         raise ValueError(
-            "Unknown Attr(padding_algorithm): '%s'. "
-            "It can only be 'SAME' or 'VALID'." % str(padding_algorithm)
+            f"Unknown Attr(padding_algorithm): '{padding_algorithm}'. "
+            "It can only be 'SAME' or 'VALID'."
         )
 
     if attrs['data_format'] == 'NHWC':
@@ -80,10 +80,10 @@ def depthwiseconv2dtranspose_forward_naive(input_, filter_, attrs):
         pad_h_0, pad_h_1 = pad[0], pad[1]
         pad_w_0, pad_w_1 = pad[2], pad[3]
 
-    d_bolck_h = dilations[0] * (f_h - 1) + 1
-    d_bolck_w = dilations[1] * (f_w - 1) + 1
-    out_h = (in_h - 1) * stride[0] + d_bolck_h
-    out_w = (in_w - 1) * stride[1] + d_bolck_w
+    d_block_h = dilations[0] * (f_h - 1) + 1
+    d_block_w = dilations[1] * (f_w - 1) + 1
+    out_h = (in_h - 1) * stride[0] + d_block_h
+    out_w = (in_w - 1) * stride[1] + d_block_w
     if 'output_size' in attrs:
         output_size = attrs['output_size']
         out_h = output_size[0] + pad_h_0 + pad_h_1
@@ -115,8 +115,8 @@ def depthwiseconv2dtranspose_forward_naive(input_, filter_, attrs):
                             ],
                             axis=0,
                         )
-                        i1, i2 = i * stride[0], i * stride[0] + d_bolck_h
-                        j1, j2 = j * stride[1], j * stride[1] + d_bolck_w
+                        i1, i2 = i * stride[0], i * stride[0] + d_block_h
+                        j1, j2 = j * stride[1], j * stride[1] + d_block_w
                         out[
                             n,
                             g * f_out_c + k,
@@ -146,7 +146,7 @@ class XPUTestDepthwiseConv2DTransposeOp(XPUOpTestWrapper):
             self.need_check_grad = True
             self.is_test = False
             self.use_cudnn = False
-            self.use_mkldnn = False
+            self.use_onednn = False
             self.output_size = None
             self.output_padding = []
             self.data_format = "NCHW"
@@ -168,7 +168,7 @@ class XPUTestDepthwiseConv2DTransposeOp(XPUOpTestWrapper):
                 'dilations': self.dilations,
                 'use_cudnn': self.use_cudnn,
                 'is_test': self.is_test,
-                'use_mkldnn': self.use_mkldnn,
+                'use_onednn': self.use_onednn,
                 'data_format': self.data_format,
             }
             if self.output_size is not None:

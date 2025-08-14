@@ -22,6 +22,7 @@ namespace runtime {
 
 using cinn::common::bfloat16;
 using cinn::common::float16;
+using cinn::common::float8e4m3;
 
 cinn_type_t ToRuntimeType(Type type) {
 #define SET_TYPE_CASE_ITEM(compiled_type, runtime_type) \
@@ -50,8 +51,11 @@ cinn_type_t ToRuntimeType(Type type) {
   SET_TYPE_CASE_ITEM(Float(64).PointerOf, cinn_type_of<double*>);
   SET_TYPE_CASE_ITEM(Float16().PointerOf, cinn_type_of<float16*>);
   SET_TYPE_CASE_ITEM(BFloat16().PointerOf, cinn_type_of<bfloat16*>);
+  SET_TYPE_CASE_ITEM(Float8e4m3().PointerOf, cinn_type_of<float8e4m3*>);
 
-  LOG(FATAL) << "Not supported type " << type;
+  std::stringstream ss;
+  ss << "Not supported type " << type;
+  PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   return cinn_unk_t();
 #undef SET_TYPE_CASE_ITEM
 }

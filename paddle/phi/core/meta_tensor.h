@@ -23,18 +23,18 @@ limitations under the License. */
 
 namespace phi {
 
-struct MetaConfig {
+struct TEST_API MetaConfig {
   bool is_runtime{true};
-  bool is_run_mkldnn_kernel{false};
+  bool is_run_onednn_kernel{false};
   MetaConfig() = default;
 
   // supporting implicit construction is easier to use
-  MetaConfig(bool is_runtime, bool is_run_mkldnn_kernel)
+  MetaConfig(bool is_runtime, bool is_run_onednn_kernel)
       : is_runtime(is_runtime),
-        is_run_mkldnn_kernel(is_run_mkldnn_kernel) {}  // NOLINT
+        is_run_onednn_kernel(is_run_onednn_kernel) {}  // NOLINT
 };
 
-class MetaTensor {
+class TEST_API MetaTensor {
  public:
   typedef void (*unspecified_bool_type)();
 
@@ -64,6 +64,7 @@ class MetaTensor {
 
   virtual int64_t numel() const;
   virtual DDim dims() const;
+  size_t size() const;  // Returns the number of tensors in TensorArray.
   DDim dims(int64_t index) const;
   virtual DataType dtype() const;
   virtual DataLayout layout() const;
@@ -74,7 +75,7 @@ class MetaTensor {
   virtual void set_strides(const DDim& strides);
 
   virtual void share_lod(const MetaTensor& meta_tensor);
-  void share_lod(const LoD& lod);
+  void share_lod(const LegacyLoD& legacy_lod);
   void share_lod(const MetaTensor& meta_tensor, int64_t index);
   virtual void share_meta(const MetaTensor& meta_tensor);
   virtual void share_dims(const MetaTensor& meta_tensor);
@@ -104,8 +105,8 @@ class MetaTensor {
  protected:
   // Because the lod in compiletime and runtime is different,
   // so `LoD` cannot in public methods
-  const LoD& lod() const;
-  const LoD& lod(int64_t index) const;
+  const LegacyLoD& lod() const;
+  const LegacyLoD& lod(int64_t index) const;
   TensorBase* tensor() const;
 
   TensorBase* tensor_ = nullptr;

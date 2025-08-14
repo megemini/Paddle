@@ -26,7 +26,7 @@ from paddle.quantization import ImperativeQuantAware
 
 
 def set_random_seed(seed, dp_id, rank_id):
-    """Set random seed for reproducability."""
+    """Set random seed for reproducibility."""
     random.seed(seed)
     np.random.seed(seed + dp_id)
     paddle.seed(seed + rank_id)
@@ -68,7 +68,7 @@ def get_cluster_from_args(selected_gpus):
 
     trainer_endpoints = []
     for ip in node_ips:
-        trainer_endpoints.append(["%s:%d" % (ip, port) for port in free_ports])
+        trainer_endpoints.append([f"{ip}:{port}" for port in free_ports])
     return get_cluster(node_ips, node_ip, trainer_endpoints, selected_gpus)
 
 

@@ -11,7 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#ifndef PADDLE_WITH_HIP
+#ifdef PADDLE_WITH_HIP
+#include <hip/hip_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#else
 #include <cuda_fp16.h>
 #include <cub/cub.cuh>
 #endif
@@ -20,17 +25,15 @@
 #include "paddle/phi/backends/gpu/gpu_dnn.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_utils.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/layer_norm_impl.cu.h"
-#ifndef PADDLE_WITH_HIP
 #include "paddle/phi/kernels/fusion/gpu/fused_dropout_helper.h"
-#endif
 
 namespace phi {
 namespace fusion {
 template <typename T, typename Context>
 void FusedBiasDropoutResidualLnGradKernel(
     const Context& dev_ctx,
-    const DenseTensor& y_grad,
     const DenseTensor& x,
     const DenseTensor& residual,
     const paddle::optional<DenseTensor>& bias,
@@ -40,6 +43,7 @@ void FusedBiasDropoutResidualLnGradKernel(
     const DenseTensor& ln_variance,
     const DenseTensor& bias_dropout_residual_out,
     const DenseTensor& dropout_mask_out,
+    const DenseTensor& y_grad,
     const float dropout_rate,
     const bool is_test,
     const bool dropout_fix_seed,
@@ -51,7 +55,6 @@ void FusedBiasDropoutResidualLnGradKernel(
     DenseTensor* bias_grad,
     DenseTensor* ln_scale_grad,
     DenseTensor* ln_bias_grad) {
-#ifndef PADDLE_WITH_HIP
   using U = LayerNormParamType<T>;
   auto* d_y_data = y_grad.data<T>();
   auto* ln_scale_data =
@@ -83,12 +86,41 @@ void FusedBiasDropoutResidualLnGradKernel(
            : dev_ctx.template Alloc<U>(ln_bias_grad,
                                        ln_bias_grad->numel() * sizeof(U)));
 
+  if (y_grad.numel() == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(x_grad->dims())), 0, x_grad);
+    if (ln_scale_grad)
+      phi::Full<T, Context>(
+          dev_ctx,
+          phi::IntArray(common::vectorize(ln_scale_grad->dims())),
+          0,
+          ln_scale_grad);
+    if (ln_bias_grad)
+      phi::Full<T, Context>(
+          dev_ctx,
+          phi::IntArray(common::vectorize(ln_bias_grad->dims())),
+          0,
+          ln_bias_grad);
+    if (residual_grad)
+      phi::Full<T, Context>(
+          dev_ctx,
+          phi::IntArray(common::vectorize(residual_grad->dims())),
+          0,
+          residual_grad);
+    if (bias_grad)
+      phi::Full<T, Context>(dev_ctx,
+                            phi::IntArray(common::vectorize(bias_grad->dims())),
+                            0,
+                            bias_grad);
+    return;
+  }
+
   const auto input_x_dims = y_grad.dims();
-  int bsz_seq = 1;
+  int64_t bsz_seq = 1;
   for (int i = 0; i < input_x_dims.size() - 1; i++) {
     bsz_seq *= input_x_dims[i];
   }
-  int dim_embed = input_x_dims[input_x_dims.size() - 1];
+  int64_t dim_embed = input_x_dims[input_x_dims.size() - 1];
   phi::fusion::DropoutParam dropout_param(
       dropout_fix_seed,
       0,
@@ -114,15 +146,19 @@ void FusedBiasDropoutResidualLnGradKernel(
       d_x_data,
       d_bias_data,
       d_residual_data);
-#else
-  PADDLE_THROW(phi::errors::Unimplemented(
-      "FusedBiasDropoutResidualLnGradKernel not surpport for rocm"));
-#endif
 }
 
 }  // namespace fusion
 }  // namespace phi
 
+#ifdef PADDLE_WITH_HIP
+PD_REGISTER_KERNEL(fused_bias_dropout_residual_layer_norm_grad,
+                   GPU,
+                   ALL_LAYOUT,
+                   phi::fusion::FusedBiasDropoutResidualLnGradKernel,
+                   float,
+                   phi::dtype::float16) {}
+#else
 PD_REGISTER_KERNEL(fused_bias_dropout_residual_layer_norm_grad,
                    GPU,
                    ALL_LAYOUT,
@@ -130,3 +166,4 @@ PD_REGISTER_KERNEL(fused_bias_dropout_residual_layer_norm_grad,
                    float,
                    double,
                    phi::dtype::float16) {}
+#endif

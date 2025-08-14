@@ -26,12 +26,21 @@ else()
 endif()
 
 if(NOT DEFINED ENV{runtime_include_dir})
-  message(
-    STATUS
-      "set runtime_include_dir: ${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/cuda")
-  set(ENV{runtime_include_dir} "${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/cuda")
-  add_definitions(
-    -DRUNTIME_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/cuda")
+  if(WITH_GPU)
+    message(
+      STATUS
+        "set runtime_include_dir: ${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/cuda")
+    set(ENV{runtime_include_dir} "${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/cuda")
+    add_definitions(
+      -DRUNTIME_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/cuda")
+  elseif(WITH_ROCM)
+    message(
+      STATUS
+        "set runtime_include_dir: ${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/hip")
+    set(ENV{runtime_include_dir} "${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/hip")
+    add_definitions(
+      -DRUNTIME_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/paddle/cinn/runtime/hip")
+  endif()
 endif()
 
 if(WITH_TESTING)
@@ -59,7 +68,7 @@ if(WITH_MKL)
   add_dependencies(cinn_mklml ${MKLML_PROJECT})
   add_definitions(-DCINN_WITH_MKL_CBLAS)
 endif()
-if(WITH_MKLDNN)
+if(WITH_ONEDNN)
   add_definitions(-DCINN_WITH_DNNL)
 endif()
 
@@ -87,9 +96,10 @@ if(WITH_GPU)
 
   message(
     STATUS
-      "copy paddle/cinn/common/float16.h paddle/cinn/common/bfloat16.h to $ENV{runtime_include_dir}"
+      "copy paddle/cinn/common/float16.h paddle/cinn/common/bfloat16.h paddle/cinn/common/float8e4m3.h to $ENV{runtime_include_dir}"
   )
   file(COPY paddle/cinn/common/float16.h paddle/cinn/common/bfloat16.h
+            paddle/cinn/common/float8e4m3.h
        DESTINATION $ENV{runtime_include_dir})
 
   find_library(CUDASTUB libcuda.so HINTS ${CUDA_TOOLKIT_ROOT_DIR}/lib64/stubs/
@@ -102,6 +112,25 @@ if(WITH_GPU)
                                          /usr/lib /usr/lib64 REQUIRED)
   find_library(CUSOLVER libcusolver.so HINTS ${CUDA_TOOLKIT_ROOT_DIR}/lib64
                                              /usr/lib /usr/lib64 REQUIRED)
+endif()
+
+if(WITH_SYCL)
+  message(STATUS "CINN Compile with SYCL support")
+  set(DPCPP_DIR ${PROJECT_SOURCE_DIR}/cmake/cinn)
+  find_package(DPCPP REQUIRED CONFIG)
+  add_definitions(-DCINN_WITH_SYCL)
+endif()
+
+if(WITH_ROCM)
+  message(STATUS "CINN Compile with ROCM support")
+  if(NOT WITH_SYCL)
+    add_definitions(-DCINN_WITH_HIP)
+  endif()
+  link_libraries(${ROCM_HIPRTC_LIB})
+
+  message(
+    STATUS "copy paddle/cinn/common/float16.h to $ENV{runtime_include_dir}")
+  file(COPY paddle/cinn/common/float16.h DESTINATION $ENV{runtime_include_dir})
 endif()
 
 set(cinnapi_src CACHE INTERNAL "" FORCE)
@@ -124,29 +153,12 @@ set(LINK_FLAGS
 set(global_test_args
     "--cinn_x86_builtin_code_root=${CMAKE_SOURCE_DIR}/paddle/cinn/backends")
 
-set(Python_VIRTUALENV FIRST)
-
-if(NOT PYTHON_EXECUTABLE)
-  find_package(PythonInterp ${PY_VERSION} REQUIRED)
-endif()
-
-if(NOT PYTHON_LIBRARIES)
-  find_package(PythonLibs ${PY_VERSION} REQUIRED)
-endif()
-
-message(STATUS "PYTHON_LIBRARIES: ${PYTHON_LIBRARIES}")
-message(STATUS "PYTHON_INCLUDE_DIR: ${PYTHON_INCLUDE_DIR}")
-
-include_directories(${PYTHON_INCLUDE_DIR})
-
 set(core_deps CACHE INTERNAL "" FORCE)
 set(hlir_src CACHE INTERNAL "" FORCE)
 
 # TODO(chenweihang): The logic later depends adding cinn subdirectory here,
 # but better to move to paddle/CMakeLists.txt
 add_subdirectory(paddle/cinn)
-
-set(core_src "${cinnapi_src}")
 
 cinn_cc_library(
   cinnapi
@@ -156,36 +168,27 @@ cinn_cc_library(
   DEPS
   glog
   ${llvm_libs}
-  cinn_framework_proto
   param_proto
-  auto_schedule_proto
   schedule_desc_proto
-  absl
+  tile_config_proto
   isl
   ginac
-  pybind
+  op_fusion
+  cinn_op_dialect
   ${jitify_deps})
+
 add_dependencies(cinnapi GEN_LLVM_RUNTIME_IR_HEADER ZLIB::ZLIB)
 add_dependencies(cinnapi GEN_LLVM_RUNTIME_IR_HEADER ${core_deps})
-if(NOT CINN_ONLY)
-  target_link_libraries(cinnapi op_dialect pir phi)
-  add_dependencies(cinnapi op_dialect pir phi)
-endif()
-
-target_link_libraries(cinnapi ${PYTHON_LIBRARIES})
+target_link_libraries(cinnapi op_dialect pir phi)
+add_dependencies(cinnapi op_dialect pir phi)
 
 if(WITH_MKL)
   target_link_libraries(cinnapi cinn_mklml)
   add_dependencies(cinnapi cinn_mklml)
-  if(WITH_MKLDNN)
-    target_link_libraries(cinnapi ${MKLDNN_LIB})
-    add_dependencies(cinnapi ${MKLDNN_PROJECT})
+  if(WITH_ONEDNN)
+    target_link_libraries(cinnapi ${ONEDNN_LIB})
+    add_dependencies(cinnapi ${ONEDNN_PROJECT})
   endif()
-endif()
-
-if(CINN_ONLY)
-  target_link_libraries(cinnapi ${flags_dep})
-  add_dependencies(cinnapi ${flags_dep})
 endif()
 
 if(WITH_GPU)
@@ -208,6 +211,8 @@ if(WITH_CUTLASS)
   add_dependencies(cinnapi cutlass)
 endif()
 
+set(core_src "${cinnapi_src}")
+
 function(gen_cinncore LINKTYPE)
   set(CINNCORE_TARGET cinncore)
   if(${LINKTYPE} STREQUAL "STATIC")
@@ -221,35 +226,26 @@ function(gen_cinncore LINKTYPE)
     DEPS
     glog
     ${llvm_libs}
-    cinn_framework_proto
     param_proto
-    auto_schedule_proto
     schedule_desc_proto
-    absl
+    tile_config_proto
     isl
-    ginac)
+    ginac
+    op_fusion
+    cinn_op_dialect
+    ${jitify_deps})
   add_dependencies(${CINNCORE_TARGET} GEN_LLVM_RUNTIME_IR_HEADER ZLIB::ZLIB)
   add_dependencies(${CINNCORE_TARGET} GEN_LLVM_RUNTIME_IR_HEADER ${core_deps})
-  if(NOT CINN_ONLY)
-    target_link_libraries(${CINNCORE_TARGET} op_dialect pir phi)
-    add_dependencies(${CINNCORE_TARGET} op_dialect pir phi)
-  endif()
-
-  add_dependencies(${CINNCORE_TARGET} pybind)
-  target_link_libraries(${CINNCORE_TARGET} ${PYTHON_LIBRARIES})
+  target_link_libraries(${CINNCORE_TARGET} op_dialect pir phi)
+  add_dependencies(${CINNCORE_TARGET} op_dialect pir phi)
 
   if(WITH_MKL)
     target_link_libraries(${CINNCORE_TARGET} cinn_mklml)
     add_dependencies(${CINNCORE_TARGET} cinn_mklml)
-    if(WITH_MKLDNN)
-      target_link_libraries(${CINNCORE_TARGET} ${MKLDNN_LIB})
-      add_dependencies(${CINNCORE_TARGET} ${MKLDNN_PROJECT})
+    if(WITH_ONEDNN)
+      target_link_libraries(${CINNCORE_TARGET} ${ONEDNN_LIB})
+      add_dependencies(${CINNCORE_TARGET} ${ONEDNN_PROJECT})
     endif()
-  endif()
-
-  if(CINN_ONLY)
-    target_link_libraries(${CINNCORE_TARGET} ${flags_dep})
-    add_dependencies(${CINNCORE_TARGET} ${flags_dep})
   endif()
 
   if(WITH_GPU)
@@ -261,16 +257,16 @@ function(gen_cinncore LINKTYPE)
       ${CUBLAS}
       ${CUDNN}
       ${CURAND}
-      ${CUSOLVER}
-      ${jitify_deps})
+      ${CUSOLVER})
+    # ${jitify_deps})
     if(NVTX_FOUND)
       target_link_libraries(${CINNCORE_TARGET} ${CUDA_NVTX_LIB})
     endif()
   endif()
 
   if(WITH_CUTLASS)
-    target_link_libraries(cinnapi cutlass)
-    add_dependencies(cinnapi cutlass)
+    target_link_libraries(${CINNCORE_TARGET} cutlass)
+    add_dependencies(${CINNCORE_TARGET} cutlass)
   endif()
 endfunction()
 
@@ -283,8 +279,11 @@ if(PUBLISH_LIBS)
   set(core_includes
       "${core_includes};paddle/cinn/runtime/cuda/cinn_cuda_runtime_source.cuh")
   set(core_includes
-      "${core_includes};paddle/utils/flags.h;paddle/utils/flags_native.h;paddle/utils/test_macros.h"
-  )
+      "${core_includes};paddle/cinn/runtime/hip/cinn_hip_runtime_source.h")
+  set(core_includes
+      "${core_includes};paddle/cinn/runtime/sycl/cinn_sycl_runtime_source.h")
+  set(core_includes
+      "${core_includes};paddle/common/flags.h;paddle/utils/test_macros.h")
   foreach(header ${core_includes})
     get_filename_component(prefix ${header} DIRECTORY)
     file(COPY ${header}
@@ -312,26 +311,11 @@ if(PUBLISH_LIBS)
   add_custom_command(
     TARGET cinncore_static
     POST_BUILD
-    COMMAND
-      cmake -E copy ${PROJECT_SOURCE_DIR}/tools/cinn/tutorials_demo/demo.cc
-      ${CMAKE_BINARY_DIR}/dist/demo.cc
-    COMMAND
-      cmake -E copy
-      ${PROJECT_SOURCE_DIR}/tools/cinn/tutorials_demo/build_demo.sh
-      ${CMAKE_BINARY_DIR}/dist/build_demo.sh
     COMMAND cmake -E copy ${CMAKE_BINARY_DIR}/libcinncore_static.a
             ${CMAKE_BINARY_DIR}/dist/cinn/lib/libcinncore_static.a
     COMMAND
-      cmake -E copy
-      ${CMAKE_BINARY_DIR}/paddle/cinn/frontend/paddle/libcinn_framework_proto.a
-      ${CMAKE_BINARY_DIR}/dist/cinn/lib/libcinn_framework_proto.a
-    COMMAND
       cmake -E copy ${CMAKE_BINARY_DIR}/paddle/cinn/hlir/pe/libparam_proto.a
       ${CMAKE_BINARY_DIR}/dist/cinn/lib/libparam_proto.a
-    COMMAND
-      cmake -E copy
-      ${CMAKE_BINARY_DIR}/paddle/cinn/auto_schedule/libauto_schedule_proto.a
-      ${CMAKE_BINARY_DIR}/dist/cinn/lib/libauto_schedule_proto.a
     COMMAND
       cmake -E copy
       ${CMAKE_BINARY_DIR}/paddle/cinn/ir/schedule/libschedule_desc_proto.a

@@ -34,23 +34,31 @@
 #include "paddle/phi/common/memory_utils.h"
 #include "paddle/phi/core/distributed/nccl_comm_context.h"
 #include "paddle/phi/core/distributed/nccl_tools.h"
-#endif
-#ifdef PADDLE_WITH_CUSTOM_DEVICE
-#include "paddle/phi/core/distributed/xccl_comm_context.h"
-#endif
-#ifdef PADDLE_WITH_XPU_BKCL
+#elif defined(PADDLE_WITH_XPU_BKCL)
 #include "paddle/phi/backends/xpu/xpu_info.h"
+#include "paddle/phi/common/memory_utils.h"
 #include "paddle/phi/core/distributed/bkcl_comm_context.h"
 #endif
 
-namespace phi {
-namespace distributed {
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+#include "paddle/phi/core/distributed/xccl_comm_context.h"
+#endif
+
+#if defined(PADDLE_WITH_FLAGCX)
+#include "paddle/phi/core/distributed/flagcx_comm_context.h"
+#include "paddle/phi/core/distributed/flagcx_tools.h"
+#endif
+
+namespace phi::distributed {
 
 int CommContextManager::device_id = -1;
 
 void CommContextManager::SetDeviceId(int dev_id) {
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
   phi::backends::gpu::SetDeviceId(dev_id);
+  CommContextManager::device_id = dev_id;
+#elif defined(PADDLE_WITH_XPU_BKCL)
+  phi::backends::xpu::SetXPUDeviceId(dev_id);
   CommContextManager::device_id = dev_id;
 #endif
 }
@@ -62,7 +70,9 @@ void CommContextManager::CreateNCCLCommContext(
     int rank,
     int size,
     const std::string& hash_key,
-    const P2POption* p2p_opt) {
+    const P2POption* p2p_opt,
+    int nccl_comm_init_option,
+    std::shared_ptr<phi::distributed::NCCLConfig> nccl_config_ptr) {
   auto& comm_context_manager = CommContextManager::GetInstance();
   if (comm_context_manager.Has(unique_comm_key)) {
     return;
@@ -91,8 +101,8 @@ void CommContextManager::CreateNCCLCommContext(
           << ", unique_comm_key: " << unique_comm_key
           << ", unique_key: " << unique_key
           << ", nccl_id: " << SerializeNCCLUniqueId(nccl_id);
-  auto nccl_comm_context =
-      std::make_unique<NCCLCommContext>(rank, size, nccl_id);
+  auto nccl_comm_context = std::make_unique<NCCLCommContext>(
+      rank, size, nccl_id, nccl_comm_init_option, nccl_config_ptr);
   if (CommContextManager::device_id != -1) {
     std::unique_ptr<phi::GPUContext> dev_ctx(
         new phi::GPUContext(phi::GPUPlace(CommContextManager::device_id)));
@@ -116,6 +126,38 @@ void CommContextManager::CreateNCCLCommContext(
 
   comm_context_manager.SetStore(store);
   comm_context_manager.Emplace(unique_comm_key, std::move(nccl_comm_context));
+}
+
+void CommContextManager::RecreateNCCLComm(const std::shared_ptr<Store>& store,
+                                          const std::string& unique_comm_key,
+                                          int rank,
+                                          const std::string& hash_key,
+                                          const P2POption* p2p_opt) {
+  auto& comm_context_manager = CommContextManager::GetInstance();
+
+  ncclUniqueId nccl_id;
+  if (rank == 0 || (p2p_opt && p2p_opt->is_p2p_op && p2p_opt->p2p_rank == 0)) {
+    PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclGetUniqueId(&nccl_id));
+  }
+
+  std::string unique_key = "NCCLCommContext/" + unique_comm_key + hash_key;
+  if (rank == 0 || (p2p_opt && p2p_opt->is_p2p_op && p2p_opt->p2p_rank == 0)) {
+    std::vector<uint8_t> nccl_id_wrapper(
+        reinterpret_cast<uint8_t*>(&nccl_id),
+        reinterpret_cast<uint8_t*>(&nccl_id) + NCCL_UNIQUE_ID_BYTES);
+    store->set(unique_key, nccl_id_wrapper);
+  } else {
+    const auto& nccl_id_wrapper = store->get(unique_key);
+    std::memcpy(&nccl_id, nccl_id_wrapper.data(), nccl_id_wrapper.size());
+  }
+
+  VLOG(3) << "RecreateNCCLComm nccl_id: " << SerializeNCCLUniqueId(nccl_id);
+
+  auto comm_context = static_cast<phi::distributed::NCCLCommContext*>(
+      comm_context_manager.Get(unique_comm_key));
+  comm_context->CreateNCCLComm(nccl_id);
+
+  comm_context_manager.SetStore(store);
 }
 #endif
 
@@ -148,6 +190,10 @@ void CommContextManager::CreateXCCLCommContext(
     int rank,
     int size,
     const std::string& hash_key) {
+  auto& comm_context_manager = CommContextManager::GetInstance();
+  if (comm_context_manager.Has(unique_comm_key)) {
+    return;
+  }
   phi::ccl::CCLRootId xccl_root_id;
   if (rank == 0) {
     phi::DeviceManager::CCLGetUniqueId(place.GetDeviceType(), &xccl_root_id);
@@ -167,7 +213,27 @@ void CommContextManager::CreateXCCLCommContext(
           << phi::ccl::SerializeXCCLUniqueId(xccl_root_id);
   auto xccl_comm_context =
       std::make_unique<XCCLCommContext>(place, rank, size, xccl_root_id);
-  auto& comm_context_manager = CommContextManager::GetInstance();
+  if (CommContextManager::device_id != -1) {
+    std::unique_ptr<phi::CustomContext> dev_ctx(
+
+        new phi::CustomContext(phi::CustomPlace(place)));
+    // dev_ctx->SetAllocator(phi::memory_utils::GetAllocator(
+    //     CommContextManager::device_id, dev_ctx->GetStream()));
+    // dev_ctx->SetHostAllocator(phi::memory_utils::GetHostAllocator());
+    // dev_ctx->SetZeroAllocator(
+    //     phi::memory_utils::GetZeroAllocator(CommContextManager::device_id));
+    // dev_ctx->SetHostZeroAllocator(phi::memory_utils::GetHostZeroAllocator());
+    // dev_ctx->SetPinnedAllocator(phi::memory_utils::GetPinnedAllocator());
+    // dev_ctx->PartialInitWithAllocator();
+    // auto compute_event =
+    //     phi::memory_utils::GetCudaEvent(CommContextManager::device_id);
+    // auto comm_event =
+    //     phi::memory_utils::GetCudaEvent(CommContextManager::device_id);
+
+    xccl_comm_context->SetDevContext(std::move(dev_ctx));
+    // xccl_comm_context->SetComputeEvent(std::move(compute_event));
+    // xccl_comm_context->SetCommEvent(std::move(comm_event));
+  }
   comm_context_manager.SetStore(store);
   comm_context_manager.Emplace(unique_comm_key, std::move(xccl_comm_context));
 }
@@ -186,7 +252,7 @@ void CommContextManager::CreateBKCLCommContext(
   }
   BKCLUniqueId bkcl_id;
   if (rank == 0) {
-    PADDLE_ENFORCE_XPU_SUCCESS(bkcl_get_unique_id(&bkcl_id));
+    PADDLE_ENFORCE_BKCL_SUCCESS(bkcl_get_unique_id(&bkcl_id));
   }
 
   std::string unique_key = "BKCLCommContext/" + unique_comm_key + hash_key;
@@ -206,10 +272,78 @@ void CommContextManager::CreateBKCLCommContext(
   auto bkcl_comm_context =
       std::make_unique<BKCLCommContext>(rank, size, bkcl_id);
 
+  if (CommContextManager::device_id != -1) {
+    std::unique_ptr<phi::XPUContext> dev_ctx(new phi::XPUContext(
+        phi::XPUPlace(CommContextManager::device_id), true));
+    dev_ctx->SetAllocator(phi::memory_utils::GetAllocator(
+        CommContextManager::device_id, dev_ctx->stream()));
+    dev_ctx->SetHostAllocator(phi::memory_utils::GetHostAllocator());
+    dev_ctx->SetZeroAllocator(
+        phi::memory_utils::GetZeroAllocator(CommContextManager::device_id));
+    dev_ctx->SetHostZeroAllocator(phi::memory_utils::GetHostZeroAllocator());
+    // XPUs do not have the concept of pinned memory,
+    // so the get_pinned_allocator function is not set.
+
+    // It currently does not support dev_ctx->PartialInitWithAllocator().
+    auto compute_event =
+        phi::memory_utils::GetXpuEvent(CommContextManager::device_id);
+    auto comm_event =
+        phi::memory_utils::GetXpuEvent(CommContextManager::device_id);
+
+    bkcl_comm_context->SetDevContext(std::move(dev_ctx));
+    bkcl_comm_context->SetComputeEvent(std::move(compute_event));
+    bkcl_comm_context->SetCommEvent(std::move(comm_event));
+  }
+
   comm_context_manager.SetStore(store);
   comm_context_manager.Emplace(unique_comm_key, std::move(bkcl_comm_context));
 }
 #endif
+
+#if defined(PADDLE_WITH_FLAGCX)
+void CommContextManager::CreateFlagcxCommContext(
+    const std::shared_ptr<Store>& store,
+    const std::string& unique_comm_key,
+    int rank,
+    int size,
+    const std::string& hash_key) {
+  auto& comm_context_manager = CommContextManager::GetInstance();
+  if (comm_context_manager.Has(unique_comm_key)) {
+    return;
+  }
+  flagcxHandlerGroup_t flagcx_handler;
+  phi::dynload::flagcxHandleInit(&flagcx_handler);
+  if (rank == 0) {
+    phi::dynload::flagcxGetUniqueId(&flagcx_handler->uniqueId);
+  }
+
+  std::string unique_key = "FlagcxCommContext/" + unique_comm_key + hash_key;
+  if (rank == 0) {
+    std::vector<uint8_t> flagcx_id_wrapper(
+        reinterpret_cast<uint8_t*>(flagcx_handler->uniqueId),
+        reinterpret_cast<uint8_t*>(flagcx_handler->uniqueId) +
+            sizeof(flagcxUniqueId));
+    store->set(unique_key, flagcx_id_wrapper);
+  } else {
+    const auto& flagcx_id_wrapper = store->get(unique_key);
+    std::memcpy(reinterpret_cast<uint8_t*>(flagcx_handler->uniqueId),
+                flagcx_id_wrapper.data(),
+                flagcx_id_wrapper.size());
+  }
+
+  VLOG(3) << "init FlagcxCommContext rank: " << rank << ", size: " << size
+          << ", unique_comm_key: " << unique_comm_key
+          << ", unique_key: " << unique_key << ", flagcx_id: "
+          << SerializeFlagcxUniqueId(*flagcx_handler->uniqueId);
+  auto flagcx_comm_context =
+      std::make_unique<FlagcxCommContext>(rank, size, flagcx_handler);
+  // TODO(changtao): find a way to manage different device context,
+  //  now we use cuda device context as default
+  comm_context_manager.SetStore(store);
+  comm_context_manager.Emplace(unique_comm_key, std::move(flagcx_comm_context));
+}
+#endif
+
 CommContext* CommContextManager::Emplace(
     const std::string& unique_comm_key,
     std::unique_ptr<CommContext> comm_context) {
@@ -233,12 +367,10 @@ CommContext* CommContextManager::Get(const std::string& unique_comm_key) const {
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 int CommContextManager::GetRingId(const ncclComm_t& comm) const {
-  for (auto iter = id_to_comm_context_.begin();
-       iter != id_to_comm_context_.end();
-       ++iter) {
-    if (static_cast<phi::distributed::NCCLCommContext*>(iter->second.get())
+  for (const auto& iter : id_to_comm_context_) {
+    if (static_cast<phi::distributed::NCCLCommContext*>(iter.second.get())
             ->GetNcclComm() == comm) {
-      return std::stoi(iter->first);
+      return std::stoi(iter.first);
     }
   }
   return -1;
@@ -269,5 +401,4 @@ std::vector<int> CommContextManager::GetGroupRanks(
   return pg_key_ranks_.at(pg_key);
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

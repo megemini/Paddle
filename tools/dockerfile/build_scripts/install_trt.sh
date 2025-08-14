@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,12 +30,17 @@ if [[ "$1" == "trt8034" && "$VERSION" == "11.2" ]];then
   wget -q --no-proxy https://paddle-ci.gz.bcebos.com/TRT/TensorRT-8.0.3.4.Linux.x86_64-gnu.cuda-11.3.cudnn8.2.tar.gz --no-check-certificate
   tar -zxf TensorRT-8.0.3.4.Linux.x86_64-gnu.cuda-11.3.cudnn8.2.tar.gz -C /usr/local
   cp -rf /usr/local/TensorRT-8.0.3.4/include/* /usr/include/ && cp -rf /usr/local/TensorRT-8.0.3.4/lib/* /usr/lib/
-  rm TensorRT-8.0.3.4.Linux.x86_64-gnu.cuda-11.3.cudnn8.2.tar.gz  
+  rm TensorRT-8.0.3.4.Linux.x86_64-gnu.cuda-11.3.cudnn8.2.tar.gz
 elif [[ "$1" == "trt8424" ]];then
    wget https://paddle-qa.bj.bcebos.com/nvidia/trt/TensorRT-8.4.2.4.tgz --no-check-certificate
    tar -zxf TensorRT-8.4.2.4.tgz -C /usr/local
    cp -rf /usr/local/TensorRT-8.4.2.4/include/* /usr/include/ && cp -rf /usr/local/TensorRT-8.4.2.4/lib/* /usr/lib/
    rm -f TensorRT-8.4.2.4.tgz
+elif [[ "$1" == "trt8616" && "$VERSION" == "11.8" ]];then
+  wget -q --no-proxy https://paddle-ci.gz.bcebos.com/TRT/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-11.8.tar.gz --no-check-certificate
+  tar -zxf TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-11.8.tar.gz -C /usr/local
+  cp -rf /usr/local/TensorRT-8.6.1.6/include/* /usr/include/ && cp -rf /usr/local/TensorRT-8.6.1.6/lib/* /usr/lib/
+  rm -f TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-11.8.tar.gz
 elif [[ "$1" == "trt8616" ]];then
   wget -q --no-proxy https://paddle-ci.gz.bcebos.com/TRT/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz --no-check-certificate
   tar -zxf TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz -C /usr/local
@@ -56,6 +61,11 @@ elif [[ "$1" == "trt8531" ]];then
   tar -zxf TensorRT-8.5.3.1.Linux.x86_64-gnu.cuda-11.8.cudnn8.6.tar.gz -C /usr/local
   cp -rf /usr/local/TensorRT-8.5.3.1/include/* /usr/include/ && cp -rf /usr/local/TensorRT-8.5.3.1/lib/* /usr/lib/
   rm -f TensorRT-8.5.3.1.Linux.x86_64-gnu.cuda-11.8.cudnn8.6.tar.gz
+elif [[ "$1" == "trt105018" ]];then
+  wget -q https://paddle-qa.bj.bcebos.com/nvidia/trt/TensorRT-10.5.0.18-cuda12.tgz --no-check-certificate --no-proxy
+  tar -zxf TensorRT-10.5.0.18-cuda12.tgz -C /usr/local
+  cp -rf /usr/local/TensorRT-10.5.0.18/include/* /usr/include/ && cp -rf /usr/local/TensorRT-10.5.0.18/lib/* /usr/lib/
+  rm -f TensorRT-10.5.0.18-cuda12.tgz
 elif [[ "$VERSION" == "11.2" ]];then
   wget -q --no-proxy https://paddle-ci.gz.bcebos.com/TRT/TensorRT7-cuda11.1-cudnn8.1.tar.gz --no-check-certificate
   tar -zxf TensorRT7-cuda11.1-cudnn8.1.tar.gz -C /usr/local

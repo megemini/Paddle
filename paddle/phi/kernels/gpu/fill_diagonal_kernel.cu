@@ -44,16 +44,20 @@ __global__ void fill_constant_kernel(const int64_t featuresize,
 }
 
 template <typename T, typename Context>
-void FillDiagonalKernel(const Context& ctx,
+void FillDiagonalKernel(const Context& dev_ctx,
                         const DenseTensor& x,
                         float value,
                         int offset,
                         bool wrap,
                         DenseTensor* out) {
+  if (out && out->numel() == 0) {
+    dev_ctx.template Alloc<T>(out);
+    return;
+  }
   const int64_t kMaxBlockDim = 512;
-  phi::Copy(ctx, x, ctx.GetPlace(), false, out);
+  phi::Copy(dev_ctx, x, dev_ctx.GetPlace(), false, out);
 
-  T* out_data = ctx.template Alloc<T>(out);
+  T* out_data = dev_ctx.template Alloc<T>(out);
   auto fill_val = static_cast<T>(value);
   T temp_var = static_cast<T>(fill_val);
 
@@ -61,7 +65,7 @@ void FillDiagonalKernel(const Context& ctx,
   auto out_dims = out->dims();
   auto strides = funcs::CalStride(out_dims);
 
-  // The wrap mode supported only the dims equels to 2; In wrap mode, the
+  // The wrap mode supported only the dims equals to 2; In wrap mode, the
   // value will be filled in cycles
   if (!wrap) {
     size = std::min(size, out_dims[1] * out_dims[1]);

@@ -19,12 +19,11 @@ import unittest
 import numpy as np
 import scipy
 import scipy.linalg
-from op_test import OpTest
+from op_test import OpTest, get_places
 
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def scipy_lu_unpack(A):
@@ -79,8 +78,8 @@ def Pmat_to_perm(Pmat_org, cut):
         permmat.append(permlst)
     Pivot = (
         np.array(permmat).reshape(
-            list(shape[:-2])
-            + [
+            [
+                *shape[:-2],
                 rows,
             ]
         )
@@ -106,7 +105,7 @@ def perm_to_Pmat(perm, dim):
         ones = paddle.eye(dim)
         nmat = paddle.scatter(ones, paddle.to_tensor(idlst), ones)
         oneslst.append(nmat)
-    return np.array(oneslst).reshape(list(pshape[:-1]) + [dim, dim])
+    return np.array(oneslst).reshape([*pshape[:-1], dim, dim])
 
 
 # m > n
@@ -133,6 +132,8 @@ class TestLU_UnpackOp(OpTest):
         self.python_out_sig = ["Pmat", "L", "U"]
         self.config()
         x = np.random.random(self.x_shape).astype(self.dtype)
+        if 'complex' in self.dtype:
+            x += 1j * np.random.random(self.x_shape).astype(self.dtype)
         if paddle.in_dynamic_mode():
             xt = paddle.to_tensor(x)
             lu, pivots = paddle.linalg.lu(xt)
@@ -215,6 +216,32 @@ class TestLU_UnpackOp4(TestLU_UnpackOp):
         self.dtype = "float64"
 
 
+# complex64
+class TestLU_UnpackOp5(TestLU_UnpackOp):
+    """
+    case 5
+    """
+
+    def config(self):
+        self.x_shape = [10, 12]
+        self.unpack_ludata = True
+        self.unpack_pivots = True
+        self.dtype = "complex64"
+
+
+# complex128
+class TestLU_UnpackOp6(TestLU_UnpackOp):
+    """
+    case 6
+    """
+
+    def config(self):
+        self.x_shape = [10, 12]
+        self.unpack_ludata = True
+        self.unpack_pivots = True
+        self.dtype = "complex128"
+
+
 class TestLU_UnpackAPI(unittest.TestCase):
     def setUp(self):
         np.random.seed(2022)
@@ -225,15 +252,18 @@ class TestLU_UnpackAPI(unittest.TestCase):
                 np_dtype = np.float32
             elif dtype == "float64":
                 np_dtype = np.float64
+            elif dtype == "complex64":
+                np_dtype = np.complex64
+            elif dtype == "complex128":
+                np_dtype = np.complex128
             a = np.random.rand(*shape).astype(np_dtype)
+            if dtype in {"complex64", "complex128"}:
+                a += 1j * np.random.rand(*shape).astype(np_dtype)
             m = a.shape[-2]
             n = a.shape[-1]
             min_mn = min(m, n)
 
-            places = [base.CPUPlace()]
-            if core.is_compiled_with_cuda():
-                places.append(base.CUDAPlace(0))
-            for place in places:
+            for place in get_places():
                 paddle.disable_static(place)
 
                 x = paddle.to_tensor(a, dtype=dtype)
@@ -256,11 +286,10 @@ class TestLU_UnpackAPI(unittest.TestCase):
             (3, 5, 5, 5),
             (4, 5, 5, 3),  # 4-dim Tensors
         ]
-        dtypes = ["float32", "float64"]
+        dtypes = ["float32", "float64", "complex64", "complex128"]
         for tensor_shape, dtype in itertools.product(tensor_shapes, dtypes):
             run_lu_unpack_dygraph(tensor_shape, dtype)
 
-    @test_with_pir_api
     def test_static(self):
         paddle.enable_static()
 
@@ -269,15 +298,18 @@ class TestLU_UnpackAPI(unittest.TestCase):
                 np_dtype = np.float32
             elif dtype == "float64":
                 np_dtype = np.float64
+            elif dtype == "complex64":
+                np_dtype = np.complex64
+            elif dtype == "complex128":
+                np_dtype = np.complex128
             a = np.random.rand(*shape).astype(np_dtype)
+            if dtype in {"complex64", "complex128"}:
+                a += 1j * np.random.rand(*shape).astype(np_dtype)
             m = a.shape[-2]
             n = a.shape[-1]
             min_mn = min(m, n)
 
-            places = [base.CPUPlace()]
-            if core.is_compiled_with_cuda():
-                places.append(base.CUDAPlace(0))
-            for place in places:
+            for place in get_places():
                 with paddle.static.program_guard(
                     paddle.static.Program(), paddle.static.Program()
                 ):
@@ -314,7 +346,7 @@ class TestLU_UnpackAPI(unittest.TestCase):
             (3, 5, 5, 5),
             (4, 5, 5, 3),  # 4-dim Tensors
         ]
-        dtypes = ["float32", "float64"]
+        dtypes = ["float32", "float64", "complex64", "complex128"]
         for tensor_shape, dtype in itertools.product(tensor_shapes, dtypes):
             run_lu_static(tensor_shape, dtype)
 
@@ -379,6 +411,28 @@ class TestLU_UnpackAPIError(unittest.TestCase):
                 paddle.linalg.lu_unpack(x, y, unpack_ludata, unpack_pivots)
 
             self.assertRaises(Exception, test_y_data)
+
+
+class TestLuUnpackAPI_ZeroSize(unittest.TestCase):
+    def test_dygraph_api(self):
+        for place in get_places():
+            paddle.disable_static(place)
+            x_np = np.random.random([2, 3, 0])
+            y_np = np.random.random([2, 3])
+            x = paddle.to_tensor(x_np)
+            x.stop_gradient = False
+            y = paddle.to_tensor(y_np)
+            out = paddle.linalg.lu_unpack(x, y)
+            np_out0 = np.array([np.eye(3) for _ in range(2)])
+            np_out1 = np.random.random([2, 3, 0])
+            np_out2 = np.random.random([2, 0, 0])
+            np.testing.assert_allclose(out[0].numpy(), np_out0)
+            np.testing.assert_allclose(out[1].numpy(), np_out1)
+            np.testing.assert_allclose(out[2].numpy(), np_out2)
+
+            paddle.sum(out[0]).backward()
+            np.testing.assert_allclose(x.grad.shape, x.shape)
+            paddle.enable_static()
 
 
 if __name__ == "__main__":

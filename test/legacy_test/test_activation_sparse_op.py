@@ -16,6 +16,7 @@ import unittest
 
 import numpy as np
 from op import Operator
+from op_test import get_places
 
 import paddle
 from paddle.base import core
@@ -51,10 +52,7 @@ class TestSparseSquareOp(unittest.TestCase):
         np.testing.assert_array_equal(result_array, np.square(np_array))
 
     def test_sparse_acti(self):
-        places = [core.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(core.CUDAPlace(0))
-        for place in places:
+        for place in get_places():
             self.check_with_place(place)
 
 
@@ -87,10 +85,7 @@ class TestSparseSqrtOp(unittest.TestCase):
         np.testing.assert_allclose(result_array, np.sqrt(np_array), rtol=1e-05)
 
     def test_sparse_acti(self):
-        places = [core.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(core.CUDAPlace(0))
-        for place in places:
+        for place in get_places():
             self.check_with_place(place)
 
 

@@ -17,6 +17,11 @@ endif()
 set(COMMON_LIB
     "${CMAKE_CURRENT_BINARY_DIR}/${COMMON_NAME}"
     CACHE FILEPATH "COMMON Library" FORCE)
+if(WIN32)
+  set(COMMON_LINK
+      "${CMAKE_CURRENT_BINARY_DIR}/common.lib"
+      CACHE FILEPATH "COMMON Import Library" FORCE)
+endif()
 
 set(COMMON_BUILD_TYPE
     SHARED
@@ -26,6 +31,5 @@ cc_library(common ${COMMON_BUILD_TYPE} SRCS ${common_srcs})
 if(WIN32)
   set_property(TARGET common PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
-
 # only used for libpaddle_inference.a
 cc_library(common_static STATIC SRCS ${common_srcs})

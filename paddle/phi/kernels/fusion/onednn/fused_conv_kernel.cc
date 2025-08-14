@@ -15,8 +15,7 @@
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/onednn/conv_function.h"
 
-namespace phi {
-namespace fusion {
+namespace phi::fusion {
 
 template <typename T, typename Context>
 void FusedConv2DKernel(const Context& dev_ctx,
@@ -30,12 +29,12 @@ void FusedConv2DKernel(const Context& dev_ctx,
                        const std::vector<int>& dilations,
                        int groups,
                        const std::string& data_format,
-                       const std::string& mkldnn_data_type,
+                       const std::string& onednn_data_type,
                        const std::string& fuse_activation,
                        bool fuse_residual_conn,
                        bool force_fp32_output,
                        DenseTensor* out) {
-  bool is_BFLOAT16 = mkldnn_data_type == "bfloat16";
+  bool is_BFLOAT16 = onednn_data_type == "bfloat16";
 
   ConvOnednn<T>(dev_ctx,
                 &input,
@@ -69,12 +68,12 @@ void FusedDepthwiseConv2DKernel(
     const std::vector<int>& dilations,
     int groups,
     const std::string& data_format,
-    const std::string& mkldnn_data_type,
+    const std::string& onednn_data_type,
     const std::string& fuse_activation,
     bool fuse_residual_conn,
     bool force_fp32_output,
     DenseTensor* out) {
-  bool is_BFLOAT16 = mkldnn_data_type == "bfloat16";
+  bool is_BFLOAT16 = onednn_data_type == "bfloat16";
 
   ConvOnednn<T>(dev_ctx,
                 &input,
@@ -107,12 +106,12 @@ void FusedConv3DKernel(const Context& dev_ctx,
                        const std::vector<int>& dilations,
                        int groups,
                        const std::string& data_format,
-                       const std::string& mkldnn_data_type,
+                       const std::string& onednn_data_type,
                        const std::string& fuse_activation,
                        bool fuse_residual_conn,
                        bool force_fp32_output,
                        DenseTensor* out) {
-  bool is_BFLOAT16 = mkldnn_data_type == "bfloat16";
+  bool is_BFLOAT16 = onednn_data_type == "bfloat16";
 
   ConvOnednn<T>(dev_ctx,
                 &input,
@@ -156,8 +155,7 @@ KernelKey ConvGetKernelTypeForVar(const GetKernelTypeForVarContext* ctx) {
       tensor.place(), tensor.layout(), expected_kernel_type.dtype());
 }
 
-}  // namespace fusion
-}  // namespace phi
+}  // namespace phi::fusion
 
 PD_REGISTER_KERNEL(fused_conv2d,
                    OneDNN,

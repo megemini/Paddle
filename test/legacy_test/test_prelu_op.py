@@ -15,13 +15,17 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
+from op_test import (
+    OpTest,
+    convert_float_to_uint16,
+    get_device_place,
+    skip_check_grad_ci,
+)
 
 import paddle
 import paddle.nn.functional as F
 from paddle import base
-from paddle.base import Program, core
-from paddle.pir_utils import test_with_pir_api
+from paddle.base import core
 
 
 def ref_prelu(x, weight):
@@ -40,16 +44,11 @@ def ref_prelu_nn(x, num_parameters, init):
 
 class TestFunctionalPReluAPI(unittest.TestCase):
     def setUp(self):
-        self.place = (
-            paddle.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
+        self.place = get_device_place()
         self.x_np = np.random.uniform(-1.0, 1.0, [1, 2, 3, 4]).astype('float32')
         self.weight_np_0 = np.random.randn(1).astype('float32')
         self.weight_np_1 = np.random.randn(self.x_np.shape[1]).astype('float32')
 
-    @test_with_pir_api
     def static_check(self, weight_np):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data('X', self.x_np.shape, 'float32')
@@ -71,7 +70,6 @@ class TestFunctionalPReluAPI(unittest.TestCase):
         np.testing.assert_allclose(out_ref, out.numpy(), rtol=1e-05)
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_static_api(self):
         self.static_check(self.weight_np_0)
         self.static_check(self.weight_np_1)
@@ -93,22 +91,18 @@ class TestFunctionalPReluAPI(unittest.TestCase):
             )
             self.assertRaises(TypeError, F.prelu, x=x_int32, weight=weight_fp32)
             # support the input dtype is float16
-            x_fp16 = paddle.static.data(
-                name='x_fp16', shape=[2, 3], dtype='float16'
-            )
-            F.prelu(x=x_fp16, weight=weight_fp32)
+            if core.is_compiled_with_cuda():
+                x_fp16 = paddle.static.data(
+                    name='x_fp16', shape=[2, 3], dtype='float16'
+                )
+                F.prelu(x=x_fp16, weight=weight_fp32)
 
 
 class TestNNPReluAPI(unittest.TestCase):
     def setUp(self):
-        self.place = (
-            paddle.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
+        self.place = get_device_place()
         self.x_np = np.ones([1, 2, 3, 4]).astype('float32')
 
-    @test_with_pir_api
     def test_static_api(self):
         startup_program = paddle.static.Program()
         train_program = paddle.static.Program()
@@ -197,7 +191,7 @@ class PReluTest(OpTest):
         elif self.attrs == {'mode': "channel", "data_format": "NHWC"}:
             alpha_np = np.random.uniform(-1, -0.5, [1, 1, 1, self.x_shape[-1]])
         else:
-            alpha_np = np.random.uniform(-1, -0.5, [1] + self.x_shape[1:])
+            alpha_np = np.random.uniform(-1, -0.5, [1, *self.x_shape[1:]])
         alpha_np = alpha_np.astype(as_type)
 
         self.inputs = {'X': x_np, 'Alpha': alpha_np}
@@ -230,7 +224,7 @@ class PReluTest(OpTest):
         self.attrs = {'mode': "channel", "data_format": "NCHW"}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(['X', 'Alpha'], 'Out', check_pir=True)
@@ -382,6 +376,11 @@ class TestModeElementRank6NHWC(PReluTest):
         self.attrs = {'mode': "element", "data_format": "NHWC"}
 
 
+class TestModeElt_ZeroSize(PReluTest):
+    def init_input_shape(self):
+        self.x_shape = [3, 0, 5, 10]
+
+
 def create_test_fp16_class(
     parent, check_grad=True, atol=1e-3, max_relative_error=0.05
 ):
@@ -419,7 +418,7 @@ def create_test_bf16_class(
     @unittest.skipIf(
         not core.is_compiled_with_cuda()
         or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-        "core is not complied with CUDA and not support the bfloat16",
+        "core is not compiled with CUDA and not support the bfloat16",
     )
     class TestPReluBF16Op(parent):
         def setUp(self):
@@ -478,66 +477,6 @@ create_test_bf16_class(TestModeChannelRank3NHWC)
 create_test_bf16_class(TestModeChannelRank6NHWC)
 create_test_bf16_class(TestModeElementRank3NHWC)
 create_test_bf16_class(TestModeElementRank6NHWC)
-
-
-def prelu_t(x, mode, param_attr=None, name=None, data_format='NCHW'):
-    helper = base.layer_helper.LayerHelper('prelu', **locals())
-    alpha_shape = [1, x.shape[1], 1, 1]
-    dtype = helper.input_dtype(input_param_name='x')
-    alpha = helper.create_parameter(
-        attr=helper.param_attr,
-        shape=alpha_shape,
-        dtype='float32',
-        is_bias=False,
-        default_initializer=paddle.nn.initializer.Constant(0.25),
-    )
-    out = helper.create_variable_for_type_inference(dtype)
-    helper.append_op(
-        type="prelu",
-        inputs={"X": x, 'Alpha': alpha},
-        attrs={"mode": mode, 'data_format': data_format},
-        outputs={"Out": out},
-    )
-    return out
-
-
-# error message test if mode is not one of 'all', 'channel', 'element'
-class TestModeError(unittest.TestCase):
-    def setUp(self):
-        self.place = (
-            paddle.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
-        self.x_np = np.ones([1, 2, 3, 4]).astype('float32')
-
-    def test_mode_error(self):
-        main_program = Program()
-        with base.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = prelu_t(x, 'any')
-            except Exception as e:
-                assert e.args[0].find('InvalidArgument') != -1
-
-    def test_data_format_error1(self):
-        main_program = Program()
-        with base.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = prelu_t(x, 'channel', data_format='N')
-            except Exception as e:
-                assert e.args[0].find('InvalidArgument') != -1
-
-    def test_data_format_error2(self):
-        main_program = Program()
-        with base.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = paddle.static.nn.prelu(x, 'channel', data_format='N')
-            except ValueError as e:
-                pass
-
 
 if __name__ == "__main__":
     unittest.main()

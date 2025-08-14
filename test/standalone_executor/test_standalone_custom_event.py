@@ -30,24 +30,26 @@ def build_program():
     main_program = paddle.static.Program()
     startup_program = paddle.static.Program()
 
-    with paddle.static.program_guard(main_program, startup_program):
+    with (
+        paddle.static.program_guard(main_program, startup_program),
         # data -> [matmul] -> out ->[add] -> add_out
-        with paddle.static.device_guard('gpu'):
-            data = paddle.ones([1024, 2048], dtype='float32', name='data')
-            weight = paddle.randn([2048, 2048], name='weight')  # gpu
-            matmul_out = paddle.matmul(data, weight, name='matmul_out')  # gpus
-            bias = paddle.ones([1024, 2048], dtype='float32', name='bias')
-            add_out = paddle.add(matmul_out, bias, name='add_out')
-            # add_out -> [sub] -> sub_out -> [tanh] -> tanh_out
-            sub_out = paddle.subtract(add_out, data, name='sub_out')
-            tanh_out = paddle.tanh(sub_out, name='tanh_out')
-            bias_1 = paddle.add(bias, sub_out, name='bias_1')
-            out_before = paddle.tanh(bias_1, name='out_before')
-            out_last = paddle.subtract(tanh_out, data, name='out_last')
-            out_last2 = paddle.matmul(out_last, weight, name="matmul_2_out")
+        paddle.static.device_guard('gpu'),
+    ):
+        data = paddle.ones([1024, 2048], dtype='float32', name='data')
+        weight = paddle.randn([2048, 2048], name='weight')  # gpu
+        matmul_out = paddle.matmul(data, weight, name='matmul_out')  # gpus
+        bias = paddle.ones([1024, 2048], dtype='float32', name='bias')
+        add_out = paddle.add(matmul_out, bias, name='add_out')
+        # add_out -> [sub] -> sub_out -> [tanh] -> tanh_out
+        sub_out = paddle.subtract(add_out, data, name='sub_out')
+        tanh_out = paddle.tanh(sub_out, name='tanh_out')
+        bias_1 = paddle.add(bias, sub_out, name='bias_1')
+        out_before = paddle.tanh(bias_1, name='out_before')
+        out_last = paddle.subtract(tanh_out, data, name='out_last')
+        out_last2 = paddle.matmul(out_last, weight, name="matmul_2_out")
 
-            out = paddle.add(out_before, out_last2, name='out')
-            mean = paddle.mean(out, name='mean_out')
+        out = paddle.add(out_before, out_last2, name='out')
+        mean = paddle.mean(out, name='mean_out')
 
     return main_program, startup_program, [mean]
 
@@ -94,12 +96,12 @@ class TestMannulEvent(unittest.TestCase):
             ops[op_index].dist_attr.execution_stream = "s2"
             ops[op_index].dist_attr.stream_priority = -1
 
-    def split_program(self, prog, apply_mannual_event=False):
+    def split_program(self, prog, apply_manual_event=False):
         # split two subprograms
         waiter_recorder_events_map = {11: [8, 10]}
         prog_block = prog.global_block()
         ops = prog_block.ops
-        if apply_mannual_event:
+        if apply_manual_event:
             for waiter, recorders in waiter_recorder_events_map.items():
                 for recorder in recorders:
                     _add_event_dependency(ops[recorder], ops[waiter])
@@ -159,7 +161,7 @@ class TestMannulEvent(unittest.TestCase):
         self,
         apply_custom_stream=False,
         split_prog=False,
-        apply_mannual_event=False,
+        apply_manual_event=False,
     ):
         paddle.seed(2022)
         main_program, startup_program, fetch_list = build_program()
@@ -170,7 +172,7 @@ class TestMannulEvent(unittest.TestCase):
         main_progs = [main_program]
         startup_progs = [startup_program]
         if apply_custom_stream and split_prog:
-            main_progs = self.split_program(main_program, apply_mannual_event)
+            main_progs = self.split_program(main_program, apply_manual_event)
         outs = []
         exe = self.create_standalone_exe(main_progs, startup_progs, fetch_list)
         for i in range(self.steps):
@@ -180,19 +182,23 @@ class TestMannulEvent(unittest.TestCase):
     def test_result(self):
         if not core.is_compiled_with_cuda():
             return
-
-        baselines = self.run_program()
-        stream_outs = self.run_program(apply_custom_stream=True)
-        split_outs = self.run_program(apply_custom_stream=True, split_prog=True)
-        mannual_outs = self.run_program(
-            apply_custom_stream=True, split_prog=True, apply_mannual_event=True
-        )
-        for bl, out0, out1, out2 in zip(
-            baselines, stream_outs, split_outs, mannual_outs
-        ):
-            self.assertEqual(bl[0], out0[0])
-            self.assertEqual(bl[0], out2[0])
-            # self.assertNotEqual(bl[0], out1[0])
+        with paddle.pir_utils.OldIrGuard():
+            baselines = self.run_program()
+            stream_outs = self.run_program(apply_custom_stream=True)
+            split_outs = self.run_program(
+                apply_custom_stream=True, split_prog=True
+            )
+            manual_outs = self.run_program(
+                apply_custom_stream=True,
+                split_prog=True,
+                apply_manual_event=True,
+            )
+            for bl, out0, out1, out2 in zip(
+                baselines, stream_outs, split_outs, manual_outs
+            ):
+                self.assertEqual(bl[0], out0[0])
+                self.assertEqual(bl[0], out2[0])
+                # self.assertNotEqual(bl[0], out1[0])
 
 
 if __name__ == "__main__":

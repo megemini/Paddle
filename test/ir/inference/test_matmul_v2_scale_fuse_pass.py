@@ -35,8 +35,8 @@ class TestMatmulV2ScaleFusePass(PassAutoScanTest):
         # config = self.create_inference_config(use_gpu=False)
         # yield config, ["matmul_v2", ], (1e-5, 1e-5)
 
-        # mkldnn
-        config = self.create_inference_config(use_mkldnn=True)
+        # onednn
+        config = self.create_inference_config(use_onednn=True)
         yield config, [
             "matmul_v2",
         ], (1e-5, 1e-5)

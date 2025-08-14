@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import unittest
 from unittest import TestCase
 
 import paddle
@@ -46,10 +47,18 @@ class TestRNNProgramClone(TestCase):
         # an exception is raised. For special cases, white list is added.
         # flattening rnn's parameters for the need to call cudnn kernel is such
         # a case.
-        with paddle.static.program_guard(train_program, startup_prog):
-            with paddle.base.unique_name.guard():
-                bilstm = create_model()
+        with (
+            paddle.static.program_guard(train_program, startup_prog),
+            paddle.base.unique_name.guard(),
+        ):
+            bilstm = create_model()
 
-        with paddle.base.program_guard(test_program, startup_prog):
-            with paddle.base.unique_name.guard():
-                bilstm = create_model()
+        with (
+            paddle.base.program_guard(test_program, startup_prog),
+            paddle.base.unique_name.guard(),
+        ):
+            bilstm = create_model()
+
+
+if __name__ == "__main__":
+    unittest.main()

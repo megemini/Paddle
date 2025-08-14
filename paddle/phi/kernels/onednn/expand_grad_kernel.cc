@@ -16,6 +16,7 @@
 
 #include "paddle/phi/backends/onednn/onednn_reuse.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 
 namespace phi {
 template <typename T, typename Context>
@@ -25,6 +26,13 @@ void ExpandGradKernel(const Context& dev_ctx,
                       const IntArray& shape UNUSED,
                       DenseTensor* in_grad) {
   const auto& onednn_engine = dev_ctx.GetEngine();
+
+  if ((in_grad && in_grad->numel() == 0) || out_grad.numel() == 0) {
+    dev_ctx.template Alloc<T>(in_grad);
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(in_grad->dims())), 0, in_grad);
+    return;
+  }
 
   auto in_grad_vec_dims = common::vectorize(in_grad->dims());
   auto out_grad_vec_dims = common::vectorize(out_grad.dims());
@@ -50,7 +58,7 @@ void ExpandGradKernel(const Context& dev_ctx,
 
     auto reorder_dst_memory_p = reorder_handler.AcquireDstMemory(
         in_grad,
-        funcs::GetPlainOneDNNFormat(in_grad_vec_dims.size()),
+        funcs::GetPlainOneDNNFormat(static_cast<int>(in_grad_vec_dims.size())),
         dev_ctx.GetPlace());
 
     auto reorder_p = reorder_handler.AcquireReorder(reorder_src_memory_p,

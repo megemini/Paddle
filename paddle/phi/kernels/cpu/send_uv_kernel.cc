@@ -14,10 +14,11 @@
 
 #include "paddle/phi/kernels/send_uv_kernel.h"
 
+#include "paddle/common/hostdevice.h"
 #include "paddle/phi/backends/cpu/cpu_context.h"
-#include "paddle/phi/core/hostdevice.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/cpu/graph_send_ue_recv_funcs.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/impl/graph_message_passing_impl.h"
 
 namespace phi {
@@ -50,7 +51,7 @@ void GraphSendUVCpuKernel(const BroadCastInfo& bcast,
 }
 
 template <typename Context, typename T, typename IndexT>
-void GraphSendUVOpKernelLaunchHelper(const Context& ctx,
+void GraphSendUVOpKernelLaunchHelper(const Context& dev_ctx,
                                      const DenseTensor& x,
                                      const DenseTensor& y,
                                      const DenseTensor& src_index,
@@ -62,15 +63,10 @@ void GraphSendUVOpKernelLaunchHelper(const Context& ctx,
       index_size,
       0,
       errors::InvalidArgument("The first dimension of src_index or dst_index "
-                              "shoule be greater than 0, but received %d.",
+                              "should be greater than 0, but received %d.",
                               index_size));
 
-  auto out_dims = out->dims();
-  int64_t memset_size = 1;
-  for (int i = 0; i < out_dims.size(); i++) {
-    memset_size *= out_dims[i];
-  }
-  ctx.template Alloc<T>(out);
+  dev_ctx.template Alloc<T>(out);
   T* out_data = out->data<T>();
 
   const auto& bcast_info = phi::CalcBCastInfo(x.dims(), y.dims());
@@ -102,7 +98,7 @@ void GraphSendUVOpKernelLaunchHelper(const Context& ctx,
 }
 
 template <typename T, typename Context>
-void SendUVKernel(const Context& ctx,
+void SendUVKernel(const Context& dev_ctx,
                   const DenseTensor& x,
                   const DenseTensor& y,
                   const DenseTensor& src_index,
@@ -110,12 +106,20 @@ void SendUVKernel(const Context& ctx,
                   const std::string& message_op,
                   DenseTensor* out) {
   auto index_type = src_index.dtype();
+
+  if (x.numel() == 0 || y.numel() == 0 || src_index.numel() == 0 ||
+      dst_index.numel() == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(out->dims())), 0, out);
+    return;
+  }
+
   if (index_type == phi::DataType::INT32) {
     GraphSendUVOpKernelLaunchHelper<Context, T, int32_t>(
-        ctx, x, y, src_index, dst_index, message_op, out);
+        dev_ctx, x, y, src_index, dst_index, message_op, out);
   } else if (index_type == phi::DataType::INT64) {
     GraphSendUVOpKernelLaunchHelper<Context, T, int64_t>(
-        ctx, x, y, src_index, dst_index, message_op, out);
+        dev_ctx, x, y, src_index, dst_index, message_op, out);
   }
 }
 

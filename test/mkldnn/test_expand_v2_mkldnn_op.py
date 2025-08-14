@@ -30,7 +30,7 @@ class TestExpandV2OneDNNOp(OpTest):
         self.op_type = "expand_v2"
         self.init_data()
         self.x = np.random.random(self.ori_shape).astype("float32")
-        self.attrs = {'shape': self.shape, 'use_mkldnn': True}
+        self.attrs = {'shape': self.shape, 'use_onednn': True}
         self.set_inputs()
         self.set_additional_inputs()
         output = np.tile(self.x, self.expand_times)
@@ -48,10 +48,12 @@ class TestExpandV2OneDNNOp(OpTest):
         self.expand_times = [2, 3, 4, 1]
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     def test_check_grad(self):
-        self.check_grad_with_place(core.CPUPlace(), ["X"], "Out")
+        self.check_grad_with_place(
+            core.CPUPlace(), ["X"], "Out", check_pir_onednn=True
+        )
 
 
 class TestExpandV2ExpandDimOneDNNOp(TestExpandV2OneDNNOp):
@@ -153,6 +155,7 @@ def create_expand_v2_bf16_test_class(parent):
                 "Out",
                 user_defined_grads=[convert_float_to_uint16(self.dx)],
                 user_defined_grad_outputs=[self.dout],
+                check_pir_onednn=True,
             )
 
     cls_name = "{}_{}".format(parent.__name__, "Expand_v2_BF16")
@@ -167,6 +170,7 @@ create_expand_v2_bf16_test_class(TestExpandV2CopyScenarioShapeNotGivenOneDNNOp)
 create_expand_v2_bf16_test_class(TestExpandV2ExpandShapesTensor1OneDNNOp)
 create_expand_v2_bf16_test_class(TestExpandV2ExpandShapesTensor2OneDNNOp)
 create_expand_v2_bf16_test_class(TestExpandV2ShapesTensorOneDNNOp)
+
 
 if __name__ == '__main__':
     paddle.enable_static()

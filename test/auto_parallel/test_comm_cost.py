@@ -23,7 +23,7 @@ import paddle
 from paddle.distributed.auto_parallel.static.cluster import Cluster
 from paddle.distributed.auto_parallel.static.cost import (
     AllgatherOpCost,
-    AllreduceSumOpCost,
+    AllReduceOpCost,
     BroadcastOpCost,
     CommContext,
     IdentityOpCost,
@@ -51,25 +51,28 @@ class TestCommOpCost(unittest.TestCase):
         cluster = Cluster()
         cluster.build_from_file(cluster_json_path)
 
-        # Build CommConetxt
+        # Build CommContext
         CommContext._has_instance = None
         CommContext._instance = None
         comm_context = CommContext(cluster)
 
         # Check AllreduceSumCost 128MB ring cost
         allreduce_sum_op_desc = build_comm_desc(
-            "c_allreduce_sum",
+            "all_reduce",
             [0, 1, 2, 3, 4, 5, 6, 7],
             paddle.float32,
             [1, 32 * (10**6)],
+            {"reduce_type": paddle.distributed.ReduceOp.SUM},
         )
-        allreduce_sum_op_cost = AllreduceSumOpCost(
+        allreduce_sum_op_cost = AllReduceOpCost(
             op_desc=allreduce_sum_op_desc, comm_context=comm_context
         )
 
+        self.assertTrue(allreduce_sum_op_cost.time > 0)
+
         # Check AllgatherOpCost cost
         allgather_op_desc = build_comm_desc(
-            "c_allgather",
+            "all_gather",
             [0, 1, 2, 3, 4, 5, 6, 7],
             paddle.float32,
             [1, 32 * (10**6)],
@@ -81,7 +84,7 @@ class TestCommOpCost(unittest.TestCase):
 
         # Check BroadcastOpCost cost
         broadcast_op_desc = build_comm_desc(
-            "c_broadcast",
+            "broadcast",
             [0, 1, 2, 3, 4, 5, 6, 7],
             paddle.float32,
             [1, 32 * (10**6)],
@@ -129,25 +132,26 @@ class TestCommOpCost(unittest.TestCase):
         cluster = Cluster()
         cluster.build_from_file(cluster_json_path)
 
-        # Build CommConetxt
+        # Build CommContext
         CommContext._has_instance = None
         CommContext._instance = None
         comm_context = CommContext(cluster)
 
         # Check AllreduceSumCost 128MB ring cost
         allreduce_sum_op_desc = build_comm_desc(
-            "c_allreduce_sum",
+            "all_reduce",
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
             paddle.float32,
             [1, 32 * (10**6)],
+            {"reduce_type": paddle.distributed.ReduceOp.SUM},
         )
-        allreduce_sum_op_cost = AllreduceSumOpCost(
+        allreduce_sum_op_cost = AllReduceOpCost(
             op_desc=allreduce_sum_op_desc, comm_context=comm_context
         )
 
         # Check AllgatherOpCost cost
         allgather_op_desc = build_comm_desc(
-            "c_allgather",
+            "all_gather",
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
             paddle.float32,
             [1, 32 * (10**6)],
@@ -159,7 +163,7 @@ class TestCommOpCost(unittest.TestCase):
 
         # Check BroadcastOpCost cost
         broadcast_op_desc = build_comm_desc(
-            "c_broadcast",
+            "broadcast",
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
             paddle.float32,
             [1, 32 * (10**6)],

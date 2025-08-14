@@ -15,11 +15,10 @@
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 
 import paddle
 from paddle import base
-from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -28,11 +27,7 @@ class TestMaxMinAmaxAminAPI(unittest.TestCase):
     def setUp(self):
         self.init_case()
         self.cal_np_out_and_gradient()
-        self.place = (
-            base.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else base.CPUPlace()
-        )
+        self.place = get_device_place()
 
     def init_case(self):
         self.x_np = np.array([[0.2, 0.3, 0.5, 0.9], [0.1, 0.2, 0.6, 0.7]])
@@ -63,10 +58,9 @@ class TestMaxMinAmaxAminAPI(unittest.TestCase):
             grad = np.zeros(self.shape)
             out_b = np.broadcast_to(out.view(), self.shape)
             grad[self.x_np == out_b] = 1
-            if func in ['amax', 'amin']:
-                grad_sum = grad.sum(self.axis).reshape(out.shape)
-                grad_b = np.broadcast_to(grad_sum, self.shape)
-                grad /= grad_sum
+            grad_sum = grad.sum(self.axis).reshape(out.shape)
+            grad_b = np.broadcast_to(grad_sum, self.shape)
+            grad /= grad_sum
 
             self.np_grad[func] = grad
 
@@ -91,9 +85,10 @@ class TestMaxMinAmaxAminAPI(unittest.TestCase):
         return out
 
     # We check the output between paddle API and numpy in static graph.
-    @test_with_pir_api
+
     def test_static_graph(self):
         def _test_static_graph(func):
+            paddle.enable_static()
             startup_program = base.Program()
             train_program = base.Program()
             with base.program_guard(startup_program, train_program):
@@ -109,6 +104,7 @@ class TestMaxMinAmaxAminAPI(unittest.TestCase):
                     fetch_list=[out],
                 )
                 self.assertTrue((np.array(res[0]) == self.np_out[func]).all())
+            paddle.disable_static()
 
         _test_static_graph('amax')
         _test_static_graph('amin')
@@ -139,6 +135,33 @@ class TestMaxMinAmaxAminAPI(unittest.TestCase):
         _test_dygraph('min')
 
     # test two minimum or maximum elements
+
+
+class TestMaxMinAmaxAminAPI_AxisWithOne1(TestMaxMinAmaxAminAPI):
+    def init_case(self):
+        self.x_np = np.random.randn(1, 5, 10).astype(np.float32)
+        self.shape = [1, 5, 10]
+        self.dtype = 'float32'
+        self.axis = 0
+        self.keepdim = False
+
+
+class TestMaxMinAmaxAminAPI_AxisWithOne2(TestMaxMinAmaxAminAPI):
+    def init_case(self):
+        self.x_np = np.random.randn(1, 5, 10).astype(np.float32)
+        self.shape = [1, 5, 10]
+        self.dtype = 'float32'
+        self.axis = 0
+        self.keepdim = True
+
+
+class TestMaxMinAmaxAminAPI_AxisWithOne3(TestMaxMinAmaxAminAPI):
+    def init_case(self):
+        self.x_np = np.random.randn(1, 1, 10).astype(np.float32)
+        self.shape = [1, 1, 10]
+        self.dtype = 'float32'
+        self.axis = (0, 1)
+        self.keepdim = False
 
 
 class TestMaxMinAmaxAminAPI_ZeroDim(TestMaxMinAmaxAminAPI):
@@ -201,7 +224,7 @@ class TestMaxMinAmaxAminAPI6(TestMaxMinAmaxAminAPI):
         self.keepdim = False
 
 
-# test input grad when out is operated like mutiply
+# test input grad when out is operated like multiply
 class TestMaxMinAmaxAminAPI7(TestMaxMinAmaxAminAPI):
     def init_case(self):
         self.x_np = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]).astype(
@@ -237,6 +260,24 @@ class TestMaxMinAmaxAminAPI7(TestMaxMinAmaxAminAPI):
         _test_dygraph('amin')
         _test_dygraph('max')
         _test_dygraph('min')
+
+
+class TestMaxMinAmaxAminAPI_ZeroSize(TestMaxMinAmaxAminAPI):
+    def init_case(self):
+        self.x_np = np.random.randn(1, 0, 10).astype(np.float32)
+        self.shape = [1, 0, 10]
+        self.dtype = 'float32'
+        self.axis = 0
+        self.keepdim = False
+
+
+class TestMaxMinAmaxAminAPI_ZeroSize2(TestMaxMinAmaxAminAPI):
+    def init_case(self):
+        self.x_np = np.random.randn(1, 0, 10).astype(np.float32)
+        self.shape = [1, 0, 10]
+        self.dtype = 'float32'
+        self.axis = -1
+        self.keepdim = True
 
 
 if __name__ == '__main__':

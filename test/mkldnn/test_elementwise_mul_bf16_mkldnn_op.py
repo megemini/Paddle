@@ -27,15 +27,15 @@ from paddle.base import core
 class TestElementwiseMulBf16MklDNNOp(OpTest):
     def setUp(self):
         self.op_type = "elementwise_mul"
-        self.use_mkldnn = True
-        self.mkldnn_data_type = "bfloat16"
+        self.use_onednn = True
+        self.onednn_data_type = "bfloat16"
         self.axis = -1
 
         self.generate_data()
         self.x_bf16 = convert_float_to_uint16(self.x)
         self.y_bf16 = convert_float_to_uint16(self.y)
         self.inputs = {'X': self.x_bf16, 'Y': self.y_bf16}
-        self.attrs = {'axis': self.axis, 'use_mkldnn': self.use_mkldnn}
+        self.attrs = {'axis': self.axis, 'use_onednn': self.use_onednn}
         self.outputs = {'Out': convert_float_to_uint16(self.out)}
 
     def generate_data(self):
@@ -48,7 +48,7 @@ class TestElementwiseMulBf16MklDNNOp(OpTest):
         self.out = np.multiply(self.x, self.y)
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     def test_check_grad_normal(self):
         self.check_grad_with_place(
@@ -61,9 +61,10 @@ class TestElementwiseMulBf16MklDNNOp(OpTest):
                 np.multiply(self.x, self.x),
             ],
             user_defined_grad_outputs=[self.x_bf16],
+            check_pir_onednn=True,
         )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         self.check_grad_with_place(
             core.CPUPlace(),
             ["Y"],
@@ -71,9 +72,10 @@ class TestElementwiseMulBf16MklDNNOp(OpTest):
             check_dygraph=False,
             user_defined_grads=[np.multiply(self.y, self.x)],
             user_defined_grad_outputs=[self.y_bf16],
+            check_pir_onednn=True,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         self.check_grad_with_place(
             core.CPUPlace(),
             ["X"],
@@ -81,6 +83,7 @@ class TestElementwiseMulBf16MklDNNOp(OpTest):
             check_dygraph=False,
             user_defined_grads=[np.multiply(self.x, self.y)],
             user_defined_grad_outputs=[self.x_bf16],
+            check_pir_onednn=True,
         )
 
 
@@ -113,7 +116,7 @@ class TestElementwiseMulBroadcastingBf16MklDNNOp(
         #    ],
         #    user_defined_grad_outputs=[self.x_bf16])
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         pass
         # self.check_grad_with_place(
         #    core.CPUPlace(), ["Y"],

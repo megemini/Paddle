@@ -32,7 +32,10 @@ class TestFusionLSTMBF16ONEDNNOp(OpTest):
         for use_seq in {True, False}:
             self.attrs['use_seq'] = use_seq
             self.check_output(
-                check_dygraph=False, no_check_set=["Cell"], atol=2e-2
+                check_dygraph=False,
+                no_check_set=["Cell"],
+                atol=2e-2,
+                check_pir_onednn=True,
             )
 
     def setUp(self):
@@ -47,8 +50,8 @@ class TestFusionLSTMBF16ONEDNNOp(OpTest):
         self.act_gate = 'sigmoid'
         self.act_cell = 'tanh'
         self.act_cand = 'tanh'
-        self.use_mkldnn = True
-        self.mkldnn_data_type = "bfloat16"
+        self.use_onednn = True
+        self.onednn_data_type = "bfloat16"
         self.force_fp32_output = False
         self.weights_dtype = 'fp32'
         self.set_confs()
@@ -57,7 +60,7 @@ class TestFusionLSTMBF16ONEDNNOp(OpTest):
         bs = len(self.lod[0])
 
         # fp32 X input for reference implementation and
-        # corressponding bf16 data as input to LSTM oneDNN bf16 kernel
+        # corresponding bf16 data as input to LSTM oneDNN bf16 kernel
         x = np.random.normal(size=(T, self.M)).astype('float32')
 
         x_bf16 = convert_float_to_uint16(x)
@@ -142,8 +145,8 @@ class TestFusionLSTMBF16ONEDNNOp(OpTest):
             'cell_activation': self.act_cell,
             'candidate_activation': self.act_cand,
             'force_fp32_output': self.force_fp32_output,
-            'use_mkldnn': self.use_mkldnn,
-            'mkldnn_data_type': self.mkldnn_data_type,
+            'use_onednn': self.use_onednn,
+            'mkldnn_data_type': self.onednn_data_type,
         }
 
 

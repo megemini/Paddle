@@ -14,8 +14,7 @@ limitations under the License. */
 
 #include "paddle/phi/backends/dynload/cublas.h"
 
-namespace phi {
-namespace dynload {
+namespace phi::dynload {
 std::once_flag cublas_dso_flag;
 void *cublas_dso_handle = nullptr;
 
@@ -34,5 +33,8 @@ CUBLAS_BLAS_ROUTINE_EACH_R3(DEFINE_WRAP);
 #ifdef CUBLAS_BLAS_ROUTINE_EACH_R4
 CUBLAS_BLAS_ROUTINE_EACH_R4(DEFINE_WRAP);
 #endif
-}  // namespace dynload
-}  // namespace phi
+
+#ifdef CUBLAS_BLAS_ROUTINE_EACH_R5
+CUBLAS_BLAS_ROUTINE_EACH_R5(DEFINE_WRAP);
+#endif
+}  // namespace phi::dynload

@@ -38,7 +38,7 @@ class ProgramInterpreter : public InterpreterBaseImpl {
 
  public:
   ProgramInterpreter(
-      const platform::Place& place,
+      const phi::Place& place,
       const BlockDesc& block,
       Scope* scope,
       const ExecutionConfig& execution_config = ExecutionConfig());
@@ -49,18 +49,20 @@ class ProgramInterpreter : public InterpreterBaseImpl {
       const std::vector<std::string>& feed_names,
       const std::vector<phi::DenseTensor>& feed_tensors,
       bool need_fetch = true,
-      bool enable_job_schedule_profiler = false) override;
+      bool enable_job_schedule_profiler = false,
+      bool switch_stream = false) override;
 
   paddle::framework::FetchList Run(const std::vector<std::string>& feed_names,
                                    bool need_fetch = true,
                                    bool enable_job_schedule_profiler = false,
-                                   bool enable_op_profiling = false) override;
+                                   bool enable_op_profiling = false,
+                                   bool switch_stream = false) override;
 
   std::shared_ptr<ProgramDesc> GetMutableCopyProgram() override;
 
-  void Build(
-      const std::vector<std::string>& feed_names,
-      std::vector<paddle::framework::OpFuncNode>* op_func_nodes) override;
+  void Build(const std::vector<std::string>& feed_names,
+             std::vector<paddle::framework::OpFuncNode>* op_func_nodes,
+             bool switch_stream = false) override;
 
   void ShareWorkQueueFrom(InterpreterBaseImpl* src) override;
 
@@ -89,7 +91,7 @@ class ProgramInterpreter : public InterpreterBaseImpl {
 
   const Scope* local_scope() const override;
 
-  const platform::Place& GetPlace() const override { return place_; }
+  const phi::Place& GetPlace() const override { return place_; }
 
   void SetOutputHooks(const std::vector<HookFunc>& hookfuncs) override {
     output_hookfuncs_ = hookfuncs;
@@ -99,20 +101,30 @@ class ProgramInterpreter : public InterpreterBaseImpl {
     input_hookfuncs_ = hookfuncs;
   }
 
+  void SetOutputHooks(const std::vector<PirHookFunc>& hookfuncs) override {}
+
+  void SetInputHooks(const std::vector<PirHookFunc>& hookfuncs) override {}
+
   std::unordered_map<std::string, std::shared_ptr<EventInter>>*
   GetForceEventsToWaitInfo() {
-    return force_evnets_to_wait_;
+    return force_events_to_wait_;
   }
 
   void SetForceEventsToWaitInfo(
       std::unordered_map<std::string, std::shared_ptr<EventInter>>*
-          force_evnets_to_wait) {
-    force_evnets_to_wait_ = force_evnets_to_wait;
+          force_events_to_wait) {
+    force_events_to_wait_ = force_events_to_wait;
   }
 
   bool IsStaticBuild() const override { return static_build_; }
 
   std::tuple<double, double> InterpreterRunTime() override;
+
+  void SetCUDAGraphState(uint8_t cuda_graph_state) override {
+    PADDLE_THROW(common::errors::Unavailable(
+        "ProgramInterpreter does not support SetCUDAGraphState, "
+        "please use PirInterpreter instead."));
+  }
 
   // Only for debug
   Variable* DebugVar(const std::string& name) const override;
@@ -150,14 +162,15 @@ class ProgramInterpreter : public InterpreterBaseImpl {
   // only used when program contains no feed op
   void Prepare(const std::vector<std::string>& feed_names,
                const std::vector<phi::DenseTensor>& feed_tensors,
-               bool prepare_feed);
+               bool prepare_feed,
+               bool switch_stream = false);
 
   void RecordMemcpyD2H(const Instruction& instr_node);
 
   // gc
   void RecordStreamForGC(const Instruction& instr);
   void CheckGC(const Instruction& instr);
-  void ClearLoDTensorArrayInLocalScope();
+  void ClearDenseTensorArrayInLocalScope();
 
   // workqueue
   std::shared_ptr<interpreter::AsyncWorkQueue> GetWorkQueue();
@@ -176,7 +189,7 @@ class ProgramInterpreter : public InterpreterBaseImpl {
   // op profiling status
   bool is_in_op_profiling_mode_{false};
 
-  const platform::Place place_;
+  const phi::Place place_;
   const BlockDesc& block_;  // not owned
 
   interpreter::DependencyBuilder dependency_builder_;
@@ -200,7 +213,7 @@ class ProgramInterpreter : public InterpreterBaseImpl {
   ExecutionConfig execution_config_;
 
   std::unordered_map<std::string, std::shared_ptr<EventInter>>*
-      force_evnets_to_wait_;
+      force_events_to_wait_;
 
   VariableScope var_scope_;
   Scope* local_scope_{nullptr};  // not owned
@@ -218,9 +231,9 @@ class ProgramInterpreter : public InterpreterBaseImpl {
   // var
   std::map<size_t, std::set<size_t>> last_live_ops_;
 
-  // (*dependecy_count_)[i] contains the number of dependencies that the i-th op
-  // need to wait
-  std::shared_ptr<std::vector<size_t>> dependecy_count_;
+  // (*dependency_count_)[i] contains the number of dependencies that the i-th
+  // op need to wait
+  std::shared_ptr<std::vector<size_t>> dependency_count_;
 
   std::vector<std::shared_ptr<interpreter::OpDepInfo>> deps_;
   std::vector<std::shared_ptr<interpreter::VarRefInfo>> refs_;
@@ -240,6 +253,26 @@ class ProgramInterpreter : public InterpreterBaseImpl {
   size_t last_calculate_instr_id_;
   bool enable_job_schedule_profiler_;
 };
+
+static inline const phi::DenseTensor& GetTensorFromVar(const Variable* var) {
+  if (var->IsType<phi::DenseTensor>()) {
+    return var->Get<phi::DenseTensor>();
+  } else {
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Variable must be type of phi::DenseTensor, but received %s.",
+        framework::ToTypeName(var->Type())));
+  }
+}
+
+static inline phi::DenseTensor* GetMutableTensorFromVar(Variable* var) {
+  if (var->IsType<phi::DenseTensor>()) {
+    return var->GetMutable<phi::DenseTensor>();
+  } else {
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Variable must be type of phi::DenseTensor, but received %s.",
+        framework::ToTypeName(var->Type())));
+  }
+}
 
 }  // namespace framework
 }  // namespace paddle

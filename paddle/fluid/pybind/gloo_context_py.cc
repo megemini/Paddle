@@ -15,10 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/pybind/gloo_context_py.h"
 
 #include <Python.h>
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
+
 #include <pybind11/chrono.h>
 #include <pybind11/complex.h>
 #include <pybind11/functional.h>
@@ -32,11 +29,10 @@ limitations under the License. */
 #include <utility>
 #include <vector>
 
-#include "paddle/fluid/memory/allocation/mmap_allocator.h"
 #include "paddle/fluid/platform/gloo_context.h"
+#include "paddle/phi/core/memory/allocation/mmap_allocator.h"
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 
 namespace py = ::pybind11;
 
@@ -109,5 +105,4 @@ void BindGlooContext(py::module *m) {
 #endif
 }
 
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

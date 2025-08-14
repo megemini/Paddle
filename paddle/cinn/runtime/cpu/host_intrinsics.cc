@@ -20,7 +20,6 @@
 #include "paddle/cinn/backends/extern_func_jit_register.h"
 #include "paddle/cinn/backends/function_prototype.h"
 #include "paddle/cinn/common/target.h"
-#include "paddle/cinn/runtime/custom_function.h"
 
 #ifdef CINN_WITH_MKL_CBLAS
 #include "paddle/cinn/runtime/cpu/mkl_math.h"
@@ -29,7 +28,12 @@
 extern "C" {
 
 void __cinn_host_tanh_v(const cinn_buffer_t* x, cinn_buffer_t* out) {
-  CINN_CHECK_EQ(x->num_elements(), out->num_elements());
+  PADDLE_ENFORCE_EQ(
+      x->num_elements(),
+      out->num_elements(),
+      ::common::errors::InvalidArgument(
+          "The number of elements in input buffer (x) must be equal to the "
+          "number of elements in output buffer (out)."));
   int xn = x->num_elements();
   auto* x_data = reinterpret_cast<float*>(x->memory);
   auto* out_data = reinterpret_cast<float*>(out->memory);
@@ -240,6 +244,8 @@ inline double FN_FP64(cbrt)(double x) { return cbrt(x); }
 
 inline double FN_FP64(pow)(double x, double y) { return pow(x, y); }
 
+inline double FN_FP64(atan)(double x) { return atan(x); }
+
 #undef FN_FP64
 
 #define FN_INT32(func) cinn_host_##func##_int32
@@ -274,24 +280,13 @@ inline int64_t FN_INT64(logical_right_shift)(int64_t x, int64_t y) {
 }
 
 #undef FN_INT64
-}  // extern "C"
 
-namespace cinn {
-namespace runtime {
-
-void cinn_assert_true_host(void* v_args,
-                           int num_args,
-                           int msg,
-                           bool only_warning) {
-  cinn::runtime::cinn_assert_true(v_args,
-                                  num_args,
-                                  msg,
-                                  only_warning,
-                                  nullptr,
-                                  cinn::common::DefaultHostTarget());
+int64_t cinn_get_value_in_kernel_args(void* v_args, int idx) {
+  cinn_pod_value_t* args = static_cast<cinn_pod_value_t*>(v_args);
+  return args[idx].operator int64_t();
 }
-}  // namespace runtime
-}  // namespace cinn
+
+}  // extern "C"
 
 CINN_REGISTER_HELPER(host_intrinsics) {
   auto host_target = cinn::common::DefaultHostTarget();
@@ -315,6 +310,7 @@ CINN_REGISTER_HELPER(host_intrinsics) {
   REGISTER_EXTERN_FUNC_1_IN_1_OUT(func__, host_target, double, double);
 
   REGISTER_EXTERN_FUNC_1_IN_1_OUT_FP64(cinn_host_cbrt_fp64);
+  REGISTER_EXTERN_FUNC_1_IN_1_OUT_FP64(cinn_host_atan_fp64);
 
 #undef REGISTER_EXTERN_FUNC_1_IN_1_OUT_FP64
 
@@ -479,15 +475,10 @@ CINN_REGISTER_HELPER(host_intrinsics) {
       .AddInputType<int>()
       .End();
 
-  // TODO(thisjiang): change msg type from 'int' to 'std::string' when custom
-  // call support 'std::string' type
-  using cinn::runtime::cinn_assert_true_host;
-  REGISTER_EXTERN_FUNC_HELPER(cinn_assert_true_host, host_target)
-      .SetRetType<void>()
-      .AddInputType<void*>()  // v_args
-      .AddInputType<int>()    // num_args
-      .AddInputType<int>()    // msg
-      .AddInputType<bool>()   // only_warning
+  REGISTER_EXTERN_FUNC_HELPER(cinn_get_value_in_kernel_args, host_target)
+      .SetRetType<int64_t>()
+      .AddInputType<void*>()  // args
+      .AddInputType<int>()    // index
       .End();
 
   return true;

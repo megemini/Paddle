@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 import paddle.nn.functional as F
-from paddle import base
 from paddle.base import core
 
 
@@ -65,8 +64,9 @@ class TestPixelShuffleOp(OpTest):
         self.op_type = "pixel_shuffle"
         self.python_api = paddle.nn.functional.pixel_shuffle
         self.init_dtype()
+        self.init_shape()
         self.init_data_format()
-        n, c, h, w = 2, 9, 4, 4
+        n, c, h, w = self.shape
 
         if self.format == "NCHW":
             shape = [n, c, h, w]
@@ -82,6 +82,9 @@ class TestPixelShuffleOp(OpTest):
         self.outputs = {'Out': npresult}
         self.attrs = {'upscale_factor': up_factor, "data_format": self.format}
 
+    def init_shape(self):
+        self.shape = [2, 9, 4, 4]
+
     def init_dtype(self):
         self.dtype = np.float64
 
@@ -89,12 +92,13 @@ class TestPixelShuffleOp(OpTest):
         self.format = "NCHW"
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         self.check_grad(
             ['X'],
             'Out',
+            check_pir=True,
         )
 
 
@@ -106,6 +110,11 @@ class TestChannelLast(TestPixelShuffleOp):
 class TestPixelShuffleFP16Op(TestPixelShuffleOp):
     def init_dtype(self):
         self.dtype = np.float16
+
+
+class TestPixelShuffleOp_ZeroSize(TestPixelShuffleOp):
+    def init_shape(self):
+        self.shape = [2, 0, 0, 4]
 
 
 @unittest.skipIf(
@@ -147,13 +156,14 @@ class TestPixelShuffleBF16Op(OpTest):
         self.format = "NCHW"
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(self.place, check_pir=True)
 
     def test_check_grad(self):
         self.check_grad_with_place(
             self.place,
             ['X'],
             'Out',
+            check_pir=True,
         )
 
 
@@ -182,15 +192,15 @@ class TestPixelShuffleAPI(unittest.TestCase):
 
             exe = paddle.static.Executor(place=place)
             res_1 = exe.run(
-                base.default_main_program(),
-                feed={"x": self.x_1_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_1,
                 use_prune=True,
             )[0]
 
             res_2 = exe.run(
-                base.default_main_program(),
-                feed={"x2": self.x_2_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_2,
                 use_prune=True,
             )[0]
@@ -222,14 +232,14 @@ class TestPixelShuffleAPI(unittest.TestCase):
                 out_2_np = pixel_shuffle_np(self.x_2_np, 3, "NHWC")
                 exe = paddle.static.Executor(place=place)
                 res_1 = exe.run(
-                    base.default_main_program(),
-                    feed={"x": self.x_1_np},
+                    paddle.static.default_main_program(),
+                    feed={"x": self.x_1_np, "x2": self.x_2_np},
                     fetch_list=out_1,
                     use_prune=True,
                 )[0]
                 res_2 = exe.run(
-                    base.default_main_program(),
-                    feed={"x2": self.x_2_np},
+                    paddle.static.default_main_program(),
+                    feed={"x": self.x_1_np, "x2": self.x_2_np},
                     fetch_list=out_2,
                     use_prune=True,
                 )[0]
@@ -237,6 +247,7 @@ class TestPixelShuffleAPI(unittest.TestCase):
                 np.testing.assert_allclose(res_2, out_2_np)
 
     # same test between layer and functional in this op.
+
     def test_static_graph_layer(self):
         for use_cuda in (
             [False, True] if core.is_compiled_with_cuda() else [False]
@@ -260,15 +271,15 @@ class TestPixelShuffleAPI(unittest.TestCase):
 
             exe = paddle.static.Executor(place=place)
             res_1 = exe.run(
-                base.default_main_program(),
-                feed={"x": self.x_1_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_1,
                 use_prune=True,
             )[0]
 
             res_2 = exe.run(
-                base.default_main_program(),
-                feed={"x2": self.x_2_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_2,
                 use_prune=True,
             )[0]

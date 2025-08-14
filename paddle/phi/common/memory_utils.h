@@ -52,8 +52,7 @@ struct MemoryInterface {
    * @param[size_t]     size      memory size
    * @param[phi::Stream]stream    the stream that is used for allocator
    */
-
-  Allocator::AllocationPtr (*alloc_with_stream)(const phi::GPUPlace& place,
+  Allocator::AllocationPtr (*alloc_with_stream)(const phi::Place& place,
                                                 size_t size,
                                                 const phi::Stream& stream);
 
@@ -159,7 +158,8 @@ struct MemoryInterface {
           place_to_device_context,
       const std::vector<phi::Place>& places,
       bool disable_setting_default_stream_for_allocator,
-      int stream_priority);
+      int stream_priority,
+      bool set_to_default_stream);
 
 #if (defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)) && \
     (defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL))
@@ -170,6 +170,14 @@ struct MemoryInterface {
   phi::Allocator* (*get_pinned_allocator)();
   std::shared_ptr<std::remove_pointer<phi::gpuEvent_t>::type> (
       *get_new_cuda_event)(int device_id);
+#elif (defined(PADDLE_WITH_XPU) && defined(PADDLE_WITH_XPU_BKCL))
+  phi::Allocator* (*get_allocator)(int device_id, XPUStream stream);
+  phi::Allocator* (*get_host_allocator)();
+  phi::Allocator* (*get_zero_allocator)(int device_id);
+  phi::Allocator* (*get_host_zero_allocator)();
+  phi::Allocator* (*get_pinned_allocator)();
+  std::shared_ptr<std::remove_pointer<XPUEvent>::type> (*get_new_xpu_event)(
+      int device_id);
 #endif
 };
 
@@ -184,25 +192,25 @@ class MemoryUtils {
     memory_method_ = std::move(memory_method);
   }
 
-  Allocator::AllocationPtr Alloc(const phi::GPUPlace& place,
+  Allocator::AllocationPtr Alloc(const phi::Place& place,
                                  size_t size,
                                  const phi::Stream& stream) {
     CheckMemoryMethod();
     PADDLE_ENFORCE_NE(memory_method_->alloc_with_stream,
                       nullptr,
-                      phi::errors::Unavailable(
+                      common::errors::Unavailable(
                           "alloc_with_stream method in memory_method_ is not "
-                          "initiazed yet. You need init it first."));
+                          "initialized yet. You need init it first."));
     return memory_method_->alloc_with_stream(place, size, stream);
   }
 
   Allocator::AllocationPtr Alloc(const phi::Place& place, size_t size) {
     CheckMemoryMethod();
-    PADDLE_ENFORCE_NE(
-        memory_method_->alloc,
-        nullptr,
-        phi::errors::Unavailable("alloc method in memory_method_ is not "
-                                 "initiazed yet. You need init it first."));
+    PADDLE_ENFORCE_NE(memory_method_->alloc,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "alloc method in memory_method_ is not "
+                          "initialized yet. You need init it first."));
     return memory_method_->alloc(place, size);
   }
 
@@ -212,31 +220,31 @@ class MemoryUtils {
     CheckMemoryMethod();
     PADDLE_ENFORCE_NE(memory_method_->alloc_shared_with_stream,
                       nullptr,
-                      phi::errors::Unavailable(
+                      common::errors::Unavailable(
                           "alloc_shared_with_stream method in memory_method_ "
-                          "is not initiazed yet. You need init it first."));
+                          "is not initialized yet. You need init it first."));
     return memory_method_->alloc_shared_with_stream(place, size, stream);
   }
 
   std::shared_ptr<Allocation> AllocShared(const phi::Place& place,
                                           size_t size) {
     CheckMemoryMethod();
-    PADDLE_ENFORCE_NE(
-        memory_method_->alloc_shared,
-        nullptr,
-        phi::errors::Unavailable("alloc_shared method in memory_method_ is not "
-                                 "initiazed yet. You need init it first."));
+    PADDLE_ENFORCE_NE(memory_method_->alloc_shared,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "alloc_shared method in memory_method_ is not "
+                          "initialized yet. You need init it first."));
     return memory_method_->alloc_shared(place, size);
   }
 
   bool InSameStream(const std::shared_ptr<Allocation>& allocation,
                     const phi::Stream& stream) {
     CheckMemoryMethod();
-    PADDLE_ENFORCE_NE(
-        memory_method_->in_same_stream,
-        nullptr,
-        phi::errors::Unavailable("in_same_stream method in memory_method_ is "
-                                 "not initiazed yet. You need init it first."));
+    PADDLE_ENFORCE_NE(memory_method_->in_same_stream,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "in_same_stream method in memory_method_ is "
+                          "not initialized yet. You need init it first."));
     return memory_method_->in_same_stream(allocation, stream);
   }
 
@@ -244,9 +252,9 @@ class MemoryUtils {
     CheckMemoryMethod();
     PADDLE_ENFORCE_NE(memory_method_->allocation_deleter,
                       nullptr,
-                      phi::errors::Unavailable(
+                      common::errors::Unavailable(
                           "allocation_deleter method in memory_method_ is not "
-                          "initiazed yet. You need init it first."));
+                          "initialized yet. You need init it first."));
     return memory_method_->allocation_deleter(allocation);
   }
 
@@ -259,9 +267,9 @@ class MemoryUtils {
     CheckMemoryMethod();
     PADDLE_ENFORCE_NE(memory_method_->copy_with_stream,
                       nullptr,
-                      phi::errors::Unavailable(
+                      common::errors::Unavailable(
                           "copy_with_stream method in memory_method_ is not "
-                          "initiazed yet. You need init it first."));
+                          "initialized yet. You need init it first."));
     memory_method_->copy_with_stream(
         dst_place, dst, src_place, src, num, stream);
   }
@@ -272,11 +280,11 @@ class MemoryUtils {
             const void* src,
             size_t num) {
     CheckMemoryMethod();
-    PADDLE_ENFORCE_NE(
-        memory_method_->copy,
-        nullptr,
-        phi::errors::Unavailable("copy method in memory_method_ is not "
-                                 "initiazed yet. You need init it first."));
+    PADDLE_ENFORCE_NE(memory_method_->copy,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "copy method in memory_method_ is not "
+                          "initialized yet. You need init it first."));
     memory_method_->copy(dst_place, dst, src_place, src, num);
   }
 
@@ -286,9 +294,9 @@ class MemoryUtils {
     PADDLE_ENFORCE_NE(
         memory_method_->device_memory_stat_current_value,
         nullptr,
-        phi::errors::Unavailable(
+        common::errors::Unavailable(
             "device_memory_stat_current_value method in memory_method_ is not "
-            "initiazed yet. You need init it first."));
+            "initialized yet. You need init it first."));
     return memory_method_->device_memory_stat_current_value(stat_type, dev_id);
   }
 
@@ -297,8 +305,8 @@ class MemoryUtils {
     CheckMemoryMethod();
     PADDLE_ENFORCE_NOT_NULL(
         memory_method_->gpu_memory_usage,
-        phi::errors::Unavailable(
-            "gpu_memory_usage method in memory_method_ is not initiazed "
+        common::errors::Unavailable(
+            "gpu_memory_usage method in memory_method_ is not initialized "
             "yet. You need init it first."));
     return memory_method_->gpu_memory_usage(available, total);
   }
@@ -306,11 +314,11 @@ class MemoryUtils {
 
   void InitDevices() {
     CheckMemoryMethod();
-    PADDLE_ENFORCE_NE(
-        memory_method_->init_devices,
-        nullptr,
-        phi::errors::Unavailable("init_devices method in memory_method_ is not "
-                                 "initiazed yet. You need init it first."));
+    PADDLE_ENFORCE_NE(memory_method_->init_devices,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "init_devices method in memory_method_ is not "
+                          "initialized yet. You need init it first."));
     memory_method_->init_devices();
   }
 
@@ -319,28 +327,30 @@ class MemoryUtils {
           place_to_device_context,
       const std::vector<phi::Place>& places,
       bool disable_setting_default_stream_for_allocator,
-      int stream_priority) {
+      int stream_priority,
+      bool set_to_default_stream) {
     CheckMemoryMethod();
     PADDLE_ENFORCE_NE(
         memory_method_->emplace_device_contexts,
         nullptr,
-        phi::errors::Unavailable(
+        common::errors::Unavailable(
             "emplace_device_contexts method in memory_method_ is not "
-            "initiazed yet. You need init it first."));
+            "initialized yet. You need init it first."));
     memory_method_->emplace_device_contexts(
         place_to_device_context,
         places,
         disable_setting_default_stream_for_allocator,
-        stream_priority);
+        stream_priority,
+        set_to_default_stream);
   }
 
   void CheckMemoryMethod() {
     PADDLE_ENFORCE_NE(
         memory_method_.get(),
         nullptr,
-        phi::errors::Unavailable(
+        common::errors::Unavailable(
             "memory_method_ in MemoryUtils is not "
-            "initiazed yet. You need init it first. If you compiled with "
+            "initialized yet. You need init it first. If you compiled with "
             "Fluid. You can call InitMemoryMethod() for initialization."));
   }
 
@@ -370,6 +380,27 @@ class MemoryUtils {
       int device_id) {
     return memory_method_->get_new_cuda_event(device_id);
   }
+#elif (defined(PADDLE_WITH_XPU) && defined(PADDLE_WITH_XPU_BKCL))
+  const phi::Allocator* GetAllocator(int device_id, XPUStream stream) {
+    return memory_method_->get_allocator(device_id, stream);
+  }
+
+  const phi::Allocator* GetHostAllocator() {
+    return memory_method_->get_host_allocator();
+  }
+
+  const phi::Allocator* GetZeroAllocator(int device_id) {
+    return memory_method_->get_zero_allocator(device_id);
+  }
+
+  const phi::Allocator* GetHostZeroAllocator() {
+    return memory_method_->get_host_zero_allocator();
+  }
+
+  std::shared_ptr<std::remove_pointer<XPUEvent>::type> GetXpuEvent(
+      int device_id) {
+    return memory_method_->get_new_xpu_event(device_id);
+  }
 #endif
 
  private:
@@ -390,11 +421,11 @@ class MemoryUtils {
 
 namespace memory_utils {
 
-Allocator::AllocationPtr Alloc(const phi::GPUPlace& place,
-                               size_t size,
-                               const phi::Stream& stream);
+TEST_API Allocator::AllocationPtr Alloc(const phi::Place& place,
+                                        size_t size,
+                                        const phi::Stream& stream);
 
-Allocator::AllocationPtr Alloc(const phi::Place& place, size_t size);
+TEST_API Allocator::AllocationPtr Alloc(const phi::Place& place, size_t size);
 
 std::shared_ptr<Allocation> AllocShared(const phi::Place& place,
                                         size_t size,
@@ -432,7 +463,8 @@ void EmplaceDeviceContexts(
         place_to_device_context,
     const std::vector<phi::Place>& places,
     bool disable_setting_default_stream_for_allocator,
-    int stream_priority);
+    int stream_priority,
+    bool set_to_default_stream = false);
 
 #if (defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)) && \
     (defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL))
@@ -448,6 +480,16 @@ const Allocator* GetPinnedAllocator();
 
 std::shared_ptr<std::remove_pointer<phi::gpuEvent_t>::type> GetCudaEvent(
     int device_id);
+#elif (defined(PADDLE_WITH_XPU) && defined(PADDLE_WITH_XPU_BKCL))
+const Allocator* GetAllocator(int device_id, XPUStream stream);
+
+const Allocator* GetHostAllocator();
+
+const Allocator* GetZeroAllocator(int device_id);
+
+const Allocator* GetHostZeroAllocator();
+
+std::shared_ptr<std::remove_pointer<XPUEvent>::type> GetXpuEvent(int device_id);
 #endif
 
 class Buffer {

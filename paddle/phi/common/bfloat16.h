@@ -16,33 +16,58 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <iostream>
 #include <limits>
-#include "paddle/phi/core/hostdevice.h"
-
-#ifdef PADDLE_WITH_CUDA
-#include <cuda.h>
-#endif
-
-#if defined(__CUDACC__) && CUDA_VERSION >= 11000
-#define PADDLE_CUDA_BF16
-#include <cuda_bf16.h>
-#endif
-
-#ifndef PADDLE_WITH_HIP
-#if !defined(_WIN32)
-#define PADDLE_ALIGN(x) __attribute__((aligned(x)))
-#else
-#define PADDLE_ALIGN(x) __declspec(align(x))
-#endif
-#else
-#define PADDLE_ALIGN(x)
-#endif
+#include "paddle/common/backend_header.h"
+#include "paddle/common/hostdevice.h"
 
 namespace phi {
 namespace dtype {
+
+template <typename T, typename U>
+inline T bit_cast(U x) {
+  static_assert(sizeof(T) == sizeof(U), "invalid sizeof");
+  static_assert(std::is_pod<T>::value, "invalid pod type T");
+  static_assert(std::is_pod<U>::value, "invalid pod type U");
+  T y;
+  std::memcpy(&y, &x, sizeof(T));
+  return y;
+}
+
+// NOTE(zengjinle): this code is mainly from
+// https://github.com/oneapi-src/oneDNN/blob/main/src/common/bfloat16.cpp
+// with minor changes.
+inline uint16_t cpu_float_to_bfloat16(float f) {
+  auto iraw = bit_cast<std::array<uint16_t, 2>>(f);
+  uint16_t x;
+  switch (std::fpclassify(f)) {
+    case FP_ZERO: {
+      x = iraw[1];
+      x &= 0x8000;
+      break;
+    }
+    case FP_INFINITE: {
+      x = iraw[1];
+      break;
+    }
+    case FP_NAN: {
+      x = 0x7FFF;
+      break;
+    }
+    default: {
+      // round to nearest even and truncate
+      const uint32_t rounding_bias = 0x00007FFF + (iraw[1] & 0x1);
+      const uint32_t int_raw = bit_cast<uint32_t>(f) + rounding_bias;
+      iraw = bit_cast<std::array<uint16_t, 2>>(int_raw);
+      x = iraw[1];
+      break;
+    }
+  }
+  return x;
+}
 
 struct PADDLE_ALIGN(2) bfloat16 {
  public:
@@ -70,7 +95,7 @@ struct PADDLE_ALIGN(2) bfloat16 {
     __nv_bfloat16 tmp = __float2bfloat16(val);
     x = *reinterpret_cast<uint16_t*>(&tmp);
 #else
-    std::memcpy(&x, reinterpret_cast<char*>(&val) + 2, 2);
+    x = cpu_float_to_bfloat16(val);
 #endif
 #endif
   }

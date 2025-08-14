@@ -71,7 +71,7 @@ void AllGatherKernel(const phi::CustomContext& dev_ctx,
       errors::InvalidArgument(
           "nranks: %s should equal to %s", nranks, comm_ctx->GetSize()));
 
-  comm_ctx->AllGather(out, x, *dev_ctx.GetStream());
+  comm_ctx->AllGather(out, x, dev_ctx.stream());
 }
 #endif
 }  // namespace phi
@@ -88,7 +88,9 @@ PD_REGISTER_KERNEL(all_gather,
                    uint8_t,
                    int16_t,
                    int64_t,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
 PD_REGISTER_KERNEL(all_gather,
@@ -103,5 +105,7 @@ PD_REGISTER_KERNEL(all_gather,
                    uint8_t,
                    int16_t,
                    int64_t,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 #endif

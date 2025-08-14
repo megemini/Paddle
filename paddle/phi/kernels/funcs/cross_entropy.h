@@ -15,10 +15,10 @@ limitations under the License. */
 #pragma once
 #include <limits>
 
+#include "paddle/common/hostdevice.h"
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/float16.h"
 #include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/core/hostdevice.h"
 #include "paddle/phi/kernels/funcs/eigen/common.h"
 
 namespace phi {
@@ -76,7 +76,7 @@ struct TolerableValue<phi::dtype::bfloat16> {
 template <typename DeviceContext, typename T>
 class CrossEntropyFunctor {
  public:
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   phi::DenseTensor* out,
                   const phi::DenseTensor* prob,
                   const phi::DenseTensor* labels,

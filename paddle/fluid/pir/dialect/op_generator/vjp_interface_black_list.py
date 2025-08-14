@@ -22,11 +22,24 @@
 # remove this file and support Vjp methods
 # code gen.
 
+# Operators which only has composite implementation should be added below.
+# For example
+# * `silu_double_grad` only has composite implementation, so `silu_grad` was added below.
+# * `log_double_grad` has both composite and kernel implementation, so `log_grad` should not be added below.
 
 vjp_interface_black_list = [
     'silu_grad',
-    'fused_dropout_add',
-    'fused_rotary_position_embedding',
-    'fused_bias_dropout_residual_layer_norm',
-    'fused_dot_product_attention',
+    'exp_grad',
+    'abs_double_grad',
+    'where_grad',
+    'bmm_grad',
+    'index_put_grad',
+    'gather_nd_grad',
+    'take_along_axis_grad',
+    'index_add_grad',
+    'acos_grad',
+    'put_along_axis_grad',
+    'masked_fill_grad',
+    'masked_select_grad',
+    'index_elementwise_get_grad',
 ]

@@ -18,38 +18,38 @@
 
 from __future__ import annotations
 
+import inspect
 import random
 import sys
 import types
+from contextlib import contextmanager
+from enum import Enum
 from functools import cached_property
 from typing import TYPE_CHECKING
 
-import opcode
-
 import paddle
+from paddle.jit.utils import OrderedSet
 
 from ...utils import (
     FallbackError,
     InnerError,
-    OrderedSet,
     ResumeFnNameFactory,
-    is_clean_code,
     list_contain_by_id,
     list_find_index_by_id,
     no_eval_frame,
 )
 from ..instruction_utils import (
-    analysis_inputs,
     apply_instr_pass,
     calc_stack_effect,
     gen_instr,
-    get_instructions,
+    get_instruction_size,
     instrs_info,
     modify_instrs,
     modify_vars,
 )
 from ..instruction_utils.opcode_info import (
-    PYOPCODE_CACHE_SIZE,
+    ALL_JUMP,
+    RETURN,
     UNCONDITIONAL_JUMP,
     JumpDirection,
     PopJumpCond,
@@ -143,6 +143,7 @@ def gen_new_opcode(
         types.CodeType: The new code object.
     """
     bytecode, linetable = assemble(instrs, code_options["co_firstlineno"])
+
     if sys.version_info >= (3, 10):
         # Python deprecated co_lnotab in 3.10, use co_linetable instead
         # https://peps.python.org/pep-0626/
@@ -158,7 +159,7 @@ def gen_new_opcode(
     for key, val in code_options.items():
         if isinstance(val, list):
             code_options[key] = tuple(val)
-    # code_options is a dict, use keys to makesure the input order
+    # code_options is a dict, use keys to make sure the input order
     return types.CodeType(*[code_options[k] for k in keys])
 
 
@@ -216,13 +217,6 @@ def to_byte(num):
     if num < 0:
         num += 256
     return num
-
-
-def get_instruction_size(instr: Instruction) -> int:
-    cache_size = 0
-    if sys.version_info >= (3, 11):
-        cache_size = PYOPCODE_CACHE_SIZE.get(instr.opname, 0)
-    return 2 * (cache_size + 1)
 
 
 def create_linetable_calculator(firstlineno: int):
@@ -367,6 +361,7 @@ def stacksize(instructions: list[Instruction]) -> float:
         int: The maximum stack size.
     """
     max_stack = [float("-inf")] * len(instructions)
+    histories = [[] for _ in range(len(instructions))]
 
     max_stack[0] = 0
 
@@ -385,12 +380,12 @@ def stacksize(instructions: list[Instruction]) -> float:
         Returns:
             None
         """
-        old_max = max_stack[nexti]
-        max_stack[nexti] = max(
-            max_stack[nexti], max_stack[lasti] + stack_effect
-        )
-        if old_max != max_stack[nexti]:
-            if nexti not in queue:  # may be slow, we can use a flag.
+        if (new_stack_size := max_stack[lasti] + stack_effect) > max_stack[
+            nexti
+        ]:
+            histories[nexti] = histories[lasti] + [lasti]
+            max_stack[nexti] = new_stack_size
+            if nexti not in queue and nexti not in histories[nexti]:
                 queue.append(nexti)
 
     while len(queue) > 0:
@@ -400,12 +395,12 @@ def stacksize(instructions: list[Instruction]) -> float:
         opname = instr.opname
         if (
             idx + 1 < len(instructions)
-            and instr.opname not in UNCONDITIONAL_JUMP
+            and opname not in UNCONDITIONAL_JUMP | RETURN
         ):
             stack_effect = calc_stack_effect(instr, jump=False)
             update_stacksize(idx, idx + 1, stack_effect)
 
-        if instr.opcode in opcode.hasjabs or instr.opcode in opcode.hasjrel:
+        if opname in ALL_JUMP:
             stack_effect = calc_stack_effect(instr, jump=True)
             target_idx = instructions.index(instr.jump_to)
             update_stacksize(idx, target_idx, stack_effect)
@@ -418,7 +413,10 @@ class PyCodeGen:
     """Helper to create new code object"""
 
     def __init__(
-        self, frame: types.FrameType, disable_eval_frame: bool = False
+        self,
+        real_code: types.CodeType,
+        real_globals: dict[str, object],
+        disable_eval_frame: bool = False,
     ):
         """
         Initializes a PyCodeGen object.
@@ -427,11 +425,10 @@ class PyCodeGen:
             frame: The frame to be translated.
             disable_eval_frame (bool): Whether to disable the evaluation frame. Defaults to False.
         """
-        self._frame = frame
-        self._origin_code = frame.f_code
+        self._origin_code = real_code
         self._code_options = gen_code_options(self._origin_code)
         self.update_code_name("", is_resumed_fn=False)
-        self._f_globals = frame.f_globals
+        self._real_globals = real_globals
         self._instructions = []
         self.disable_eval_frame = disable_eval_frame
         self.hooks = []
@@ -474,19 +471,19 @@ class PyCodeGen:
 
     def update_code_name(self, fn_name, is_resumed_fn):
         if is_resumed_fn:
-            self._code_options[
-                'co_name'
-            ] = f"${fn_name}@{self._code_options['co_name'][1:]}"
+            self._code_options['co_name'] = (
+                f"${fn_name}@{self._code_options['co_name'][1:]}"
+            )
         else:
             if self._code_options['co_name'].startswith("$"):
-                self._code_options[
-                    'co_name'
-                ] = f"#{self._code_options['co_name']}"
+                self._code_options['co_name'] = (
+                    f"#{self._code_options['co_name']}"
+                )
             elif not self._code_options['co_name'].startswith("#"):
                 random_number = int(CODE_NAME_RNG.random() * 100000000)
-                self._code_options[
-                    'co_name'
-                ] = f"#{self._code_options['co_name']}_{hex(random_number & 0xFFFFF)[2:]:0>5}"
+                self._code_options['co_name'] = (
+                    f"#{self._code_options['co_name']}_{hex(random_number & 0xFFFFF)[2:]:0>5}"
+                )
 
     def gen_pycode(self) -> types.CodeType:
         """
@@ -509,58 +506,6 @@ class PyCodeGen:
 
         return new_code
 
-    def gen_resume_fn_at(
-        self, index: int, stack_size: int
-    ) -> tuple[None | types.FunctionType, OrderedSet[str]]:
-        """
-        Generates a resume function at the specified index in the instruction list.
-
-        Args:
-            index (int): The index in the instruction list to generate the resume function.
-            stack_size (int): The size of the stack. Defaults to 0.
-
-        Returns:
-            tuple: The resume function object and the inputs to the function.
-
-        """
-
-        self._instructions = get_instructions(self._origin_code)
-        # TODO(dev): could give an example code here?
-        if self._instructions[index].opname == 'RETURN_VALUE':
-            return None, OrderedSet()
-        inputs = analysis_inputs(self._instructions, index)
-        fn_name = ResumeFnNameFactory().next()
-        stack_arg_str = fn_name + '_stack_{}'
-
-        self._instructions = (
-            [
-                gen_instr('LOAD_FAST', argval=stack_arg_str.format(i))
-                for i in range(stack_size)
-            ]
-            + [gen_instr('JUMP_FORWARD', jump_to=self._instructions[index])]
-            + self._instructions
-        )
-
-        self._code_options['co_argcount'] = len(inputs) + stack_size
-        # inputs should be at the front of the co_varnames
-        self._code_options['co_varnames'] = list(
-            [stack_arg_str.format(i) for i in range(stack_size)]
-            + list(inputs)
-            + [
-                var_name
-                for var_name in self._code_options['co_varnames']
-                if var_name not in inputs
-            ]
-        )
-
-        self.update_code_name(fn_name, is_resumed_fn=True)
-        new_code = self.gen_pycode()
-        if len(new_code.co_freevars) + len(new_code.co_cellvars) > 0:
-            raise FallbackError("Break graph in closure is not support.")
-        fn = types.FunctionType(new_code, self._f_globals, new_code.co_name)
-
-        return fn, inputs
-
     @cached_property
     def global_null_variable(self):
         from .variables.basic import NullVariable
@@ -571,8 +516,6 @@ class PyCodeGen:
         """
         Generates instructions to disable the evaluation frame.
         """
-        if is_clean_code():
-            return
         self.gen_load_object(
             paddle.framework.core.set_eval_frame, "paddle_set_eval_frame_fn"
         )
@@ -584,47 +527,12 @@ class PyCodeGen:
         """
         Generates instructions to enable the evaluation frame.
         """
-        if is_clean_code():
-            return
         self.gen_load_object(
             paddle.framework.core.set_eval_frame, "paddle_set_eval_frame_fn"
         )
         self.gen_load_fast("___old_eval_frame")
         self.gen_call_function(1)
         self.gen_pop_top()
-
-    def gen_outputs_and_return(self, outputs):
-        for name in outputs:
-            self.gen_load(name)
-        self.gen_build_tuple(len(outputs))
-        self.gen_return()
-
-    def create_fn_with_inputs(self, inputs: list) -> types.FunctionType:
-        """
-        Creates a function with specific input and output variables.
-
-        Args:
-            inputs (list): The input variables.
-
-        Returns:
-            function: The created function object.
-        """
-        self._code_options['co_argcount'] = len(inputs)
-        self._code_options['co_varnames'] = list(
-            list(inputs)
-            + [
-                var_name
-                for var_name in self._origin_code.co_varnames
-                if var_name not in inputs
-            ]
-        )
-        fn_name = ResumeFnNameFactory().next()
-        self.update_code_name(fn_name, is_resumed_fn=True)
-        new_code = self.gen_pycode()
-        if len(new_code.co_freevars) + len(new_code.co_cellvars) > 0:
-            raise FallbackError("Break graph in closure is not support.")
-        fn = types.FunctionType(new_code, self._f_globals, new_code.co_name)
-        return fn
 
     def gen_load_const(self, value: Any):
         """
@@ -636,28 +544,55 @@ class PyCodeGen:
         if not list_contain_by_id(self._code_options["co_consts"], value):
             self._code_options["co_consts"].append(value)
         idx = list_find_index_by_id(self._code_options["co_consts"], value)
-        self._add_instr("LOAD_CONST", arg=idx, argval=value)
+        return self.add_instr("LOAD_CONST", arg=idx, argval=value)
 
-    def gen_print_log(self, message):
-        """print a log"""
+    @contextmanager
+    def gen_disable_eval_frame_guard(self):
+        """
+        Generates instructions to disable the evaluation frame.
+        """
         import paddle
 
         self.gen_load_object(
-            paddle.framework.core.set_eval_frame, "dbg_set_eval_frame"
+            paddle.framework.core.set_eval_frame, "___set_eval_frame"
         )
         self.gen_load_const(None)
         self.gen_call_function(1)
         self.gen_store_fast("old_eval_frame")
-        self.gen_load_global("print", push_null=True)
-        self.gen_load_const(message)
-        self.gen_call_function(1)
-        self.gen_pop_top()
+        yield
         self.gen_load_object(
-            paddle.framework.core.set_eval_frame, "dbg_set_eval_frame"
+            paddle.framework.core.set_eval_frame, "___set_eval_frame"
         )
         self.gen_load_fast("old_eval_frame")
         self.gen_call_function(1)
         self.gen_pop_top()
+
+    def gen_print_log(self, message):
+        """print a log"""
+        with self.gen_disable_eval_frame_guard():
+            self.gen_load_global("print", push_null=True)
+            self.gen_load_const(message)
+            self.gen_call_function(1)
+            self.gen_pop_top()
+
+    @contextmanager
+    def gen_nvtx_event(self, event_name):
+        import paddle
+
+        with self.gen_disable_eval_frame_guard():
+            self.gen_load_object(
+                paddle.base.core.nvprof_nvtx_push, "___nvprof_nvtx_push"
+            )
+            self.gen_load_const(event_name)
+            self.gen_call_function(1)
+            self.gen_pop_top()
+        yield
+        with self.gen_disable_eval_frame_guard():
+            self.gen_load_object(
+                paddle.base.core.nvprof_nvtx_pop, "___nvprof_nvtx_pop"
+            )
+            self.gen_call_function(0)
+            self.gen_pop_top()
 
     def gen_dbg_function(self, dbg_fun):
         """debug bytecode helper function.
@@ -745,7 +680,7 @@ class PyCodeGen:
             idx <<= 1
             if push_null:
                 idx |= 1
-        self._add_instr("LOAD_GLOBAL", arg=idx, argval=name)
+        return self.add_instr("LOAD_GLOBAL", arg=idx, argval=name)
 
     def gen_load_object(self, obj, obj_name: str, push_null: bool = True):
         """
@@ -756,16 +691,21 @@ class PyCodeGen:
             obj_name (str): The name of the object.
         """
 
-        if obj_name not in self._f_globals:
-            self._f_globals[obj_name] = obj
-        self.gen_load_global(obj_name, push_null=push_null)
+        if obj_name not in self._real_globals:
+            self._real_globals[obj_name] = obj
+        return self.gen_load_global(obj_name, push_null=push_null)
 
     def gen_load_null_variable(self):
         """
         Generate the bytecode for loading a null variable.
         """
         null_var = self.global_null_variable
-        self.gen_load_object(null_var, "___null_var", push_null=False)
+        return self.gen_load_object(null_var, "___null_var", push_null=False)
+
+    def gen_push_null(self):
+        if sys.version_info < (3, 11):
+            raise InnerError("gen_push_null is only supported in Python 3.11+")
+        return self.add_instr("PUSH_NULL")
 
     def gen_load_fast(self, name):
         """
@@ -777,7 +717,7 @@ class PyCodeGen:
         if name not in self._code_options["co_varnames"]:
             self._code_options["co_varnames"].append(name)
         idx = self._code_options["co_varnames"].index(name)
-        self._add_instr("LOAD_FAST", arg=idx, argval=name)
+        return self.add_instr("LOAD_FAST", arg=idx, argval=name)
 
     def gen_load_deref(self, name):
         if name not in self.cell_free_storage:
@@ -791,55 +731,61 @@ class PyCodeGen:
             ).index(name)
         else:
             idx = self.cell_free_storage.index(name)
-        self._add_instr("LOAD_DEREF", arg=idx, argval=name)
+        return self.add_instr("LOAD_DEREF", arg=idx, argval=name)
 
-    def gen_load_attr(self, name: str):
+    def gen_load_attr(self, name: str, is_method=False):
         if name not in self._code_options["co_names"]:
             self._code_options["co_names"].append(name)
         idx = self._code_options["co_names"].index(name)
-        self._add_instr("LOAD_ATTR", arg=idx, argval=name)
+        if sys.version_info >= (3, 12):
+            idx <<= 1
+            if is_method:
+                idx |= 1
+        return self.add_instr("LOAD_ATTR", arg=idx, argval=name)
 
     def gen_store_attr(self, name: str):
         if name not in self._code_options["co_names"]:
             self._code_options["co_names"].append(name)
         idx = self._code_options["co_names"].index(name)
-        self._add_instr("STORE_ATTR", arg=idx, argval=name)
+        return self.add_instr("STORE_ATTR", arg=idx, argval=name)
 
     def gen_delete_attr(self, name: str):
         if name not in self._code_options["co_names"]:
             self._code_options["co_names"].append(name)
         idx = self._code_options["co_names"].index(name)
-        self._add_instr("DELETE_ATTR", arg=idx, argval=name)
+        return self.add_instr("DELETE_ATTR", arg=idx, argval=name)
 
     def gen_load_method(self, name: str):
+        if sys.version_info >= (3, 12):
+            return self.gen_load_attr(name, True)
         if name not in self._code_options["co_names"]:
             self._code_options["co_names"].append(name)
         idx = self._code_options["co_names"].index(name)
-        self._add_instr("LOAD_METHOD", arg=idx, argval=name)
+        return self.add_instr("LOAD_METHOD", arg=idx, argval=name)
 
     def gen_delete_global(self, name: str):
         if name not in self._code_options["co_names"]:
             self._code_options["co_names"].append(name)
         idx = self._code_options["co_names"].index(name)
-        self._add_instr("DELETE_GLOBAL", arg=idx, argval=name)
+        return self.add_instr("DELETE_GLOBAL", arg=idx, argval=name)
 
     def gen_import_name(self, name: str):
         if name not in self._code_options["co_names"]:
             self._code_options["co_names"].append(name)
         idx = self._code_options["co_names"].index(name)
-        self._add_instr("IMPORT_NAME", arg=idx, argval=name)
+        return self.add_instr("IMPORT_NAME", arg=idx, argval=name)
 
     def gen_store_fast(self, name):
         if name not in self._code_options["co_varnames"]:
             self._code_options["co_varnames"].append(name)
         idx = self._code_options["co_varnames"].index(name)
-        self._add_instr("STORE_FAST", arg=idx, argval=name)
+        return self.add_instr("STORE_FAST", arg=idx, argval=name)
 
     def gen_store_global(self, name):
         if name not in self._code_options["co_names"]:
             self._code_options["co_names"].append(name)
         idx = self._code_options["co_names"].index(name)
-        self._add_instr("STORE_GLOBAL", arg=idx, argval=name)
+        return self.add_instr("STORE_GLOBAL", arg=idx, argval=name)
 
     def gen_store_deref(self, name):
         if name not in self.cell_free_storage:
@@ -853,73 +799,77 @@ class PyCodeGen:
             ).index(name)
         else:
             idx = self.cell_free_storage.index(name)
-        self._add_instr("STORE_DEREF", arg=idx, argval=name)
+        return self.add_instr("STORE_DEREF", arg=idx, argval=name)
 
     def gen_store_subscr(self):
-        self._add_instr("STORE_SUBSCR")
+        return self.add_instr("STORE_SUBSCR")
 
     def gen_subscribe(self):
-        self._add_instr("BINARY_SUBSCR")
+        return self.add_instr("BINARY_SUBSCR")
 
     def gen_build_tuple(self, count):
-        self._add_instr("BUILD_TUPLE", arg=count, argval=count)
+        return self.add_instr("BUILD_TUPLE", arg=count, argval=count)
 
     def gen_build_list(self, count):
-        self._add_instr("BUILD_LIST", arg=count, argval=count)
+        return self.add_instr("BUILD_LIST", arg=count, argval=count)
 
     def gen_build_map(self, count):
-        self._add_instr("BUILD_MAP", arg=count, argval=count)
+        return self.add_instr("BUILD_MAP", arg=count, argval=count)
 
     def gen_build_slice(self, argc):
-        self._add_instr("BUILD_SLICE", arg=argc, argval=argc)
+        return self.add_instr("BUILD_SLICE", arg=argc, argval=argc)
 
     def gen_unpack_sequence(self, count):
-        self._add_instr("UNPACK_SEQUENCE", arg=count, argval=count)
+        return self.add_instr("UNPACK_SEQUENCE", arg=count, argval=count)
 
     def gen_call_function(self, argc=0):
         if sys.version_info >= (3, 11):
-            self._add_instr("PRECALL", arg=argc, argval=argc)
-            self._add_instr("CALL", arg=argc, argval=argc)
+            if sys.version_info < (3, 12):
+                self.add_instr("PRECALL", arg=argc, argval=argc)
+            self.add_instr("CALL", arg=argc, argval=argc)
         else:
-            self._add_instr("CALL_FUNCTION", arg=argc, argval=argc)
+            self.add_instr("CALL_FUNCTION", arg=argc, argval=argc)
 
     def gen_call_function_ex(self, has_kwargs):
         flag = 0
         if has_kwargs:
             flag |= CALL_FUNCTION_EX_FLAG.CFE_HAS_KWARGS
-        self._add_instr("CALL_FUNCTION_EX", arg=flag, argval=flag)
+        self.add_instr("CALL_FUNCTION_EX", arg=flag, argval=flag)
 
     def gen_call_method(self, argc=0):
         if sys.version_info >= (3, 11):
-            self._add_instr("PRECALL", arg=argc, argval=argc)
-            self._add_instr("CALL", arg=argc, argval=argc)
+            if sys.version_info < (3, 12):
+                self.add_instr("PRECALL", arg=argc, argval=argc)
+            self.add_instr("CALL", arg=argc, argval=argc)
         else:
-            self._add_instr("CALL_METHOD", arg=argc, argval=argc)
+            self.add_instr("CALL_METHOD", arg=argc, argval=argc)
 
     def gen_kw_names(self, kw_names: tuple[str, ...] | None):
         if kw_names is None:
             return
-        if sys.version_info < (3, 11):
-            raise InnerError("gen_kw_names is not supported before python3.11")
+        if sys.version_info < (3, 11) or sys.version_info >= (3, 13):
+            raise InnerError(
+                "gen_kw_names is only supported in Python 3.11 and 3.12"
+            )
         if kw_names not in self._code_options["co_consts"]:
             self._code_options["co_consts"].append(kw_names)
         idx = self._code_options["co_consts"].index(kw_names)
-        self._add_instr("KW_NAMES", arg=idx, argval=kw_names)
+        self.add_instr("KW_NAMES", arg=idx, argval=kw_names)
 
     def gen_pop_top(self):
-        self._add_instr("POP_TOP")
+        return self.add_instr("POP_TOP")
 
     def gen_rot_n(self, n):
         if n <= 1:
             return
         if sys.version_info >= (3, 11):
             for i in range(n, 1, -1):
-                self._add_instr("SWAP", arg=i)
+                self.add_instr("SWAP", arg=i)
         elif sys.version_info >= (3, 10):
-            self._add_instr("ROT_N", arg=n)
+            self.add_instr("ROT_N", arg=n)
         else:
             if n <= 4:
-                self._add_instr("ROT_" + ["TWO", "THREE", "FOUR"][n - 2])
+                self.add_instr("ROT_" + ["TWO", "THREE", "FOUR"][n - 2])
             else:
 
                 def rot_n_fn(n):
@@ -933,7 +883,7 @@ class PyCodeGen:
                 self.gen_build_tuple(n)
                 self.gen_load_const(rot_n_fn(n))
                 self.gen_rot_n(2)
-                self._add_instr("CALL_FUNCTION_EX", arg=0)
+                self.add_instr("CALL_FUNCTION_EX", arg=0)
                 self.gen_unpack_sequence(n)
 
     def gen_shift_n(self, s: int, n: int):
@@ -966,7 +916,7 @@ class PyCodeGen:
                 # NOTE: s=-1, n=3 [1,2,3,4,5] -> [1,2,4,5,3]
                 if s == -1:
                     for i in range(2, n + 1):
-                        self._add_instr("SWAP", arg=i)
+                        self.add_instr("SWAP", arg=i)
                 else:
                     self.gen_shift_n(-1, n)
                     self.gen_shift_n(s + 1, n)
@@ -975,9 +925,14 @@ class PyCodeGen:
                     "shift_n is not supported before python3.11"
                 )
 
+    def gen_dup_top(self):
+        if sys.version_info >= (3, 11):
+            return self.add_instr("COPY", arg=1)
+        return self.add_instr("DUP_TOP")
+
     def gen_swap(self, n):
         if sys.version_info >= (3, 11):
-            self._add_instr("SWAP", arg=n)
+            self.add_instr("SWAP", arg=n)
         else:
             raise NotImplementedError("swap is not supported before python3.11")
 
@@ -988,9 +943,9 @@ class PyCodeGen:
         direction: JumpDirection = JumpDirection.FORWARD,
     ) -> Instruction:
         if sys.version_info >= (3, 11):
-            return self._add_instr(f"JUMP_{direction.value}", jump_to=jump_to)
+            return self.add_instr(f"JUMP_{direction.value}", jump_to=jump_to)
         else:
-            return self._add_instr("JUMP_ABSOLUTE", jump_to=jump_to)
+            return self.add_instr("JUMP_ABSOLUTE", jump_to=jump_to)
 
     def gen_pop_jump(
         self,
@@ -999,43 +954,27 @@ class PyCodeGen:
         direction: JumpDirection = JumpDirection.FORWARD,
         suffix: PopJumpCond = PopJumpCond.NONE,
     ) -> Instruction:
-        if sys.version_info >= (3, 11):
-            return self._add_instr(
+        if sys.version_info >= (3, 13) and suffix in [
+            PopJumpCond.TRUE,
+            PopJumpCond.FALSE,
+        ]:
+            self.add_instr("TO_BOOL")
+        if sys.version_info >= (3, 11) and sys.version_info < (3, 12):
+            return self.add_instr(
                 f"POP_JUMP_{direction.value}_IF_{suffix.value}", jump_to=jump_to
             )
         else:
-            return self._add_instr(
+            return self.add_instr(
                 f"POP_JUMP_IF_{suffix.value}", jump_to=jump_to
             )
 
     def gen_return(self):
-        self._add_instr("RETURN_VALUE")
+        return self.add_instr("RETURN_VALUE")
 
     def gen_get_iter(self):
-        self._add_instr("GET_ITER")
+        return self.add_instr("GET_ITER")
 
-    def gen_operator_only(self, op_name):
-        """
-        only generator operator instruction, do nothing for
-        operands.
-        """
-        self._add_instr(op_name)
-
-    def gen_operator(self, op_name):
-        """
-        only generator operator instruction, do nothing for
-        operands.
-        """
-        self._add_instr(op_name)
-
-    def gen_compare(self, cmp_op):
-        """
-        only generator operator instruction, do nothing for
-        operands.
-        """
-        self._add_instr("COMPARE_OP", cmp_op)
-
-    def _add_instr(self, *args, **kwargs):
+    def add_instr(self, *args, **kwargs):
         instr = gen_instr(*args, **kwargs)
         self._instructions.append(instr)
         return instr
@@ -1052,3 +991,102 @@ class PyCodeGen:
 
     def pop_instr(self):
         self._instructions.pop()
+
+
+class ResumeFunctionType(Enum):
+    # If breakgraph
+    IF_RESUME = 0
+    # Call breakgraph
+    CALL_RESUME = 1
+    # Loop breakgraph
+    LOOP_BODY_RESUME = 2
+    AFTER_LOOP_RESUME = 3
+    # Loop inline call
+    LOOP_BODY_INLINE_CALL = 4
+
+
+class ResumeFunctionCreator:
+    CODE_CACHE = {}
+
+    def __init__(
+        self,
+        code: types.CodeType,
+        globals: dict[str, object],
+        disable_eval_frame: bool = False,
+    ):
+        self.codegen = PyCodeGen(code, globals, disable_eval_frame)
+        self.name = ResumeFnNameFactory().next()
+
+    def set_inputs(
+        self, inputs: list[str], stack_size: int, null_indices: list[int] = []
+    ):
+        stack_arg_str = self.name + '_stack_{}'
+        assert all(
+            idx < stack_size for idx in null_indices
+        ), "null index out of range"
+
+        self.codegen._code_options['co_argcount'] = (
+            len(inputs) + stack_size - len(null_indices)
+        )
+        self.codegen._code_options['co_varnames'] = list(
+            [
+                stack_arg_str.format(i)
+                for i in range(stack_size)
+                if i not in null_indices
+            ]
+            + inputs
+            + [
+                var_name
+                for var_name in self.codegen._origin_code.co_varnames
+                if var_name not in inputs
+            ]
+        )
+
+        self.codegen._instructions.extend(
+            [
+                (
+                    gen_instr("PUSH_NULL")
+                    if i in null_indices
+                    else gen_instr('LOAD_FAST', argval=stack_arg_str.format(i))
+                )
+                for i in range(stack_size)
+            ]
+        )
+
+    def set_outputs(self, outputs: list[str]):
+        for name in outputs:
+            self.codegen.gen_load(name)
+        self.codegen.gen_build_tuple(len(outputs))
+        self.codegen.gen_return()
+
+    @staticmethod
+    def validate_code(code):
+        if len(code.co_freevars) + len(code.co_cellvars) > 0:
+            raise FallbackError(
+                f"Break graph in closure is not support.\n`co_freevars`: {code.co_freevars}\n`co_cellvars`: {code.co_cellvars}"
+            )
+
+    def lookup(self, cache_key):
+        if cache_key in self.CODE_CACHE:
+            cached_code = self.CODE_CACHE[cache_key]
+            ResumeFunctionCreator.validate_code(cached_code)
+            return types.FunctionType(
+                cached_code, self.codegen._real_globals, cached_code.co_name
+            )
+        return None
+
+    def generate(self, cache_key=None) -> types.FunctionType:
+        self.codegen.update_code_name(self.name, is_resumed_fn=True)
+        self.codegen._code_options['co_flags'] &= ~(
+            inspect.CO_VARARGS | inspect.CO_VARKEYWORDS
+        )
+        self.codegen._code_options['co_kwonlyargcount'] = 0
+        new_code = self.codegen.gen_pycode()
+        # TODO(SigureMo): cache_key should not be None
+        if cache_key is not None:
+            self.CODE_CACHE[cache_key] = new_code
+        ResumeFunctionCreator.validate_code(new_code)
+        fn = types.FunctionType(
+            new_code, self.codegen._real_globals, new_code.co_name
+        )
+        return fn

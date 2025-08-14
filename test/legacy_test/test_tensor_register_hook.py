@@ -506,21 +506,24 @@ class TestTensorRegisterHook(unittest.TestCase):
 
         startup_program = paddle.static.Program()
         main_program = paddle.static.Program()
-        with paddle.static.scope_guard(paddle.static.Scope()):
-            with paddle.static.program_guard(main_program, startup_program):
-                x = paddle.static.data(
-                    name='x', shape=[None, self.in_size], dtype='float32'
-                )
+        with (
+            paddle.static.scope_guard(paddle.static.Scope()),
+            paddle.static.program_guard(main_program, startup_program),
+        ):
+            x = paddle.static.data(
+                name='x', shape=[None, self.in_size], dtype='float32'
+            )
 
-                net = SimpleNetForStatic(self.in_size, self.out_size)
-                out = net(x)
+            net = SimpleNetForStatic(self.in_size, self.out_size)
+            out = net(x)
 
         paddle.disable_static()
 
     def test_register_hook_in_dy2static_mode(self):
         net = SimpleNetForStatic(self.in_size, self.out_size)
         jit_net = paddle.jit.to_static(
-            net, input_spec=[paddle.static.InputSpec([None, self.in_size])]
+            net,
+            input_spec=[paddle.static.InputSpec([None, self.in_size])],
         )
 
         data = np.random.uniform(size=[self.batch_size, self.in_size]).astype(
@@ -589,7 +592,7 @@ class TestTensorRegisterBackwardHook(unittest.TestCase):
             x._register_backward_hook(global_void_hook)
 
 
-class TestRegsiterBackwardFinalHook(unittest.TestCase):
+class TestRegisterBackwardFinalHook(unittest.TestCase):
     def setUp(self):
         self.devices = ["cpu"]
         if paddle.is_compiled_with_cuda():

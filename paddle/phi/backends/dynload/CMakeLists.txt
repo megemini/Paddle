@@ -1,5 +1,4 @@
-set(DYNLOAD_COMMON_SRCS dynamic_loader.cc port.cc warpctc.cc warprnnt.cc
-                        lapack.cc)
+set(DYNLOAD_COMMON_SRCS dynamic_loader.cc warpctc.cc warprnnt.cc lapack.cc)
 if(WITH_ASCEND_CL)
   list(REMOVE_ITEM DYNLOAD_COMMON_SRCS warprnnt.cc)
 endif()
@@ -13,7 +12,9 @@ list(
   cusolver.cc
   cusparse.cc
   nvtx.cc
-  cufft.cc)
+  cufft.cc
+  cutlass_conv2d.cc
+  cutlass_gemm_epilogue.cc)
 
 if(NOT WITH_NV_JETSON)
   list(APPEND CUDA_SRCS nvjpeg.cc)
@@ -24,10 +25,16 @@ if(WITH_ROCM)
     APPEND
     HIP_SRCS
     rocblas.cc
+    hipblasLt.cc
     miopen.cc
     hiprand.cc
     hipfft.cc
-    rocsparse.cc)
+    rocsparse.cc
+    rocsolver.cc)
+endif()
+
+if(WITH_XPU_FFT)
+  list(APPEND XPU_SRCS xpufft.cc)
 endif()
 
 # There is no macOS version of NCCL.
@@ -74,14 +81,19 @@ if(WITH_MKLML)
 endif()
 
 if(WITH_XPU)
-  cc_library(
-    phi_dynload_xpti
-    SRCS xpti.cc
-    DEPS phi common)
+  collect_srcs(backends_srcs SRCS xpti.cc)
+endif()
+
+if(WITH_FLAGCX)
+  collect_srcs(backends_srcs SRCS flagcx.cc)
 endif()
 
 if(WITH_FLASHATTN)
   list(APPEND DYNLOAD_COMMON_SRCS flashattn.cc)
+endif()
+
+if(WITH_FLASHATTN_V3)
+  list(APPEND DYNLOAD_COMMON_SRCS flashattnv3.cc)
 endif()
 
 if(MKL_FOUND AND WITH_ONEMKL)
@@ -93,6 +105,8 @@ if(WITH_ROCM)
   collect_srcs(backends_srcs SRCS ${DYNLOAD_COMMON_SRCS} ${HIP_SRCS})
 elseif(WITH_GPU)
   collect_srcs(backends_srcs SRCS ${DYNLOAD_COMMON_SRCS} ${CUDA_SRCS})
+elseif(WITH_XPU_FFT)
+  collect_srcs(backends_srcs SRCS ${DYNLOAD_COMMON_SRCS} ${XPU_SRCS})
 else()
   collect_srcs(backends_srcs SRCS ${DYNLOAD_COMMON_SRCS})
 endif()

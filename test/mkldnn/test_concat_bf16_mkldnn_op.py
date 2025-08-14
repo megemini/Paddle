@@ -27,16 +27,16 @@ from paddle.base import core
 class TestConcatBf16Op(OpTest):
     def setUp(self):
         self.op_type = "concat"
-        self.use_mkldnn = True
-        self.mkldnn_data_type = "bfloat16"
+        self.use_onednn = True
+        self.onednn_data_type = "bfloat16"
         self.init_axis()
         self.init_shape()
         self.init_test_data()
         self.inputs = {'X': [('x0', self.x0), ('x1', self.x1), ('x2', self.x2)]}
         self.attrs = {
             'axis': self.axis,
-            'use_mkldnn': True,
-            'mkldnn_data_type': self.mkldnn_data_type,
+            'use_onednn': True,
+            'mkldnn_data_type': self.onednn_data_type,
         }
 
         self.sections = [self.x0.shape[self.axis]] * 2
@@ -52,7 +52,7 @@ class TestConcatBf16Op(OpTest):
         self.dxs = np.split(self.dout, self.sections, self.axis)
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     def test_check_grad(self):
         self.calculate_grads()
@@ -62,6 +62,7 @@ class TestConcatBf16Op(OpTest):
             "Out",
             user_defined_grads=[self.dxs[0], self.dxs[1], self.dxs[2]],
             user_defined_grad_outputs=[self.dout],
+            check_pir_onednn=True,
         )
 
     # --------------------test concat bf16 in with axis 0--------------------

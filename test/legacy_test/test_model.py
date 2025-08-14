@@ -18,6 +18,7 @@ import tempfile
 import unittest
 
 import numpy as np
+from op_test import get_device_place
 
 import paddle
 from paddle import Model, base, jit, to_tensor
@@ -69,14 +70,14 @@ class ModelInner(paddle.nn.Layer):
         return y, 0
 
 
-class ModelOutter(paddle.nn.Layer):
+class ModelOuter(paddle.nn.Layer):
     def __init__(self):
         super().__init__()
         self.module1 = ModelInner()
         self.module2 = paddle.nn.Linear(4, 5)
 
     def forward(self, x):
-        y, dummpy = self.module1(x)
+        y, _ = self.module1(x)
         y = self.module2(y)
         return y, 3
 
@@ -188,7 +189,7 @@ class TestModel(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not base.is_compiled_with_cuda():
-            cls().skipTest('module not tested when ONLY_CPU compling')
+            cls().skipTest('module not tested when ONLY_CPU compiling')
         cls.device = paddle.set_device('gpu')
         base.enable_dygraph(cls.device)
 
@@ -211,7 +212,12 @@ class TestModel(unittest.TestCase):
 
         seed = 555
         paddle.seed(seed)
-        paddle.framework.random._manual_program_seed(seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                paddle.framework.random._manual_program_seed(seed)
+            paddle.framework.random._manual_program_seed(seed)
+        else:
+            paddle.framework.random._manual_program_seed(seed)
 
         dy_lenet = LeNetDygraph()
         cls.init_param = dy_lenet.state_dict()
@@ -277,7 +283,12 @@ class TestModel(unittest.TestCase):
         base.enable_dygraph(self.device) if dynamic else None
         seed = 555
         paddle.seed(seed)
-        paddle.framework.random._manual_program_seed(seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                paddle.framework.random._manual_program_seed(seed)
+            paddle.framework.random._manual_program_seed(seed)
+        else:
+            paddle.framework.random._manual_program_seed(seed)
 
         net = LeNet()
         optim_new = paddle.optimizer.Adam(
@@ -343,7 +354,12 @@ class TestModel(unittest.TestCase):
         base.enable_dygraph(self.device) if dynamic else None
         seed = 555
         paddle.seed(seed)
-        paddle.framework.random._manual_program_seed(seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                paddle.framework.random._manual_program_seed(seed)
+            paddle.framework.random._manual_program_seed(seed)
+        else:
+            paddle.framework.random._manual_program_seed(seed)
 
         net = LeNet()
         optim_new = paddle.optimizer.Adam(
@@ -486,7 +502,12 @@ class MyDataset(Dataset):
 class TestModelFunction(unittest.TestCase):
     def set_seed(self, seed=1024):
         paddle.seed(seed)
-        paddle.framework.random._manual_program_seed(seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                paddle.framework.random._manual_program_seed(seed)
+            paddle.framework.random._manual_program_seed(seed)
+        else:
+            paddle.framework.random._manual_program_seed(seed)
 
     def test_train_batch(self, dynamic=True):
         dim = 20
@@ -547,12 +568,16 @@ class TestModelFunction(unittest.TestCase):
             device = paddle.set_device('cpu')
             base.enable_dygraph(device) if dynamic else None
             self.set_seed()
+            startup = paddle.base.default_startup_program()
             net = MyModel()
             inputs = [InputSpec([None, dim], 'float32', 'x')]
             model = Model(net, inputs)
             model.prepare()
             (out,) = model.predict_batch([data])
-
+            if dynamic:
+                out_dy = out
+            else:
+                out_st = out
             np.testing.assert_allclose(out, ref, rtol=1e-6)
             base.disable_dygraph() if dynamic else None
 
@@ -563,6 +588,7 @@ class TestModelFunction(unittest.TestCase):
         for dynamic in [True, False]:
             device = paddle.set_device('cpu')
             base.enable_dygraph(device) if dynamic else None
+
             net = MyModel()
             inputs = [InputSpec([None, 20], 'float32', 'x')]
             labels = [InputSpec([None, 1], 'int64', 'label')]
@@ -590,14 +616,9 @@ class TestModelFunction(unittest.TestCase):
             net = LeNet()
             inputs = [InputSpec([None, 1, 28, 28], 'float32', 'x')]
             labels = [InputSpec([None, 1], 'int64', 'label')]
-            if new_optimizer:
-                optim = paddle.optimizer.Adam(
-                    learning_rate=0.001, parameters=net.parameters()
-                )
-            else:
-                optim = paddle.optimizer.Adam(
-                    learning_rate=0.001, parameters=net.parameters()
-                )
+            optim = paddle.optimizer.Adam(
+                learning_rate=0.001, parameters=net.parameters()
+            )
             model = Model(net, inputs, labels)
             model.prepare(
                 optimizer=optim, loss=CrossEntropyLoss(reduction="sum")
@@ -641,6 +662,7 @@ class TestModelFunction(unittest.TestCase):
         )
         if not os.path.exists(path):
             os.makedirs(path)
+
         net = MyModel()
         inputs = [InputSpec([None, 20], 'float32', 'x')]
         labels = [InputSpec([None, 1], 'int64', 'label')]
@@ -670,6 +692,7 @@ class TestModelFunction(unittest.TestCase):
         for dynamic in [True, False]:
             device = paddle.set_device('cpu')
             base.enable_dygraph(device) if dynamic else None
+
             net = MyModel()
             inputs = [InputSpec([None, 20], 'float32', 'x')]
             model = Model(net, inputs)
@@ -700,11 +723,11 @@ class TestModelFunction(unittest.TestCase):
             print(params_info)
 
             model.summary(input_size=(20))
-            model.summary(input_size=[(20)])
+            model.summary(input_size=[20])
             model.summary(input_size=(20), dtype='float32')
 
     def test_summary_non_tensor(self):
-        paddle.summary(ModelOutter(), input_size=(-1, 3))
+        paddle.summary(ModelOuter(), input_size=(-1, 3))
 
     def test_summary_nlp(self):
         def _get_param_from_state_dict(state_dict):
@@ -829,7 +852,7 @@ class TestModelFunction(unittest.TestCase):
             inputs = [InputSpec([None, 1, 28, 28], 'float32', 'x')]
             model = Model(net, inputs)
             model.prepare()
-
+            np.random.seed(201)
             tensor_img = np.array(
                 np.random.random((1, 1, 28, 28)), dtype=np.float32
             )
@@ -838,11 +861,7 @@ class TestModelFunction(unittest.TestCase):
             ori_results = model.predict_batch(tensor_img)
             base.disable_dygraph() if dynamic else None
 
-            place = (
-                base.CPUPlace()
-                if not base.is_compiled_with_cuda()
-                else base.CUDAPlace(0)
-            )
+            place = get_device_place()
             new_scope = base.Scope()
             with base.scope_guard(new_scope):
                 exe = base.Executor(place)
@@ -1000,7 +1019,6 @@ class TestModelWithLRScheduler(unittest.TestCase):
         )
         # static test
         paddle.enable_static()
-
         net = MyModel()
         inputs = [InputSpec([None, 20], 'float32', 'x')]
         labels = [InputSpec([None, 1], 'int64', 'label')]
@@ -1020,7 +1038,7 @@ class TestModelWithLRScheduler(unittest.TestCase):
         base_lr = 1e-3
         boundaries = [5, 8]
         epochs = 10
-        wamup_epochs = 4
+        warmup_epochs = 4
 
         def make_optimizer(parameters=None):
             momentum = 0.9
@@ -1031,7 +1049,7 @@ class TestModelWithLRScheduler(unittest.TestCase):
             )
             learning_rate = paddle.optimizer.lr.LinearWarmup(
                 learning_rate=learning_rate,
-                warmup_steps=wamup_epochs,
+                warmup_steps=warmup_epochs,
                 start_lr=base_lr / 5.0,
                 end_lr=base_lr,
                 verbose=True,
@@ -1071,7 +1089,7 @@ class TestModelWithLRScheduler(unittest.TestCase):
 
         cnt = 0
         for b in boundaries:
-            if b + wamup_epochs <= epochs:
+            if b + warmup_epochs <= epochs:
                 cnt += 1
 
         np.testing.assert_allclose(
@@ -1104,7 +1122,7 @@ class TestModelWithLRScheduler(unittest.TestCase):
 
         cnt = 0
         for b in boundaries:
-            if b + wamup_epochs <= epochs:
+            if b + warmup_epochs <= epochs:
                 cnt += 1
 
         np.testing.assert_allclose(

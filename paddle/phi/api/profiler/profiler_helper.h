@@ -30,6 +30,7 @@ limitations under the License. */
 #include <vector>
 
 #include "paddle/phi/api/profiler/device_tracer.h"
+#include "paddle/phi/api/profiler/profiler.h"
 
 namespace phi {
 
@@ -73,7 +74,7 @@ inline EventList<Event> &GetEventList() {
     ProfilerHelper::g_thread_id = ProfilerHelper::g_next_thread_id++;
     ProfilerHelper::g_all_event_lists.emplace_front(
         ProfilerHelper::g_event_list);
-    RecoreCurThreadId(ProfilerHelper::g_thread_id);
+    RecordCurThreadId(ProfilerHelper::g_thread_id);
   }
   return *ProfilerHelper::g_event_list;
 }

@@ -37,7 +37,7 @@ class TestSoftplusOneDNNOp(OpTest):
         self.threshold = 20
         self.config()
         self.set_dtype()
-        self.attrs = {'use_mkldnn': True, 'beta': self.beta}
+        self.attrs = {'use_onednn': True, 'beta': self.beta}
         self.x = np.random.random(self.x_shape)
         self.out = ref_softplus(self.x, self.beta, self.threshold)
 
@@ -56,7 +56,7 @@ class TestSoftplusOneDNNOp(OpTest):
         self.dtype = np.float32
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir_onednn=True)
 
 
 class TestSoftplus4DOneDNNOp(TestSoftplusOneDNNOp):

@@ -9,28 +9,23 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/memcpy_d2h_op.h"
-
 #include <string>
-
 #include "paddle/fluid/framework/infershape_utils.h"
+#include "paddle/fluid/framework/op_registry.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/infermeta/unary.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class OpDesc;
 class InferShapeContext;
 template <typename T>
 class EmptyGradOpMaker;
-}  // namespace framework
-namespace imperative {
+}  // namespace paddle::framework
+namespace paddle::imperative {
 class OpBase;
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class MemcpyD2HOp : public framework::OperatorWithKernel {
  public:
@@ -60,25 +55,6 @@ class MemcpyD2HInferVarType : public framework::VarTypeInference {
   }
 };
 
-class MemcpyD2HKernel {
- public:
-  void operator()(const framework::ExecutionContext &ctx) const {
-    auto *x = ctx.InputVar("X");
-    if (x == nullptr) {
-      return;
-    }
-    PADDLE_ENFORCE_EQ(ctx.HasOutput("Out"),
-                      true,
-                      platform::errors::NotFound(
-                          "Output(Out) of memcpy_d2h_op is not found."));
-    auto *out = ctx.OutputVar("Out");
-    // Get dev_ctx from ExecutionContext, it's D2H stream
-    auto &dev_ctx = ctx.device_context();
-    auto dst_place_type = ctx.Attr<int>("dst_place_type");
-    framework::VisitVarType(*x, MemcpyD2HFunctor(out, dev_ctx, dst_place_type));
-  }
-};
-
 class MemcpyD2HOpProtoMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
@@ -86,12 +62,13 @@ class MemcpyD2HOpProtoMaker : public framework::OpProtoAndCheckerMaker {
     AddOutput("Out",
               "(phi::DenseTensor) The type of output "
               "is the same as input X.");
-    AddAttr<int>("dst_place_type",
-                 "Determine the dst place of tensor copy. "
-                 "By Now it ONLY support XPU/CUDAPlace <-> CUDAPinnedPlace/CPU"
-                 "Other place type is Unimplemented and will cause ERROR."
-                 "0: dst is on CPUPlace. "
-                 "1: dst is on CUDAPinnedPlace. ");
+    AddAttr<int>(
+        "dst_place_type",
+        "Determine the dst place of tensor copy. "
+        "By Now it ONLY support XPU/CUDAPlace <-> CUDAPinnedPlace/CPU. "
+        "Other place type is Unimplemented and will cause ERROR. "
+        "0: dst is on CPUPlace. "
+        "1: dst is on CUDAPinnedPlace. ");
     AddComment(R"DOC(
     MemcpyD2H Operator.
     By now, it ONLY supports the memcopy between CUDAPlace <-> CUDAPinnedPlace/CPU.
@@ -102,8 +79,7 @@ raise error if the type is not listed above.
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 
@@ -119,31 +95,3 @@ REGISTER_OPERATOR(
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,
     MemcpyD2HInferShapeFunctor);
-
-#ifdef PADDLE_WITH_IPU
-REGISTER_OP_IPU_KERNEL_FUNCTOR(memcpy_d2h,
-                               float,
-                               ops::MemcpyD2HKernel,
-                               double,
-                               ops::MemcpyD2HKernel,
-                               int8_t,
-                               ops::MemcpyD2HKernel,
-                               uint8_t,
-                               ops::MemcpyD2HKernel,
-                               int,
-                               ops::MemcpyD2HKernel,
-                               int64_t,
-                               ops::MemcpyD2HKernel,
-                               bool,
-                               ops::MemcpyD2HKernel,
-                               paddle::platform::bfloat16,
-                               ops::MemcpyD2HKernel,
-                               paddle::platform::complex<float>,
-                               ops::MemcpyD2HKernel,
-                               paddle::platform::complex<double>,
-                               ops::MemcpyD2HKernel,
-                               plat::float16,
-                               ops::MemcpyD2HKernel,
-                               int16_t,
-                               ops::MemcpyD2HKernel);
-#endif

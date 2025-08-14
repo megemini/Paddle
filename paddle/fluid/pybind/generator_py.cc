@@ -29,8 +29,7 @@ limitations under the License. */
 
 namespace py = pybind11;
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 void BindGenerator(py::module* m_ptr) {
   auto& m = *m_ptr;
   py::class_<phi::Generator::GeneratorState,
@@ -38,7 +37,7 @@ void BindGenerator(py::module* m_ptr) {
                                                               "GeneratorState")
       .def("current_seed",
            [](std::shared_ptr<phi::Generator::GeneratorState>& self) {
-             return self->current_seed;
+             return self->seed;
            })
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
     defined(PADDLE_WITH_CUSTOM_DEVICE) || defined(PADDLE_WITH_XPU)
@@ -46,38 +45,55 @@ void BindGenerator(py::module* m_ptr) {
       // type, resulting in a problem with precision under the cpu.
       .def(py::pickle(
           [](const phi::Generator::GeneratorState& s) {  // __getstate__
-            return py::make_tuple(s.device, s.current_seed, s.thread_offset);
+            // NOTE(zhangwl):because pickle cnnot serialize mt19937_64, so we
+            // need serialize mt19937_64 to bitstream before so that pickle can
+            // dump
+            std::stringstream ss;
+            ss << *s.cpu_engine;
+            std::string str = ss.str();
+            // switch stringstream to bitstream
+            std::vector<uint8_t> bitstream(str.begin(), str.end());
+            return py::make_tuple(s.device, s.seed, s.offset, bitstream);
           },
           [](py::tuple s) {  // __setstate__
-            if (s.size() != 3)
+            if (s.size() != 3 && s.size() != 4)
               throw std::runtime_error(
                   "Invalid Random state. Please check the format(device, "
-                  "current_seed, thread_offset).");
-
-            phi::Generator::GeneratorState state;
-            state.device = s[0].cast<std::int64_t>();
-            state.current_seed = s[1].cast<std::uint64_t>();
-            state.thread_offset = s[2].cast<std::uint64_t>();
-
-            std::seed_seq seq({state.current_seed});
-            auto engine = std::make_shared<std::mt19937_64>(seq);
-            state.cpu_engine = *engine;
+                  "current_seed, thread_offset [, rng_state]).");
+            int64_t device = s[0].cast<int64_t>();
+            int64_t seed = s[1].cast<int64_t>();
+            uint64_t offset = s[2].cast<uint64_t>();
+            // NOTE(zhangwl):switch bitstream to mt19937_64;
+            std::shared_ptr<std::mt19937_64> cpu_engine = nullptr;
+            if (s.size() == 4) {
+              std::vector<uint8_t> bitstream =
+                  s[3].cast<std::vector<uint8_t>>();
+              std::string str(bitstream.begin(), bitstream.end());
+              std::stringstream ss(str);
+              std::mt19937_64 rng;
+              ss >> rng;
+              cpu_engine = std::make_shared<std::mt19937_64>(rng);
+            }
+            phi::Generator::GeneratorState state(
+                device, seed, offset, cpu_engine);
             return state;
           }))
 #endif
       .def("__str__", [](const phi::Generator::GeneratorState& self) {
         std::stringstream ostr;
-        ostr << self.device << " " << self.current_seed << " "
-             << self.thread_offset << " " << self.cpu_engine;
+        ostr << self.device << " " << self.seed << " " << self.offset << " "
+             << self.cpu_engine << " " << *self.cpu_engine;
         return ostr.str();
       });
 
   py::class_<std::mt19937_64>(m, "mt19937_64", "");  // NOLINT
   py::class_<phi::Generator, std::shared_ptr<phi::Generator>>(m, "Generator")
-      .def("__init__",
-           [](phi::Generator& self) { new (&self) phi::Generator(); })
+      .def(py::init([]() { return std::make_unique<phi::Generator>(); }))
       .def("get_state", &phi::Generator::GetState)
       .def("set_state", &phi::Generator::SetState)
+      .def("get_state_index", &phi::Generator::GetStateIndex)
+      .def("set_state_index", &phi::Generator::SetStateIndex)
+      .def("register_state_index", &phi::Generator::RegisterStateIndex)
       .def("manual_seed",
            [](std::shared_ptr<phi::Generator>& self, uint64_t seed) {
              self->SetCurrentSeed(seed);
@@ -93,5 +109,4 @@ void BindGenerator(py::module* m_ptr) {
   m.def("set_random_seed_generator", &phi::SetRandomSeedGenerator);
   m.def("get_random_seed_generator", &phi::GetRandomSeedGenerator);
 }
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

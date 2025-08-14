@@ -23,7 +23,7 @@ from paddle.base.core import (
     is_compiled_with_rocm,
 )
 
-if is_compiled_with_cuda() and not is_compiled_with_rocm():
+if is_compiled_with_cuda() or is_compiled_with_rocm():
     from paddle.base.core import CUDAGraph as CoreCUDAGraph
 
     def is_cuda_graph_supported():
@@ -41,7 +41,7 @@ cuda_graph_id = 0
 
 
 class CUDAGraph:
-    def __init__(self, place=None, mode="thread_local"):
+    def __init__(self, place=None, mode="thread_local", pool_id=None):
         assert (
             CoreCUDAGraph is not None
         ), "CUDA Graph is only supported on PaddlePaddle compiled with NVIDIA GPU."
@@ -53,9 +53,12 @@ class CUDAGraph:
         self._place = place
         assert mode in ALL_MODES
         self._mode = ALL_MODES.index(mode)
+        self._pool_id = pool_id
 
     def capture_begin(self):
-        CoreCUDAGraph.begin_capture(self._place, self._mode)
+        CoreCUDAGraph.begin_capture_with_pool_id(
+            self._place, self._mode, self._pool_id
+        )
 
     def capture_end(self):
         self._graph = CoreCUDAGraph.end_capture()
@@ -93,8 +96,7 @@ def wrap_cuda_graph(function, mode="thread_local", memory_pool="default"):
             memory_pool_id = CoreCUDAGraph.gen_new_memory_pool_id()
         else:
             raise ValueError(
-                "memory_pool should be one of default or new under static graph mode, but got",
-                memory_pool,
+                f"memory_pool should be one of default or new under static graph mode, but got {memory_pool}",
             )
         return _cuda_graph_guard(
             mode + ';' + str(memory_pool_id) + ';' + graph_id

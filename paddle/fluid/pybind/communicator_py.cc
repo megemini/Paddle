@@ -15,10 +15,6 @@ limitations under the License. */
 #include "paddle/fluid/pybind/communicator_py.h"
 
 #include <Python.h>
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
 
 #include <map>
 #include <memory>
@@ -100,11 +96,11 @@ void BindCommunicator(py::module* m) {
           Communicator::InitInstance<GeoCommunicator>(
               send_ctx, recv_ctx, param_scope, envs);
         } else {
-          PADDLE_THROW(platform::errors::InvalidArgument(
-              "unsupported communicator MODE"));
+          PADDLE_THROW(
+              common::errors::InvalidArgument("unsupported communicator MODE"));
         }
 
-        return Communicator::GetInstantcePtr();
+        return Communicator::GetInstancePtr();
       }))
       .def("stop", &Communicator::Stop)
       .def("start", &Communicator::Start)
@@ -114,7 +110,7 @@ void BindCommunicator(py::module* m) {
 
 void BindLargeScaleKV(py::module* m) {
   py::class_<LargeScaleKV, std::shared_ptr<LargeScaleKV>>(*m, "LargeScaleKV")
-      .def(py::init([]() { return LargeScaleKV::GetInstantcePtr(); }))
+      .def(py::init([]() { return LargeScaleKV::GetInstancePtr(); }))
       .def("load",
            [](LargeScaleKV& self,
               const std::string& table_name,

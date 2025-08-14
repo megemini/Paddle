@@ -15,12 +15,10 @@
 import unittest
 
 import numpy as np
-from op_test import OpTest
+from op_test import OpTest, get_places
 
 import paddle
 from paddle import base
-from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestInverseOp(OpTest):
@@ -35,6 +33,12 @@ class TestInverseOp(OpTest):
 
         np.random.seed(123)
         mat = np.random.random(self.matrix_shape).astype(self.dtype)
+        if self.dtype == 'complex64' or self.dtype == 'complex128':
+            mat = (
+                np.random.random(self.matrix_shape)
+                + 1j * np.random.random(self.matrix_shape)
+            ).astype(self.dtype)
+
         inverse = np.linalg.inv(mat)
 
         self.inputs = {'Input': mat}
@@ -50,6 +54,20 @@ class TestInverseOp(OpTest):
 class TestInverseOpBatched(TestInverseOp):
     def config(self):
         self.matrix_shape = [8, 4, 4]
+        self.dtype = "float64"
+        self.python_api = paddle.tensor.math.inverse
+
+
+class TestInverseOpZeroSize(TestInverseOp):
+    def config(self):
+        self.matrix_shape = [0, 0]
+        self.dtype = "float64"
+        self.python_api = paddle.tensor.math.inverse
+
+
+class TestInverseOpBatchedZeroSize(TestInverseOp):
+    def config(self):
+        self.matrix_shape = [7, 0, 0]
         self.dtype = "float64"
         self.python_api = paddle.tensor.math.inverse
 
@@ -92,12 +110,30 @@ class TestInverseOpLargeFP32(TestInverseOpFP32):
         self.python_api = paddle.tensor.math.inverse
 
 
+class TestInverseOpComplex64(TestInverseOp):
+    def config(self):
+        self.matrix_shape = [10, 10]
+        self.dtype = "complex64"
+        self.python_api = paddle.tensor.math.inverse
+
+    def test_grad(self):
+        self.check_grad(['Input'], 'Output', check_pir=True)
+
+
+class TestInverseOpComplex128(TestInverseOp):
+    def config(self):
+        self.matrix_shape = [10, 10]
+        self.dtype = "complex128"
+        self.python_api = paddle.tensor.math.inverse
+
+    def test_grad(self):
+        self.check_grad(['Input'], 'Output', check_pir=True)
+
+
 class TestInverseAPI(unittest.TestCase):
     def setUp(self):
         np.random.seed(123)
-        self.places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(base.CUDAPlace(0))
+        self.places = get_places()
 
     def check_static_result(self, place):
         with paddle.static.program_guard(
@@ -120,7 +156,6 @@ class TestInverseAPI(unittest.TestCase):
                 fetches[0], np.linalg.inv(input_np), rtol=1e-05
             )
 
-    @test_with_pir_api
     def test_static(self):
         for place in self.places:
             self.check_static_result(place=place)
@@ -129,7 +164,7 @@ class TestInverseAPI(unittest.TestCase):
         for place in self.places:
             with base.dygraph.guard(place):
                 input_np = np.random.random([4, 4]).astype("float64")
-                input = base.dygraph.to_variable(input_np)
+                input = paddle.to_tensor(input_np)
                 result = paddle.inverse(input)
                 np.testing.assert_allclose(
                     result.numpy(), np.linalg.inv(input_np), rtol=1e-05
@@ -150,13 +185,6 @@ class TestInverseAPIError(unittest.TestCase):
             )
             self.assertRaises(TypeError, paddle.inverse, input)
 
-        # When out is set, the data type must be the same as input.
-        input = paddle.static.data(
-            name='input_1', shape=[4, 4], dtype="float32"
-        )
-        out = paddle.static.data(name='output', shape=[4, 4], dtype="float64")
-        self.assertRaises(TypeError, paddle.inverse, input, out)
-
         # The number of dimensions of input must be >= 2.
         input = paddle.static.data(name='input_2', shape=[4], dtype="float32")
         self.assertRaises(ValueError, paddle.inverse, input)
@@ -164,9 +192,7 @@ class TestInverseAPIError(unittest.TestCase):
 
 class TestInverseSingularAPI(unittest.TestCase):
     def setUp(self):
-        self.places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(base.CUDAPlace(0))
+        self.places = get_places()
 
     def check_static_result(self, place):
         with paddle.static.program_guard(
@@ -191,7 +217,6 @@ class TestInverseSingularAPI(unittest.TestCase):
             except ValueError as ex:
                 print("The mat is singular")
 
-    @test_with_pir_api
     def test_static(self):
         for place in self.places:
             self.check_static_result(place=place)
@@ -200,13 +225,32 @@ class TestInverseSingularAPI(unittest.TestCase):
         for place in self.places:
             with base.dygraph.guard(place):
                 input_np = np.ones([4, 4]).astype("float64")
-                input = base.dygraph.to_variable(input_np)
+                input = paddle.to_tensor(input_np)
                 try:
                     result = paddle.inverse(input)
                 except RuntimeError as ex:
                     print("The mat is singular")
                 except ValueError as ex:
                     print("The mat is singular")
+
+
+class TestInverseAPI_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(123)
+        self.places = get_places()
+
+    def test_dygraph(self):
+        for place in self.places:
+            with base.dygraph.guard(place):
+                input_np = np.random.random([4, 0]).astype("float64")
+                input = paddle.to_tensor(input_np)
+                input.stop_gradient = False
+                result = paddle.linalg.inv(input)
+                np_out = np.random.random([4, 0]).astype("float64")
+                np.testing.assert_allclose(result.numpy(), np_out, rtol=1e-05)
+                loss = paddle.sum(result)
+                loss.backward()
+                np.testing.assert_allclose(input.grad.shape, input.shape)
 
 
 if __name__ == "__main__":

@@ -15,12 +15,12 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 import paddle.nn.functional as F
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def adaptive_start_index(index, input_size, output_size):
@@ -115,14 +115,67 @@ def avg_pool1D_forward_naive(
     return out
 
 
+def lp_pool1D_forward_naive(
+    x,
+    ksize,
+    strides,
+    paddings,
+    global_pool=0,
+    ceil_mode=False,
+    data_format='NCL',
+    norm_type=None,
+):
+    assert norm_type is not None
+    if x.dtype == np.float16:
+        x = x.astype(np.float32)
+    if data_format == "NCL":
+        N, C, L = x.shape
+    else:
+        N, L, C = x.shape
+
+    if global_pool == 1:
+        ksize = [L]
+    L_out = (
+        (L - ksize[0] + 2 * paddings[0] + strides[0] - 1) // strides[0] + 1
+        if ceil_mode
+        else (L - ksize[0] + 2 * paddings[0]) // strides[0] + 1
+    )
+
+    if data_format == "NCL":
+        out = np.zeros((N, C, L_out))
+    else:
+        out = np.zeros((N, L_out, C))
+    for i in range(L_out):
+        r_start = np.max((i * strides[0] - paddings[0], 0))
+        r_end = np.min((i * strides[0] + ksize[0] - paddings[0], L))
+        if data_format == "NCL":
+            x_masked = x[:, :, r_start:r_end]
+        else:
+            x_masked = x[:, r_start:r_end, :]
+        if data_format == "NCL":
+            if norm_type == float('inf'):
+                out[:, :, i] = np.max(x_masked, axis=(2))
+            else:
+                out[:, :, i] = np.power(
+                    np.sum(np.power(x_masked, norm_type), axis=(2)),
+                    1 / norm_type,
+                )
+        else:
+            if norm_type == float('inf'):
+                out[:, i, :] = np.max(x_masked, axis=(1))
+            else:
+                out[:, i, :] = np.power(
+                    np.sum(np.power(x_masked, norm_type), axis=(1)),
+                    1 / norm_type,
+                )
+    return out
+
+
 class TestPool1D_API(unittest.TestCase):
     def setUp(self):
         np.random.seed(123)
-        self.places = [base.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            self.places.append(base.CUDAPlace(0))
+        self.places = get_places()
 
-    @test_with_pir_api
     def check_avg_static_results(self, place):
         with paddle.static.program_guard(paddle.static.Program()):
             input = paddle.static.data(
@@ -142,7 +195,6 @@ class TestPool1D_API(unittest.TestCase):
             )
             np.testing.assert_allclose(fetches[0], result_np, rtol=1e-05)
 
-    @test_with_pir_api
     def check_avg_static_results_fp16(self, place):
         if core.is_compiled_with_cuda():
             with paddle.static.program_guard(paddle.static.Program()):
@@ -171,7 +223,7 @@ class TestPool1D_API(unittest.TestCase):
     def check_avg_dygraph_results(self, place):
         with base.dygraph.guard(place):
             input_np = np.random.random([2, 3, 32]).astype("float32")
-            input = base.dygraph.to_variable(input_np)
+            input = paddle.to_tensor(input_np)
             result = F.avg_pool1d(input, kernel_size=2, stride=2, padding=[0])
 
             result_np = avg_pool1D_forward_naive(
@@ -189,7 +241,7 @@ class TestPool1D_API(unittest.TestCase):
     def check_avg_dygraph_padding_results(self, place):
         with base.dygraph.guard(place):
             input_np = np.random.random([2, 3, 32]).astype("float32")
-            input = base.dygraph.to_variable(input_np)
+            input = paddle.to_tensor(input_np)
             result = F.avg_pool1d(
                 input, kernel_size=2, stride=2, padding=[1], exclusive=True
             )
@@ -207,7 +259,6 @@ class TestPool1D_API(unittest.TestCase):
             result = avg_pool1d_dg(input)
             np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
 
-    @test_with_pir_api
     def check_max_static_results(self, place):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -233,7 +284,7 @@ class TestPool1D_API(unittest.TestCase):
     def check_max_dygraph_results(self, place):
         with base.dygraph.guard(place):
             input_np = np.random.random([2, 3, 32]).astype("float32")
-            input = base.dygraph.to_variable(input_np)
+            input = paddle.to_tensor(input_np)
             result = F.max_pool1d(input, kernel_size=2, stride=2, padding=0)
 
             result_np = max_pool1D_forward_naive(
@@ -251,7 +302,7 @@ class TestPool1D_API(unittest.TestCase):
     def check_max_dygraph_return_index_results(self, place):
         with base.dygraph.guard(place):
             input_np = np.random.random([2, 3, 32]).astype("float32")
-            input = base.dygraph.to_variable(input_np)
+            input = paddle.to_tensor(input_np)
             result, index = F.max_pool1d(
                 input, kernel_size=2, stride=2, padding=0, return_mask=True
             )
@@ -271,7 +322,7 @@ class TestPool1D_API(unittest.TestCase):
     def check_max_dygraph_padding_same(self, place):
         with base.dygraph.guard(place):
             input_np = np.random.random([2, 3, 32]).astype("float32")
-            input = base.dygraph.to_variable(input_np)
+            input = paddle.to_tensor(input_np)
             result = F.max_pool1d(
                 input, kernel_size=2, stride=2, padding="SAME"
             )
@@ -285,7 +336,7 @@ class TestPool1D_API(unittest.TestCase):
     def check_avg_dygraph_padding_same(self, place):
         with base.dygraph.guard(place):
             input_np = np.random.random([2, 3, 32]).astype("float32")
-            input = base.dygraph.to_variable(input_np)
+            input = paddle.to_tensor(input_np)
             result = F.avg_pool1d(
                 input, kernel_size=2, stride=2, padding="SAME"
             )
@@ -294,6 +345,289 @@ class TestPool1D_API(unittest.TestCase):
                 input_np, ksize=[2], strides=[2], paddings=[0]
             )
 
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+    def check_max_pool_return_mask_ceil(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([1, 3, 6]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            result, _ = F.max_pool1d(
+                input,
+                kernel_size=5,
+                stride=5,
+                padding=0,
+                ceil_mode=True,
+                return_mask=True,
+            )
+            result_np = max_pool1D_forward_naive(
+                input_np,
+                ksize=[5],
+                strides=[5],
+                paddings=[0],
+                ceil_mode=True,
+            )
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+            self.assertEqual(result.shape, list(result_np.shape))
+
+    def check_lp_static_results(self, place):
+        with paddle.static.program_guard(paddle.static.Program()):
+            input = paddle.static.data(
+                name="input", shape=[2, 3, 32], dtype="float32"
+            )
+            result = F.lp_pool1d(
+                input, norm_type=2, kernel_size=2, stride=2, padding=0
+            )
+
+            input_np = np.random.random([2, 3, 32]).astype("float32")
+            result_np = lp_pool1D_forward_naive(
+                input_np,
+                ksize=[2],
+                strides=[2],
+                paddings=[0],
+                ceil_mode=False,
+                norm_type=2,
+            )
+
+            exe = paddle.static.Executor(place)
+            fetches = exe.run(
+                feed={"input": input_np},
+                fetch_list=[result],
+            )
+            np.testing.assert_allclose(fetches[0], result_np, rtol=1e-05)
+
+    def check_lp_static_results_fp16(self, place):
+        if core.is_compiled_with_cuda():
+            with paddle.static.program_guard(paddle.static.Program()):
+                input = paddle.static.data(
+                    name="input", shape=[2, 3, 32], dtype="float16"
+                )
+                result = F.lp_pool1d(
+                    input, norm_type=3, kernel_size=2, stride=2, padding=0
+                )
+
+                input_np = np.random.random([2, 3, 32]).astype("float16")
+                result_np = lp_pool1D_forward_naive(
+                    input_np,
+                    ksize=[2],
+                    strides=[2],
+                    paddings=[0],
+                    ceil_mode=False,
+                    norm_type=3,
+                )
+
+                place = paddle.CUDAPlace(0)
+                exe = paddle.static.Executor(place)
+                fetches = exe.run(
+                    feed={"input": input_np},
+                    fetch_list=[result],
+                )
+                np.testing.assert_allclose(
+                    fetches[0], result_np.astype(np.float16), rtol=1e-05
+                )
+
+    def check_lp_static_results_fp64(self, place):
+        if core.is_compiled_with_cuda():
+            with paddle.static.program_guard(paddle.static.Program()):
+                input = paddle.static.data(
+                    name="input", shape=[2, 3, 32], dtype="float64"
+                )
+                result = F.lp_pool1d(
+                    input, norm_type=3, kernel_size=2, stride=2, padding=0
+                )
+
+                input_np = np.random.random([2, 3, 32]).astype("float64")
+                result_np = lp_pool1D_forward_naive(
+                    input_np,
+                    ksize=[2],
+                    strides=[2],
+                    paddings=[0],
+                    ceil_mode=False,
+                    norm_type=3,
+                )
+
+                place = paddle.CUDAPlace(0)
+                exe = paddle.static.Executor(place)
+                fetches = exe.run(
+                    feed={"input": input_np},
+                    fetch_list=[result],
+                )
+                np.testing.assert_allclose(fetches[0], result_np, rtol=1e-05)
+
+    def check_lp_dygraph_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 3, 32]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            result = F.lp_pool1d(
+                input, norm_type=4, kernel_size=3, stride=2, padding=[1]
+            )
+
+            result_np = lp_pool1D_forward_naive(
+                input_np,
+                ksize=[3],
+                strides=[2],
+                paddings=[1],
+                norm_type=4,
+            )
+
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+            lp_pool1d_dg = paddle.nn.layer.LPPool1D(
+                norm_type=4, kernel_size=3, stride=2, padding=1
+            )
+            result = lp_pool1d_dg(input)
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+    def check_lp_dygraph_float16_results(self, place):
+        if isinstance(place, base.CUDAPlace):
+            with base.dygraph.guard(place):
+                input_np = np.random.random([2, 3, 32]).astype("float16")
+                input = paddle.to_tensor(input_np)
+                result = F.lp_pool1d(
+                    input, norm_type=5, kernel_size=5, stride=3, padding=[0]
+                )
+
+                result_np = lp_pool1D_forward_naive(
+                    input_np, ksize=[5], strides=[3], paddings=[0], norm_type=5
+                )
+
+                np.testing.assert_allclose(
+                    result.numpy(), result_np.astype(np.float16), rtol=1e-05
+                )
+
+                lp_pool1d_dg = paddle.nn.layer.LPPool1D(
+                    norm_type=5, kernel_size=5, stride=3, padding=0
+                )
+                result = lp_pool1d_dg(input)
+                np.testing.assert_allclose(
+                    result.numpy(), result_np.astype(np.float16), rtol=1e-05
+                )
+
+    def check_lp_dygraph_float64_results(self, place):
+        if isinstance(place, base.CUDAPlace):
+            with base.dygraph.guard(place):
+                input_np = np.random.random([2, 3, 32]).astype("float64")
+                input = paddle.to_tensor(input_np)
+                result = F.lp_pool1d(
+                    input, norm_type=5, kernel_size=5, stride=3, padding=[0]
+                )
+
+                result_np = lp_pool1D_forward_naive(
+                    input_np, ksize=[5], strides=[3], paddings=[0], norm_type=5
+                )
+
+                np.testing.assert_allclose(
+                    result.numpy(), result_np, rtol=1e-05
+                )
+
+                lp_pool1d_dg = paddle.nn.layer.LPPool1D(
+                    norm_type=5, kernel_size=5, stride=3, padding=0
+                )
+                result = lp_pool1d_dg(input)
+                np.testing.assert_allclose(
+                    result.numpy(), result_np, rtol=1e-05
+                )
+
+    def check_lp_dygraph_ceil_mode_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 3, 32]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            result = F.lp_pool1d(
+                input,
+                norm_type=7,
+                kernel_size=2,
+                stride=2,
+                padding=[1],
+                ceil_mode=True,
+            )
+
+            result_np = lp_pool1D_forward_naive(
+                input_np,
+                ksize=[2],
+                strides=[2],
+                paddings=[1],
+                ceil_mode=True,
+                norm_type=7,
+            )
+
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+            lp_pool1d_dg = paddle.nn.LPPool1D(
+                norm_type=7,
+                kernel_size=2,
+                stride=None,
+                ceil_mode=True,
+                padding=1,
+            )
+
+            result = lp_pool1d_dg(input)
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+    def check_lp_dygraph_data_format_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 32, 3]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            result = F.lp_pool1d(
+                input,
+                norm_type=7,
+                kernel_size=2,
+                stride=2,
+                padding=[1],
+                ceil_mode=True,
+                data_format="NLC",
+            )
+
+            result_np = lp_pool1D_forward_naive(
+                input_np,
+                ksize=[2],
+                strides=[2],
+                paddings=[1],
+                ceil_mode=True,
+                data_format="NLC",
+                norm_type=7,
+            )
+
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+            lp_pool1d_dg = paddle.nn.LPPool1D(
+                norm_type=7,
+                kernel_size=2,
+                stride=None,
+                data_format="NLC",
+                padding=1,
+            )
+
+            result = lp_pool1d_dg(input)
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+    def check_lp_dygraph_inf_norm_type(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 3, 32]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            result = F.lp_pool1d(
+                input,
+                norm_type=float('inf'),
+                kernel_size=2,
+                stride=2,
+                padding=[1],
+                ceil_mode=True,
+            )
+
+            result_np = lp_pool1D_forward_naive(
+                input_np,
+                ksize=[2],
+                strides=[2],
+                paddings=[1],
+                ceil_mode=True,
+                norm_type=float("inf"),
+            )
+
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+
+            lp_pool1d_dg = paddle.nn.LPPool1D(
+                norm_type=float('inf'), kernel_size=2, stride=None, padding=1
+            )
+
+            result = lp_pool1d_dg(input)
             np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
 
     def test_pool1d(self):
@@ -306,6 +640,16 @@ class TestPool1D_API(unittest.TestCase):
             self.check_avg_dygraph_padding_same(place)
             self.check_max_dygraph_return_index_results(place)
             self.check_avg_static_results_fp16(place)
+            self.check_max_pool_return_mask_ceil(place)
+            self.check_lp_static_results(place)
+            self.check_lp_dygraph_results(place)
+            self.check_lp_static_results_fp16(place)
+            self.check_lp_static_results_fp64(place)
+            self.check_lp_dygraph_inf_norm_type(place)
+            self.check_lp_dygraph_float16_results(place)
+            self.check_lp_dygraph_float64_results(place)
+            self.check_lp_dygraph_ceil_mode_results(place)
+            self.check_lp_dygraph_data_format_results(place)
 
 
 class TestPool1DError_API(unittest.TestCase):
@@ -315,7 +659,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = [[2]]
                 res_pd = F.max_pool1d(
                     input_pd, kernel_size=2, stride=2, padding=padding
@@ -328,7 +672,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = [[2]]
                 res_pd = F.max_pool1d(
                     input_pd, kernel_size=2, stride=2, padding=padding
@@ -341,7 +685,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = "padding"
                 res_pd = F.max_pool1d(
                     input_pd, kernel_size=2, stride=2, padding=padding
@@ -354,7 +698,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = "VALID"
                 res_pd = F.max_pool1d(
                     input_pd,
@@ -371,7 +715,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = "VALID"
                 res_pd = F.max_pool1d(
                     input_pd,
@@ -388,7 +732,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = "VALID"
                 res_pd = F.avg_pool1d(
                     input_pd,
@@ -405,7 +749,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = "paddle"
                 res_pd = F.avg_pool1d(
                     input_pd,
@@ -422,7 +766,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = 0
                 res_pd = F.avg_pool1d(
                     input_pd,
@@ -439,7 +783,7 @@ class TestPool1DError_API(unittest.TestCase):
                 input_np = np.random.uniform(-1, 1, [2, 3, 32]).astype(
                     np.float32
                 )
-                input_pd = base.dygraph.to_variable(input_np)
+                input_pd = paddle.to_tensor(input_np)
                 padding = 0
                 res_pd = F.avg_pool1d(
                     input_pd,
@@ -472,6 +816,80 @@ class TestPool1DError_API(unittest.TestCase):
                 out = F.max_pool1d(x, 1, stride=(0))
 
         self.assertRaises(ValueError, run_zero_tuple_stride)
+
+
+class TestPool1D_API_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(123)
+        self.places = get_places()
+
+    def check_avg_dygraph_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 0, 3]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            input.stop_gradient = False
+            result = F.avg_pool1d(input, kernel_size=2, stride=2, padding=[0])
+            result_np = avg_pool1D_forward_naive(
+                input_np, ksize=[2], strides=[2], paddings=[0]
+            )
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+            loss = paddle.sum(result)
+            loss.backward()
+            np.testing.assert_allclose(input.grad.shape, input.shape)
+
+    def check_max_dygraph_results(self, place):
+        with base.dygraph.guard(place):
+            # test1
+            input_np = np.random.random([2, 0, 3]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            input.stop_gradient = False
+            result = F.max_pool1d(input, kernel_size=2, stride=2, padding=0)
+            result_np = max_pool1D_forward_naive(
+                input_np, ksize=[2], strides=[2], paddings=[0]
+            )
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+            loss = paddle.sum(result)
+            loss.backward()
+            np.testing.assert_allclose(input.grad.shape, input.shape)
+            # test2
+            input_np2 = np.random.random([2, 3, 0]).astype("float64")
+            input2 = paddle.to_tensor(input_np2)
+            input2.stop_gradient = False
+            result2 = F.max_pool1d(
+                input2, kernel_size=2, stride=1, padding=[1, 1]
+            )
+            # Torch result is 0.0
+            result_np2 = np.zeros([2, 3, 1], dtype=np.float64)
+            np.testing.assert_allclose(result2.numpy(), result_np2, rtol=1e-05)
+            loss2 = paddle.sum(result2)
+            loss2.backward()
+            np.testing.assert_allclose(input2.grad.shape, input2.shape)
+
+    def check_lp_dygraph_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 0, 3]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            input.stop_gradient = False
+            result = F.lp_pool1d(
+                input, norm_type=4, kernel_size=3, stride=2, padding=[1]
+            )
+            result_np = lp_pool1D_forward_naive(
+                input_np,
+                ksize=[3],
+                strides=[2],
+                paddings=[1],
+                norm_type=4,
+            )
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+            loss = paddle.sum(result)
+            loss.backward()
+            np.testing.assert_allclose(input.grad.shape, input.shape)
+
+    def test_pool1d(self):
+        for place in self.places:
+            self.check_max_dygraph_results(place)
+            self.check_avg_dygraph_results(place)
+            self.check_lp_dygraph_results(place)
 
 
 if __name__ == '__main__':

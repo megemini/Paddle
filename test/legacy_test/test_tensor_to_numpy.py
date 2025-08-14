@@ -15,6 +15,7 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 from paddle import base
 
@@ -34,9 +35,8 @@ class TensorToNumpyTest(unittest.TestCase):
             'bool',
         ]
 
-        places = [base.CPUPlace()]
+        places = get_places()
         if base.core.is_compiled_with_cuda():
-            places.append(base.CUDAPlace(0))
             places.append(base.CUDAPinnedPlace())
 
         for p in places:
@@ -46,7 +46,7 @@ class TensorToNumpyTest(unittest.TestCase):
                     self.shape,
                 )
 
-                t = base.LoDTensor()
+                t = base.DenseTensor()
                 t.set(np_arr, p)
 
                 ret_np_arr = np.array(t)

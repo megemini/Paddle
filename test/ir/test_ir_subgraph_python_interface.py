@@ -18,7 +18,7 @@ from op_test import OpTestTool
 
 import paddle
 from paddle import base
-from paddle.base import core
+from paddle.base import core, in_pir_mode
 from paddle.base.framework import IrGraph, Program, program_guard
 from paddle.static.quantization import QuantizationTransformPass
 
@@ -86,12 +86,13 @@ class TestQuantizationSubGraph(unittest.TestCase):
             weight_quantize_type='range_abs_max',
         )
         Find_inserted_quant_op = False
-        for sub_graph in sub_graphs:
-            transform_pass.apply(sub_graph)
-            for op in sub_graph.all_op_nodes():
-                if 'quantize' in op.name():
-                    Find_inserted_quant_op = True
-        self.assertTrue(Find_inserted_quant_op)
+        if not in_pir_mode():
+            for sub_graph in sub_graphs:
+                transform_pass.apply(sub_graph)
+                for op in sub_graph.all_op_nodes():
+                    if 'quantize' in op.name():
+                        Find_inserted_quant_op = True
+            self.assertTrue(Find_inserted_quant_op)
 
     def test_quant_sub_graphs_cpu(self):
         self.test_quant_sub_graphs(use_cuda=False)

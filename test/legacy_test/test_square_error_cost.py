@@ -15,16 +15,16 @@
 import unittest
 
 import numpy as np
+from op_test import get_places
 
 import paddle
 from paddle import base
 from paddle.base import core
 from paddle.base.executor import Executor
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestSquareErrorCost(unittest.TestCase):
-    @test_with_pir_api
+
     def test_square_error_cost(self):
         paddle.enable_static()
         shape = [2, 3]
@@ -60,7 +60,10 @@ class TestSquareErrorCost(unittest.TestCase):
 
 
 class TestSquareErrorInvalidInput(unittest.TestCase):
+
     def test_error(self):
+        paddle.enable_static()
+
         def test_invalid_input():
             input = [256, 3]
             label = paddle.static.data(
@@ -78,6 +81,39 @@ class TestSquareErrorInvalidInput(unittest.TestCase):
             loss = paddle.nn.functional.square_error_cost(input, label)
 
         self.assertRaises(TypeError, test_invalid_label)
+
+
+class TestSquareErrorCost_ZeroSize(unittest.TestCase):
+    def init_shape(self):
+        self.shape = [0, 3]
+
+    def test_square_error_cost(self):
+        places = get_places()
+        self.init_shape()
+        shape = self.shape
+        input_val = np.random.uniform(0.1, 0.5, shape).astype("float32")
+        label_val = np.random.uniform(0.1, 0.5, shape).astype("float32")
+
+        sub = input_val - label_val
+        np_result = sub * sub
+        for place in places:
+            paddle.disable_static(place)
+            input = paddle.to_tensor(input_val)
+            input.stop_gradient = False
+            label = paddle.to_tensor(label_val)
+            output = paddle.nn.functional.square_error_cost(
+                input=input, label=label
+            )
+            np.testing.assert_allclose(np_result, output.numpy(), rtol=1e-05)
+            loss = paddle.sum(output)
+            loss.backward()
+            np.testing.assert_allclose(input.grad.shape, input.shape)
+            paddle.enable_static()
+
+
+class TestSquareErrorCost_ZeroSize2(TestSquareErrorCost_ZeroSize):
+    def init_shape(self):
+        self.shape = [0, 0]
 
 
 if __name__ == "__main__":

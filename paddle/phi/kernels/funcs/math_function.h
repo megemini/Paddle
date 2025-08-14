@@ -43,7 +43,7 @@ void BatchTranspose(T* output,
 template <typename DeviceContext, typename T>
 struct TransposeNormal {
   // for dims >= 7 situation
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& in,
                   phi::DenseTensor* out,
                   const std::vector<int>& axis);
@@ -51,7 +51,7 @@ struct TransposeNormal {
 
 template <typename DeviceContext, typename T, int Rank>
 struct Transpose {
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& in,
                   phi::DenseTensor* out,
                   const std::vector<int>& axis);
@@ -59,7 +59,7 @@ struct Transpose {
 
 template <typename DeviceContext, typename T>
 struct SetConstant {
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   phi::DenseTensor* tensor,
                   T num);
 };
@@ -67,24 +67,24 @@ struct SetConstant {
 #ifdef PADDLE_WITH_XPU
 template <typename T>
 struct SetConstant<phi::XPUContext, T> {
-  void operator()(const phi::XPUContext& context,
+  void operator()(const phi::XPUContext& dev_ctx,
                   phi::DenseTensor* tensor,
                   T num);
 };
 #endif
 
 template <typename Place>
-void set_constant_with_place(const phi::DeviceContext& context,
+void set_constant_with_place(const phi::DeviceContext& dev_ctx,
                              phi::DenseTensor* tensor,
                              float value);
 
-void set_constant(const phi::DeviceContext& context,
+void set_constant(const phi::DeviceContext& dev_ctx,
                   phi::DenseTensor* tensor,
                   float value);
 
 template <typename DeviceContext, typename T>
 struct RowwiseAdd {
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& input,
                   const phi::DenseTensor& vec,
                   phi::DenseTensor* output);
@@ -92,21 +92,21 @@ struct RowwiseAdd {
 
 template <typename DeviceContext, typename T>
 struct ColwiseSum {
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& input,
                   phi::DenseTensor* vec);
 };
 
 template <typename DeviceContext, typename T>
 struct RowwiseSum {
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& input,
                   phi::DenseTensor* vec);
 };
 
 template <typename DeviceContext, typename T>
 struct RowwiseMean {
-  void operator()(const DeviceContext& context,
+  void operator()(const DeviceContext& dev_ctx,
                   const phi::DenseTensor& input,
                   phi::DenseTensor* vec);
 };
@@ -118,43 +118,11 @@ struct TensorSetConstantXPU {
       : tensor_(tensor), value_(value), place_(place) {}
   template <typename T>
   void apply() const {
-    auto* ctx = phi::DeviceContextPool::Instance().Get(place_);
-    auto begin = ctx->Alloc<T>(tensor_);
+    auto* dev_ctx = phi::DeviceContextPool::Instance().Get(place_);
+    auto begin = dev_ctx->Alloc<T>(tensor_);
     int numel = tensor_->numel();
-    std::unique_ptr<T[]> data_cpu(new T[numel]);
-    std::fill(data_cpu.get(), data_cpu.get() + numel, static_cast<T>(value_));
-    memory_utils::Copy(place_,
-                       begin,
-                       phi::CPUPlace(),
-                       static_cast<void*>(data_cpu.get()),
-                       numel * sizeof(T));
-  }
-  phi::DenseTensor* tensor_;
-  U value_;
-  phi::Place place_;
-};
-
-template <>
-struct TensorSetConstantXPU<float> {
-  TensorSetConstantXPU(phi::DenseTensor* tensor, float value, phi::Place place)
-      : tensor_(tensor), value_(value), place_(place) {}
-  template <typename T>
-  void apply() const {
-    auto* ctx = phi::DeviceContextPool::Instance().Get(place_);
-    auto begin = ctx->Alloc<T>(tensor_);
-    int numel = tensor_->numel();
-    if (((std::is_same<T, float>::value) ||
-         (std::is_same<T, phi::dtype::float16>::value)) &&
-        (place_ == phi::XPUPlace())) {
-      using XPUType = typename XPUTypeTrait<T>::Type;
-      auto* dev_ctx = static_cast<phi::XPUContext*>(ctx);
-      int r = xpu::constant<XPUType>(dev_ctx->x_context(),
-                                     reinterpret_cast<XPUType*>(begin),
-                                     numel,
-                                     static_cast<XPUType>(value_));
-      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
-      dev_ctx->Wait();
-    } else {
+    if (std::is_same<T, phi::dtype::complex<float>>::value ||
+        std::is_same<T, phi::dtype::complex<double>>::value) {
       std::unique_ptr<T[]> data_cpu(new T[numel]);
       std::fill(data_cpu.get(), data_cpu.get() + numel, static_cast<T>(value_));
       memory_utils::Copy(place_,
@@ -162,10 +130,22 @@ struct TensorSetConstantXPU<float> {
                          phi::CPUPlace(),
                          static_cast<void*>(data_cpu.get()),
                          numel * sizeof(T));
+    } else if (std::is_same<T, phi::dtype::float8_e4m3fn>::value ||
+               std::is_same<T, phi::dtype::float8_e5m2>::value) {
+      PADDLE_THROW(common::errors::Fatal("XPU does not support fp8"));
+    } else {
+      auto* dev_ctx2 = static_cast<phi::XPUContext*>(dev_ctx);
+      using XPUType = typename XPUTypeTrait<T>::Type;
+      T val = static_cast<T>(value_);
+      int r = xpu::constant<XPUType>(dev_ctx2->x_context(),
+                                     reinterpret_cast<XPUType*>(begin),
+                                     numel,
+                                     static_cast<XPUType>(val));
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
     }
   }
   phi::DenseTensor* tensor_;
-  float value_;
+  U value_;
   phi::Place place_;
 };
 #endif

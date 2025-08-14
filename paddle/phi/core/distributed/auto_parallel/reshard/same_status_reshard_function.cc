@@ -24,32 +24,14 @@
 #include "paddle/phi/kernels/p_recv_kernel.h"
 #include "paddle/phi/kernels/p_send_kernel.h"
 
-namespace phi {
-namespace distributed {
-
-namespace {
-
-std::vector<int64_t> GetUnionProcessIds(std::vector<int64_t> in_process_ids,
-                                        std::vector<int64_t> out_process_ids) {
-  std::vector<int64_t> result;
-  std::sort(in_process_ids.begin(), in_process_ids.end());
-  std::sort(out_process_ids.begin(), out_process_ids.end());
-  std::set_union(in_process_ids.begin(),
-                 in_process_ids.end(),
-                 out_process_ids.begin(),
-                 out_process_ids.end(),
-                 std::back_inserter(result));
-  return result;
-}
-
-}  // namespace
+namespace phi::distributed {
 
 bool SameStatusReshardFunction::IsSuitable(
     const DistTensor& in, const TensorDistAttr& out_dist_attr) {
   const auto& in_dist_attr = in.dist_attr();
 
-  RESHARD_SHORTCUT_IF_FALSE(in_dist_attr.dims_mapping() ==
-                            out_dist_attr.dims_mapping());
+  RESHARD_SHORTCUT_IF_FALSE(in_dist_attr.multi_dims_mapping() ==
+                            out_dist_attr.multi_dims_mapping());
   RESHARD_SHORTCUT_IF_FALSE(in_dist_attr.partial_dims() ==
                             out_dist_attr.partial_dims());
 
@@ -66,21 +48,13 @@ void SameStatusReshardFunction::Eval(phi::DeviceContext* dev_ctx,
                                      const DistTensor& in,
                                      const TensorDistAttr& out_dist_attr,
                                      DistTensor* out) {
-  VLOG(3) << "Call SameStatusReshardFunction Eval";
+  VLOG(3) << "Call " << Name();
   const auto& in_dist_attr = in.dist_attr();
   const auto& in_process_mesh = in_dist_attr.process_mesh();
   const auto& in_process_ids = in_process_mesh.process_ids();
   const auto& out_process_mesh = out_dist_attr.process_mesh();
   const auto& out_process_ids = out_process_mesh.process_ids();
   auto all_process_ids = GetUnionProcessIds(in_process_ids, out_process_ids);
-  auto dtype = in.dtype();
-  // TODO(liyurui): Use dynamic shape will lead to poor performance, but we
-  // don't have any other good idea now. For the following reasons:
-  // 1. We can not ensure the meta being right deduce by the infermeta.
-  // 2. The meta of some kernels can't decide in compile time.
-  // 3. DenseTensor with empty value only need infermeta and skip the real
-  // kernel execution.
-  bool dynamic_shape = true;
 
   // TODO(GhostScreaming): After cross-mesh reshard, current device may
   // needs to execute next layer. When it construct next layer's backward
@@ -97,10 +71,8 @@ void SameStatusReshardFunction::Eval(phi::DeviceContext* dev_ctx,
 
   std::vector<std::pair<int64_t, int64_t>> p2p_pair;
   for (size_t i = 0; i < out_process_ids.size(); ++i) {
-    p2p_pair.emplace_back(
-        std::make_pair(in_process_ids[i], out_process_ids[i]));
+    p2p_pair.emplace_back(in_process_ids[i], out_process_ids[i]);
   }
-
   int64_t cur_global_rank = GetCurGlobalRank();
   for (const auto& iter : p2p_pair) {
     int64_t src = iter.first;
@@ -108,29 +80,35 @@ void SameStatusReshardFunction::Eval(phi::DeviceContext* dev_ctx,
     if (src == cur_global_rank) {
       VLOG(3) << "Send from src " << src << " to dst " << dst;
       int64_t dst_local_rank = GetLocalRankInParticipate(all_process_ids, dst);
-      // Sice send kernel only has input, so we don't need to infermeta
+      // Since send kernel only has input, so we don't need to infermeta
       // actually. According to this reason, just use the kernel directly.
       RESHARD_FUNCTOR_WITH_COMM(dev_ctx,
                                 PSendKernel,
-                                dtype,
+                                in.dtype(),
                                 all_process_ids,
                                 in.value(),
                                 dst_local_rank,
-                                dynamic_shape);
+                                /*dynamic_shape=*/true);
+      // TODO(liyurui): Use dynamic shape will lead to poor performance, but we
+      // don't have any other good idea now. For the following reasons:
+      // 1. We can not ensure the meta being right deduce by the infermeta.
+      // 2. The meta of some kernels can't decide in compile time.
+      // 3. DenseTensor with empty value only need infermeta and skip the real
+      // kernel execution.
     } else if (dst == cur_global_rank) {
       VLOG(3) << "Recv from src " << src << " to dst " << dst;
       int64_t src_local_rank = GetLocalRankInParticipate(all_process_ids, src);
       RESHARD_FUNCTOR_WITH_COMM(dev_ctx,
                                 PRecv,
-                                dtype,
+                                in.dtype(),
                                 all_process_ids,
                                 src_local_rank,
-                                dynamic_shape,
+                                {} /*out_shape*/,
+                                /*dynamic_shape=*/true,
                                 GetMutableTensor(out));
     }
   }
   SetDistProps(out, in.dims(), out_dist_attr);
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed
